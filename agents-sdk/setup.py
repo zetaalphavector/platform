@@ -36,7 +36,7 @@ setup(
         "attrs==24.2.0",
         "azure-core==1.30.2",
         "azure-identity==1.8.0",
-        "azure-storage-blob==12.9.0",
+        "azure-storage-blob==12.13.0",
         "blinker==1.8.2",
         "boto3==1.34.162",
         "botocore==1.34.162",
