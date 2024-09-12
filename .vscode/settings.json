@@ -1,0 +1,16 @@
+{
+  "editor.rulers": [
+    88
+  ],
+  "python.analysis.autoImportCompletions": true,
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    },
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "isort.args": ["--sp", "apps/search-api/"],
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "basic",
+}
