@@ -49,7 +49,7 @@ setup(
         "defusedxml==0.7.1",
         "distro==1.9.0",
         "exceptiongroup==1.2.2",
-        "fastapi==0.73.0",
+        "fastapi==0.109.1",
         "filelock==3.16.0",
         "frozenlist==1.4.1",
         "fsspec==2024.9.0",
