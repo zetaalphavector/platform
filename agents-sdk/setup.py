@@ -119,7 +119,7 @@ setup(
         "sniffio==1.3.1",
         "sqlalchemy==2.0.34",
         "sse-starlette==2.1.2",
-        "starlette==0.17.1",
+        "starlette==0.36.2",
         "streamlit==1.38.0",
         "tenacity==8.5.0",
         "tiktoken==0.7.0",
