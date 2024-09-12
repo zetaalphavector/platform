@@ -29,7 +29,7 @@ rag_agents init
 rag_agents dev
 ```
 
-https://github.com/user-attachments/assets/ecb56abe-d3b7-4d95-9f6c-78d1e92d864f
+https://github.com/user-attachments/assets/2d0b86f8-2d1e-4131-8de9-9d3d1909b631
 
 For more detailed information and resources, check out the following:
 
