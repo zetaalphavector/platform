@@ -97,7 +97,7 @@ setup(
         "protobuf==5.28.1",
         "pyarrow==17.0.0",
         "pycparser==2.22",
-        "pydantic==1.10.0",
+        "pydantic==1.10.13",
         "pydeck==0.9.1",
         "pygments==2.18.0",
         "pyjwt[crypto]==2.9.0",
