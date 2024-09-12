@@ -20,7 +20,7 @@ setup(
     name="zetaalpha.rag-agents",
     version=__version__,
     description="The Agents SDK is designed to provide a flexible, scalable, and efficient framework for building, testing, and deploying LLM agents.",
-    author_email="zav@zeta-alpha.com",
+    author_email="support@zeta-alpha.com",
     author="Zeta Alpha Vector",
     url="https://github.com/zetaalphavector/platform/",
     install_requires=[
