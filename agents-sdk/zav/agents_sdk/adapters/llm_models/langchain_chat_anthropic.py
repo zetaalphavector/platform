@@ -21,7 +21,7 @@ class ChatAnthropicFactory(AgentDependencyFactory):
         ):
             if anthropic_config.anthropic_api_type != "bedrock":
                 return ChatAnthropic(
-                    anthropic_api_key=(
+                    anthropic_api_key=(  # type: ignore
                         anthropic_config.anthropic_api_key.get_unencrypted_secret()
                     ),
                     anthropic_api_url=anthropic_config.anthropic_api_base,

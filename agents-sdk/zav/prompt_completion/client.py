@@ -161,21 +161,21 @@ class ChatCompletionClient(BaseCompletionClient):
     async def complete(  # type: ignore
         self, request: ChatClientRequest, stream: Literal[False] = False
     ) -> ChatResponse:
-        ...
+        pass
 
     @abstractmethod
     @overload
     async def complete(
         self, request: ChatClientRequest, stream: Literal[True] = True
     ) -> AsyncIterator[ChatResponse]:
-        ...
+        pass
 
     @abstractmethod
     @overload
     async def complete(
         self, request: ChatClientRequest, stream: bool = False
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        ...
+        pass
 
     @abstractmethod
     async def complete(

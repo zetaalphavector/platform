@@ -117,7 +117,7 @@ class AnthropicChatClient(ChatCompletionClient):
 
     def __chat_message_from(self, response: AnthropicMessage) -> ChatMessage:
         message = ChatMessage(
-            content=response.content[0].text,
+            content=response.content[0].text,  # type: ignore
             sender=self.__ROLE_TO_SENDER[response.role],
         )
         return message
@@ -126,13 +126,13 @@ class AnthropicChatClient(ChatCompletionClient):
     async def complete(  # type: ignore
         self, request: ChatClientRequest, stream: Literal[False] = False
     ) -> ChatResponse:
-        ...
+        pass
 
     @overload
     async def complete(
         self, request: ChatClientRequest, stream: Literal[True] = True
     ) -> AsyncIterator[ChatResponse]:
-        ...
+        pass
 
     @overload
     async def complete(
@@ -140,7 +140,7 @@ class AnthropicChatClient(ChatCompletionClient):
         request: ChatClientRequest,
         stream: bool = False,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        ...
+        pass
 
     async def complete(
         self,

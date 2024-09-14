@@ -6,7 +6,6 @@ from zav.agents_sdk.domain.tools import ToolsRegistry
 
 
 class ChatAgent(ABC):
-
     agent_name: ClassVar[str]
     debug_backend: Optional[Callable[[Any], Any]] = None
     tools_registry: ToolsRegistry = ToolsRegistry()

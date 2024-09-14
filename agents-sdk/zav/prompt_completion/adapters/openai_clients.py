@@ -265,7 +265,7 @@ class OpenAiChatClient(ChatCompletionClient):
         request: ChatClientRequest,
         stream: Literal[False] = False,
     ) -> ChatResponse:
-        ...
+        pass
 
     @overload
     async def complete(
@@ -273,7 +273,7 @@ class OpenAiChatClient(ChatCompletionClient):
         request: ChatClientRequest,
         stream: Literal[True] = True,
     ) -> AsyncIterator[ChatResponse]:
-        ...
+        pass
 
     @overload
     async def complete(
@@ -281,7 +281,7 @@ class OpenAiChatClient(ChatCompletionClient):
         request: ChatClientRequest,
         stream: bool = False,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        ...
+        pass
 
     async def complete(
         self,

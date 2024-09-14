@@ -37,7 +37,6 @@ class DocumentsApi(DocumentsApiSync):
         super().__init__(*args, **kwargs)
 
     def __getattribute__(self, name):
-
         original = object.__getattribute__(self, name)
         return force_async(original) if is_bound_function(original) else original
 

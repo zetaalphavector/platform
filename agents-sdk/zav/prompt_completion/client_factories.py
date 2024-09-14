@@ -7,14 +7,14 @@ from zav.prompt_completion.client import (
 
 
 class ChatClientFactory(BaseClientFactory[ChatCompletionClient]):
-    ...
+    pass
 
 
 class PromptClientFactory(BaseClientFactory[PromptCompletionClient]):
-    ...
+    pass
 
 
 class PromptWithLogitsClientFactory(
     BaseClientFactory[PromptCompletionWithLogitsClient]
 ):
-    ...
+    pass

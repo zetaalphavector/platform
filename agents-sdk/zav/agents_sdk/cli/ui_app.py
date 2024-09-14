@@ -404,7 +404,6 @@ def render_chat_message_item(
     chat_message_item: ChatMessageItem,
     **options,
 ):
-
     message = chat_message_item.message
     with st.chat_message(TO_CHAT_MESSAGE_NAME[message.sender]):
         render_chat_message_item_content(st, message)

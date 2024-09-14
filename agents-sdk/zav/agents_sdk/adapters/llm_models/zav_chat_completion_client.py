@@ -208,7 +208,7 @@ class ZAVChatCompletionClient:
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
     ) -> ChatResponse:
-        ...
+        pass
 
     @overload
     async def complete(
@@ -225,7 +225,7 @@ class ZAVChatCompletionClient:
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
     ) -> AsyncIterator[ChatResponse]:
-        ...
+        pass
 
     @overload
     async def complete(
@@ -242,7 +242,7 @@ class ZAVChatCompletionClient:
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        ...
+        pass
 
     async def complete(
         self,
@@ -308,6 +308,7 @@ class ZAVChatCompletionClient:
         chat_response = await self.__chat_completion_client.complete(
             request=req, stream=stream
         )
+
         if isinstance(chat_response, AsyncIterator):
 
             async def stream_response_chunks(chat_response):
@@ -435,7 +436,7 @@ class ZAVChatCompletionClient:
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
     ) -> Optional[ChatResponse]:
-        ...
+        pass
 
     @overload
     async def __parse_inner_response(
@@ -452,7 +453,7 @@ class ZAVChatCompletionClient:
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
     ) -> Optional[AsyncIterator[ChatResponse]]:
-        ...
+        pass
 
     @overload
     async def __parse_inner_response(
@@ -469,7 +470,7 @@ class ZAVChatCompletionClient:
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
     ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]:
-        ...
+        pass
 
     async def __parse_inner_response(
         self,
