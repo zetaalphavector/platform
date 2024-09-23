@@ -1,4 +1,5 @@
 import json
+from datetime import date, datetime
 from functools import wraps
 from typing import Dict, List, Literal, Optional
 
@@ -9,6 +10,7 @@ from zav.search_api.apis import DocumentsApi as DocumentsApiSync
 from zav.search_api.exceptions import ApiException
 from zav.search_api.model.index_cluster_string import IndexClusterString
 from zav.search_api.models import (
+    DateRangeSchema,
     DocumentIdString,
     FacetConfiguration,
     FiltersConfiguration,
@@ -61,6 +63,19 @@ def _handle_pipeline_service_errors(f):
             return _handle_pipeline_service_api_error(e)
 
     return decorated
+
+
+def _parse_dates_to_str(obj: Dict) -> Dict:
+    def process_value(value):
+        if isinstance(value, list):
+            return [process_value(v) for v in value]
+        if isinstance(value, dict):
+            return {k: process_value(v) for k, v in value.items()}
+        elif isinstance(value, date) or isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    return {key: process_value(value) for key, value in obj.items()}
 
 
 def _create_document_hit_url(
@@ -134,7 +149,10 @@ class ZAVRetriever:
         doc_ids: Optional[List[str]] = None,
         visibility: Optional[List[str]] = None,
         document_types: Optional[List[str]] = None,
+        date: Optional[Dict] = None,
     ) -> Dict:
+        date = _parse_dates_to_str(date) if date else None
+
         sel_index_id = index_id or self.__index_id
         search_payload = dict(
             tenant=self.__tenant,
@@ -192,6 +210,11 @@ class ZAVRetriever:
                     )
                 }
                 if sort_order
+                else {}
+            ),
+            **(
+                {"date": DateRangeSchema(**date, _configuration=self.__configuration)}
+                if date
                 else {}
             ),
             **({"search_engine": search_engine} if search_engine else {}),

@@ -1,5 +1,6 @@
 from typing import Any, Callable, List, Optional, Type
 
+from zav.llm_tracing import Span, Trace, TracingBackendFactory
 from zav.message_bus import (  # noqa
     CommandHandlerRegistry,
     EventHandlerRegistry,
@@ -7,7 +8,7 @@ from zav.message_bus import (  # noqa
 )
 
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
-from zav.agents_sdk.domain.agent_setup_retriever import AgentSetupRetriever
+from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
 from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
 from zav.agents_sdk.domain.chat_message import ChatMessage as DomainChatMessage
 from zav.agents_sdk.domain.chat_message import (
@@ -18,7 +19,45 @@ from zav.agents_sdk.domain.chat_message import (
 )
 from zav.agents_sdk.domain.chat_message import FunctionSpec
 from zav.agents_sdk.domain.chat_request import ChatRequest
+from zav.agents_sdk.domain.request_headers import RequestHeaders
 from zav.agents_sdk.handlers import commands
+
+
+def init_span(
+    tracing_backend_factory: Type[TracingBackendFactory],
+    agent_setup: AgentSetup,
+    chat_request: ChatRequest,
+    request_headers: RequestHeaders,
+    tenant: str,
+    index_id: Optional[str] = None,
+) -> Optional[Span]:
+    span: Optional[Span] = None
+    if tracing_config := agent_setup.tracing_configuration:
+        tracing_vendor = tracing_config.vendor
+        tracing_vendor_config = getattr(
+            tracing_config.vendor_configuration, tracing_vendor, None
+        )
+        tracing_backend = tracing_backend_factory.create(
+            vendor_name=tracing_vendor,
+            config=tracing_vendor_config.dict() if tracing_vendor_config else {},
+        )
+        span = Trace(tracing_backend=tracing_backend).new(
+            name="agent-response",
+            attributes={
+                "metadata": {"agent_identifier": chat_request.agent_identifier},
+            },
+            trace_state={
+                "tenant": tenant,
+                **({"index_id": index_id} if index_id else {}),
+                **(
+                    {"user_id": request_headers.requester_uuid}
+                    if request_headers.requester_uuid
+                    else {}
+                ),
+            },
+        )
+
+    return span
 
 
 @CommandHandlerRegistry.register(commands.CreateChatResponse)
@@ -27,6 +66,7 @@ async def handle_create(
     queue: List[Message],
     agent_setup_retriever: AgentSetupRetriever,
     chat_agent_factory: Type[ChatAgentFactory],
+    tracing_backend_factory: Type[TracingBackendFactory],
     agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
     debug_backend: Optional[Callable[[Any], Any]] = None,
 ):
@@ -35,6 +75,15 @@ async def handle_create(
     )
     if not agent_setup:
         raise ValueError(f"Unknown agent: {cmd.chat_request.agent_identifier}")
+
+    span = init_span(
+        tracing_backend_factory=tracing_backend_factory,
+        agent_setup=agent_setup,
+        chat_request=cmd.chat_request,
+        request_headers=cmd.request_headers,
+        tenant=cmd.tenant,
+        index_id=cmd.index_id,
+    )
 
     chat_agent = await chat_agent_factory.create(
         agent_name=agent_setup.agent_name,
@@ -49,6 +98,7 @@ async def handle_create(
             **(cmd.chat_request.bot_params if cmd.chat_request.bot_params else {}),
         },
         conversation_context=cmd.chat_request.conversation_context,
+        span=span,
     )
 
     chat_agent_response = await chat_agent.execute(
@@ -99,6 +149,7 @@ async def handle_create_stream(
     queue: List[Message],
     agent_setup_retriever: AgentSetupRetriever,
     chat_agent_factory: Type[ChatAgentFactory],
+    tracing_backend_factory: Type[TracingBackendFactory],
     agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
     debug_backend: Optional[Callable[[Any], Any]] = None,
 ):
@@ -107,6 +158,15 @@ async def handle_create_stream(
     )
     if not agent_setup:
         raise ValueError(f"Unknown agent: {cmd.chat_request.agent_identifier}")
+
+    span = init_span(
+        tracing_backend_factory=tracing_backend_factory,
+        agent_setup=agent_setup,
+        chat_request=cmd.chat_request,
+        request_headers=cmd.request_headers,
+        tenant=cmd.tenant,
+        index_id=cmd.index_id,
+    )
 
     chat_agent = await chat_agent_factory.create_streamable(
         agent_name=agent_setup.agent_name,
@@ -121,6 +181,7 @@ async def handle_create_stream(
             **(cmd.chat_request.bot_params if cmd.chat_request.bot_params else {}),
         },
         conversation_context=cmd.chat_request.conversation_context,
+        span=span,
     )
 
     try:

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast, overload
 
 import openai
@@ -23,7 +24,9 @@ from zav.llm_domain import (
     LLMProviderName,
     OpenAIConfiguration,
 )
+from zav.llm_tracing import Span, now
 
+from zav.prompt_completion.adapters.tracing import create_span, end_span
 from zav.prompt_completion.client import (
     BotConversation,
     ChatClientRequest,
@@ -115,10 +118,12 @@ class OpenAiPromptWithLogitsClient(PromptCompletionWithLogitsClient):
         self,
         client: Union[openai.AsyncAzureOpenAI, openai.AsyncOpenAI],
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ):
         self.__client = client
         self.__model_name = model_configuration.name
         self.__model_temperature = model_configuration.temperature
+        self.__span = span
 
     async def complete(
         self, prompts: List[str], max_tokens: int
@@ -129,6 +134,22 @@ class OpenAiPromptWithLogitsClient(PromptCompletionWithLogitsClient):
 
     async def __complete_prompt(self, prompt: str, max_tokens: int) -> PromptResponse:
         try:
+            generation_span = (
+                self.__span.new(
+                    name="prompt-completion",
+                    attributes={
+                        "observation_type": "generation",
+                        "model": self.__model_name,
+                        "input": prompt,
+                        "model_parameters": {
+                            "temperature": self.__model_temperature,
+                            "max_tokens": max_tokens,
+                        },
+                    },
+                )
+                if self.__span
+                else None
+            )
             answer = await self.__client.completions.create(
                 model=self.__model_name,
                 prompt=prompt,
@@ -136,8 +157,33 @@ class OpenAiPromptWithLogitsClient(PromptCompletionWithLogitsClient):
                 temperature=self.__model_temperature,
                 logprobs=self.__INCLUDE_LOGPROBS_FOR_MOST_LIKELY_TOKEN,
             )
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "output": answer.choices[0].text,
+                        **(
+                            {
+                                "usage": {
+                                    "input": answer.usage.prompt_tokens,
+                                    "output": answer.usage.completion_tokens,
+                                    "total": answer.usage.total_tokens,
+                                    "unit": "TOKENS",
+                                }
+                            }
+                            if answer.usage
+                            else {}
+                        ),
+                    }
+                )
             return self.__prompt_response_from(answer.choices[0])
         except BadRequestError as e:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": e.message,
+                    }
+                )
             # Same error for any number of prompts, the message refers to the
             # first prompt that was too long. It doesn't say which one.
             if e.status_code == 400 and "context_length_exceeded" in e.message:
@@ -146,6 +192,13 @@ class OpenAiPromptWithLogitsClient(PromptCompletionWithLogitsClient):
                 error = Exception(f"Prompt completion failed with error: {e.message}")
             return PromptResponse(error=error, prompt_answer=None)
         except Exception as e:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": str(e),
+                    }
+                )
             return PromptResponse(error=e, prompt_answer=None)
 
     def __prompt_response_from(self, answer_choice: CompletionChoice) -> PromptResponse:
@@ -177,9 +230,10 @@ class OpenAiPromptWithLogitsClient(PromptCompletionWithLogitsClient):
         cls,
         vendor_configuration: OpenAIConfiguration,
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ) -> "OpenAiPromptWithLogitsClient":
         client = build_client(vendor_configuration)
-        return cls(client=client, model_configuration=model_configuration)
+        return cls(client=client, model_configuration=model_configuration, span=span)
 
 
 @PromptClientFactory.register(LLMProviderName.OPENAI, LLMModelType.PROMPT_WITH_LOGITS)
@@ -189,10 +243,12 @@ class OpenAiPromptClient(PromptCompletionClient):
         self,
         client: Union[openai.AsyncAzureOpenAI, openai.AsyncOpenAI],
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ):
         self.__client = client
         self.__model_name = model_configuration.name
         self.__model_temperature = model_configuration.temperature
+        self.__span = span
 
     async def complete(
         self, prompts: List[str], max_tokens: int
@@ -203,15 +259,56 @@ class OpenAiPromptClient(PromptCompletionClient):
 
     async def __complete_prompt(self, prompt: str, max_tokens: int) -> PromptResponse:
         try:
+            generation_span = (
+                self.__span.new(
+                    name="prompt-completion",
+                    attributes={
+                        "observation_type": "generation",
+                        "model": self.__model_name,
+                        "input": prompt,
+                        "model_parameters": {
+                            "temperature": self.__model_temperature,
+                            "max_tokens": max_tokens,
+                        },
+                    },
+                )
+                if self.__span
+                else None
+            )
             answer = await self.__client.completions.create(
                 model=self.__model_name,
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=self.__model_temperature,
             )
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "output": answer.choices[0].text,
+                        **(
+                            {
+                                "usage": {
+                                    "input": answer.usage.prompt_tokens,
+                                    "output": answer.usage.completion_tokens,
+                                    "total": answer.usage.total_tokens,
+                                    "unit": "TOKENS",
+                                }
+                            }
+                            if answer.usage
+                            else {}
+                        ),
+                    }
+                )
             prompt_answer = PromptAnswer(text=answer.choices[0].text.strip())
             return PromptResponse(error=None, prompt_answer=prompt_answer)
         except BadRequestError as e:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": e.message,
+                    }
+                )
             # Same error for any number of prompts, the message refers to the
             # first prompt that was too long. It doesn't say which one.
             if e.status_code == 400 and "context_length_exceeded" in e.message:
@@ -220,6 +317,13 @@ class OpenAiPromptClient(PromptCompletionClient):
             else:
                 return PromptResponse(error=e, prompt_answer=None)
         except Exception as e:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": str(e),
+                    }
+                )
             return PromptResponse(error=e, prompt_answer=None)
 
     @classmethod
@@ -227,9 +331,10 @@ class OpenAiPromptClient(PromptCompletionClient):
         cls,
         vendor_configuration: OpenAIConfiguration,
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ) -> "OpenAiPromptClient":
         client = build_client(vendor_configuration)
-        return cls(client=client, model_configuration=model_configuration)
+        return cls(client=client, model_configuration=model_configuration, span=span)
 
 
 @ChatClientFactory.register(LLMProviderName.OPENAI, LLMModelType.CHAT)
@@ -252,36 +357,35 @@ class OpenAiChatClient(ChatCompletionClient):
         self,
         client: Union[openai.AsyncAzureOpenAI, openai.AsyncOpenAI],
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ):
         self.__client = client
         self.__model_name = model_configuration.name
         self.__model_temperature = model_configuration.temperature
         self.__json_output = model_configuration.json_output
         self.__interleave_system_message = model_configuration.interleave_system_message
+        self.__span = span
 
     @overload
     async def complete(  # type: ignore
         self,
         request: ChatClientRequest,
         stream: Literal[False] = False,
-    ) -> ChatResponse:
-        pass
+    ) -> ChatResponse: ...
 
     @overload
     async def complete(
         self,
         request: ChatClientRequest,
         stream: Literal[True] = True,
-    ) -> AsyncIterator[ChatResponse]:
-        pass
+    ) -> AsyncIterator[ChatResponse]: ...
 
     @overload
     async def complete(
         self,
         request: ChatClientRequest,
         stream: bool = False,
-    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        pass
+    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]: ...
 
     async def complete(
         self,
@@ -289,53 +393,92 @@ class OpenAiChatClient(ChatCompletionClient):
         stream: Union[Literal[True, False], bool] = False,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
         try:
+            messages = self.__messages_from(request["conversation"])
+            functions_dict = (
+                {"functions": [cast(Function, fn) for fn in functions]}
+                if (functions := request.get("functions")) is not None
+                else {}
+            )
+            tools_dict: Dict = (
+                {
+                    "tools": [cast(ChatCompletionToolParam, tool) for tool in tools],
+                }
+                if (tools := request.get("tools"))
+                else {}
+            )
+
+            generation_span = create_span(
+                messages=messages,
+                functions_dict=functions_dict,
+                tools_dict=tools_dict,
+                model_name=self.__model_name,
+                model_temperature=self.__model_temperature,
+                span=self.__span,
+                max_tokens=request["max_tokens"],
+                json_output=self.__json_output,
+                interleave_system_message=self.__interleave_system_message,
+                stream=stream,
+            )
+            if tools_dict:
+                tools_dict["tool_choice"] = (
+                    ChatCompletionNamedToolChoiceParam(
+                        type="function",
+                        function=ToolChoiceFunction(name=tool_choice),
+                    )
+                    if (
+                        (tool_choice := request.get("tool_choice"))
+                        and tool_choice not in ["auto", "none"]
+                    )
+                    else request.get("tool_choice", "auto")
+                )
             response = await self.__client.chat.completions.create(
                 model=self.__model_name,
-                messages=self.__messages_from(request["conversation"]),
+                messages=messages,
                 max_tokens=request["max_tokens"],
                 temperature=self.__model_temperature,
                 stream=stream,
-                **(
-                    {"functions": [cast(Function, fn) for fn in functions]}
-                    if (functions := request.get("functions")) is not None
-                    else {}
-                ),  # type: ignore
+                **functions_dict,
                 **(
                     {"response_format": {"type": "json_object"}}
                     if self.__json_output
                     else {}
                 ),  # type: ignore
-                **(
-                    {
-                        "tools": [
-                            cast(ChatCompletionToolParam, tool) for tool in tools
-                        ],
-                        "tool_choice": (
-                            ChatCompletionNamedToolChoiceParam(
-                                type="function",
-                                function=ToolChoiceFunction(name=tool_choice),
-                            )
-                            if (
-                                (tool_choice := request.get("tool_choice"))
-                                and tool_choice not in ["auto", "none"]
-                            )
-                            else request.get("tool_choice", "auto")
-                        ),
-                    }
-                    if (tools := request.get("tools"))
-                    else {}
-                ),  # type: ignore
+                **tools_dict,
             )
             if isinstance(response, AsyncIterator):
 
                 async def stream_response(
                     response: AsyncIterator[ChatCompletionChunk],
                 ) -> AsyncIterator[ChatResponse]:
+                    completion_start_time: Optional[datetime] = None
                     content_buffer: Optional[str] = None
                     role_buffer: Optional[str] = None
                     function_call_buffer: Optional[OAIFunctionCall] = None
+                    function_call_buffer_trace: Optional[OAIFunctionCall] = None
                     tool_calls_buffer: List[OAIToolCall] = []
+                    tool_calls_buffer_trace: List[OAIToolCall] = []
+                    usage_buffer: Dict = {}
                     async for chunk in response:
+                        if generation_span and completion_start_time is None:
+                            completion_start_time = now()
+                            generation_span.update(
+                                attributes={
+                                    "completion_start_time": completion_start_time,
+                                }
+                            )
+                        if generation_span:
+                            usage_buffer = (
+                                {
+                                    "usage": {
+                                        "input": chunk.usage.prompt_tokens,
+                                        "output": chunk.usage.completion_tokens,
+                                        "total": chunk.usage.total_tokens,
+                                        "unit": "TOKENS",
+                                    }
+                                }
+                                if chunk.usage
+                                else {}
+                            )
                         choice_chunk = chunk.choices[0]
                         if choice_chunk is None:
                             # This is a completion chunk with no choices, skip it
@@ -365,6 +508,7 @@ class OpenAiChatClient(ChatCompletionClient):
                                     tool_calls=None,
                                 ),
                             )
+                            function_call_buffer_trace = function_call_buffer
                             function_call_buffer = None
 
                         if (tool_calls := choice_chunk.delta.tool_calls) is not None:
@@ -403,6 +547,7 @@ class OpenAiChatClient(ChatCompletionClient):
                                     tool_calls=tool_calls_buffer,
                                 ),
                             )
+                            tool_calls_buffer_trace = tool_calls_buffer
                             tool_calls_buffer = []
 
                         if choice_chunk.delta.content:
@@ -420,39 +565,75 @@ class OpenAiChatClient(ChatCompletionClient):
                                     tool_calls=None,
                                 ),
                             )
+                    end_span(
+                        tool_calls=tool_calls_buffer_trace,
+                        usage=usage_buffer,
+                        span=generation_span,
+                        content=content_buffer,
+                        role=role_buffer,
+                        function_call=function_call_buffer_trace,
+                    )
 
                 return stream_response(response)
 
             else:
                 choice = response.choices[0]
+                function_call = (
+                    OAIFunctionCall(
+                        name=fn_call.name,
+                        arguments=fn_call.arguments,
+                    )
+                    if (fn_call := choice.message.function_call)
+                    else None
+                )
+                tool_calls = (
+                    [
+                        OAIToolCall(
+                            id=tool_call.id,
+                            function=OAIFunctionCall(
+                                name=tool_call.function.name,
+                                arguments=tool_call.function.arguments,
+                            ),
+                        )
+                        for tool_call in tool_calls
+                    ]
+                    if (tool_calls := choice.message.tool_calls)
+                    else []
+                )
+                end_span(
+                    tool_calls=tool_calls,
+                    usage=(
+                        {
+                            "usage": {
+                                "input": response.usage.prompt_tokens,
+                                "output": response.usage.completion_tokens,
+                                "total": response.usage.total_tokens,
+                                "unit": "TOKENS",
+                            }
+                        }
+                        if response.usage
+                        else {}
+                    ),
+                    span=generation_span,
+                    content=choice.message.content,
+                    role=choice.message.role,
+                    function_call=function_call,
+                )
                 chat_message = self.__parse_chat_message(
                     content=choice.message.content,
                     role=choice.message.role,
-                    function_call=(
-                        OAIFunctionCall(
-                            name=fn_call.name,
-                            arguments=fn_call.arguments,
-                        )
-                        if (fn_call := choice.message.function_call)
-                        else None
-                    ),
-                    tool_calls=(
-                        [
-                            OAIToolCall(
-                                id=tool_call.id,
-                                function=OAIFunctionCall(
-                                    name=tool_call.function.name,
-                                    arguments=tool_call.function.arguments,
-                                ),
-                            )
-                            for tool_call in tool_calls
-                        ]
-                        if (tool_calls := choice.message.tool_calls)
-                        else None
-                    ),
+                    function_call=function_call,
+                    tool_calls=tool_calls,
                 )
                 return ChatResponse(error=None, chat_message=chat_message)
         except BadRequestError as e:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": e.message,
+                    }
+                )
             if e.status_code == 400 and "context_length_exceeded" in e.message:
                 error = generate_prompt_too_long_error(e.message)
             else:
@@ -463,6 +644,13 @@ class OpenAiChatClient(ChatCompletionClient):
                 else ChatResponse(error=error, chat_message=None)
             )
         except Exception as error:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": str(error),
+                    }
+                )
             return (
                 stream_response_item(ChatResponse(error=error, chat_message=None))
                 if stream
@@ -690,9 +878,10 @@ class OpenAiChatClient(ChatCompletionClient):
         cls,
         vendor_configuration: OpenAIConfiguration,
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ) -> "OpenAiChatClient":
         client = build_client(vendor_configuration)
-        return cls(client=client, model_configuration=model_configuration)
+        return cls(client=client, model_configuration=model_configuration, span=span)
 
 
 @PromptClientFactory.register(LLMProviderName.OPENAI, LLMModelType.CHAT)
@@ -743,9 +932,10 @@ class OpenAiChatClient2PromptClientAdapter(PromptCompletionClient):
         cls,
         vendor_configuration: OpenAIConfiguration,
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ) -> "OpenAiChatClient2PromptClientAdapter":
         chat_client = OpenAiChatClient.from_configuration(
-            vendor_configuration, model_configuration
+            vendor_configuration, model_configuration, span=span
         )
         return cls(chat_client=chat_client)
 

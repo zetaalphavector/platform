@@ -13,7 +13,7 @@ from zav.agents_sdk.controllers.v1.chats.types import (
     ChatStreamItem,
 )
 from zav.agents_sdk.controllers.v1.common import get_headers
-from zav.agents_sdk.domain import ChatRequest, ChatStreamRequest, RequestHeaders
+from zav.agents_sdk.domain import ChatRequest, RequestHeaders
 from zav.agents_sdk.domain.chat_agent import ChatMessage
 from zav.agents_sdk.handlers import commands
 
@@ -44,7 +44,7 @@ def extract_create_stream_command(
         tenant=tenant,
         index_id=index_id,
         request_headers=request_headers,
-        chat_request=ChatStreamRequest(**body.dict(exclude_unset=True)),
+        chat_request=ChatRequest(**body.dict(exclude_unset=True)),
     )
 
 

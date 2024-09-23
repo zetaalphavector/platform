@@ -6,15 +6,12 @@ from zav.prompt_completion.client import (
 )
 
 
-class ChatClientFactory(BaseClientFactory[ChatCompletionClient]):
-    pass
+class ChatClientFactory(BaseClientFactory[ChatCompletionClient]): ...
 
 
-class PromptClientFactory(BaseClientFactory[PromptCompletionClient]):
-    pass
+class PromptClientFactory(BaseClientFactory[PromptCompletionClient]): ...
 
 
 class PromptWithLogitsClientFactory(
     BaseClientFactory[PromptCompletionWithLogitsClient]
-):
-    pass
+): ...

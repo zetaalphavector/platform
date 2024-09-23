@@ -24,7 +24,6 @@ from zav.agents_sdk.cli.load_chat_agent_factory import (
     from_string as import_chat_agent_factory_from_string,
 )
 from zav.agents_sdk.domain import ChatRequest, RequestHeaders
-from zav.agents_sdk.domain.chat_request import ChatStreamRequest
 from zav.agents_sdk.handlers import commands
 
 st.markdown(
@@ -248,7 +247,7 @@ async def create_chat_response(
                 tenant=agent_configuration.get("tenant", ""),
                 index_id=agent_configuration.get("index_id", None),
                 request_headers=RequestHeaders(),
-                chat_request=ChatStreamRequest(
+                chat_request=ChatRequest(
                     agent_identifier=agent_setup.agent_identifier,
                     conversation=conversation,
                     conversation_context=conversation_context,

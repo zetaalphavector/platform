@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Union, overload
 from pydantic import BaseModel
 from typing_extensions import AsyncIterator, Literal, NotRequired, TypedDict
 from zav.llm_domain import LLMModelConfiguration
+from zav.llm_tracing import Span
 
 TokenScore = Dict[str, float]
 
@@ -125,6 +126,7 @@ class BaseCompletionClient(ABC):
         cls,
         vendor_configuration,
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ) -> "BaseCompletionClient":
         raise NotImplementedError
 

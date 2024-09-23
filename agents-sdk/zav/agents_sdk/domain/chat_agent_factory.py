@@ -13,6 +13,7 @@ from typing import (
 
 from pydantic import BaseModel
 from zav.llm_domain import LLMClientConfiguration
+from zav.llm_tracing import Span
 
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
 from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
@@ -27,6 +28,20 @@ def check_is_optional(field):
 
 def check_is_class(annotation):
     return inspect.isclass(annotation)
+
+
+def init_sub_agent_span(
+    agent_identifier: str, span: Optional[Span] = None
+) -> Optional[Span]:
+    if not span:
+        return None
+
+    return span.new(
+        name="sub-agent-response",
+        attributes={
+            "metadata": {"agent_identifier": agent_identifier},
+        },
+    )
 
 
 class ChatAgentFactory:
@@ -55,6 +70,7 @@ class ChatAgentFactory:
         agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         conversation_context: Optional[ConversationContext] = None,
+        span: Optional[Span] = None,
     ):
         sub_agent_setup = await agent_setup_retriever.get(
             tenant=handler_params.get("tenant", ""),
@@ -69,6 +85,9 @@ class ChatAgentFactory:
                 debug_backend=debug_backend,
                 agent_setup=sub_agent_setup,
                 conversation_context=conversation_context,
+                span=init_sub_agent_span(
+                    span=span, agent_identifier=sub_agent_identifier
+                ),
             )
         except ValueError as e:
             if has_default:
@@ -143,6 +162,7 @@ class ChatAgentFactory:
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,
+        span: Optional[Span] = None,
     ) -> Optional[Any]:
         param_annotation = param.annotation
         is_optional = check_is_optional(param_annotation)
@@ -172,6 +192,7 @@ class ChatAgentFactory:
                             debug_backend=debug_backend,
                             agent_setup=agent_setup,
                             conversation_context=conversation_context,
+                            span=span,
                         )
                         for param_name, param in agent_dependency_params.items()
                         if param_name != "self"
@@ -205,6 +226,7 @@ class ChatAgentFactory:
                 agent_dependency_registry=agent_dependency_registry,
                 debug_backend=debug_backend,
                 conversation_context=conversation_context,
+                span=span,
             )
         is_llm_client_configuration = is_class and issubclass(
             param_annotation, LLMClientConfiguration
@@ -220,6 +242,10 @@ class ChatAgentFactory:
                         f"Missing value for required parameter: {param_name}"
                     )
             return agent_setup.llm_client_configuration
+
+        is_span = is_class and issubclass(param_annotation, Span)
+        if is_span:
+            return span
 
         # Parse agent configuration
         is_not_annotated = param_annotation == inspect.Parameter.empty
@@ -246,6 +272,7 @@ class ChatAgentFactory:
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,
+        span: Optional[Span] = None,
     ) -> ChatAgent:
         if agent_name not in cls.registry:
             raise ValueError(f"Unknown agent: {agent_name}")
@@ -262,11 +289,46 @@ class ChatAgentFactory:
                 debug_backend=debug_backend,
                 agent_setup=agent_setup,
                 conversation_context=conversation_context,
+                span=span,
             )
             for param_name, param in agent_cls_params.items()
         }
         agent_instance = agent_cls(**agent_cls_param_values)
+        if span:
+            span_agent_params = {
+                param_name: param_value
+                for param_name, param_value in agent_cls_param_values.items()
+                if isinstance(
+                    param_value,
+                    (
+                        int,
+                        float,
+                        str,
+                        bool,
+                        list,
+                        tuple,
+                        set,
+                        dict,
+                        type(None),
+                        complex,
+                    ),
+                )
+                or (
+                    isinstance(param_value, BaseModel)
+                    and not isinstance(param_value, LLMClientConfiguration)
+                )
+            }
+            span.update(
+                attributes={
+                    "metadata": {
+                        **span.attributes.get("metadata", {}),
+                        **span_agent_params,
+                    }
+                }
+            )
+
         agent_instance.debug_backend = debug_backend
+        agent_instance.span = span
         return agent_instance
 
     @classmethod
@@ -279,6 +341,7 @@ class ChatAgentFactory:
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,
+        span: Optional[Span] = None,
     ) -> StreamableChatAgent:
         agent_instance = await cls.create(
             agent_name=agent_name,
@@ -288,6 +351,7 @@ class ChatAgentFactory:
             debug_backend=debug_backend,
             agent_setup=agent_setup,
             conversation_context=conversation_context,
+            span=span,
         )
         if not isinstance(agent_instance, StreamableChatAgent):
             raise ValueError(f"Agent {agent_name} is not streamable")

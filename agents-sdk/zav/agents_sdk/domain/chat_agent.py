@@ -1,16 +1,73 @@
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Callable, ClassVar, Dict, List, Optional, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Union,
+)
+
+from zav.llm_tracing import Span
 
 from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
 from zav.agents_sdk.domain.tools import ToolsRegistry
 
 
+def instrument_execute(
+    self: "ChatAgent",
+    execute: Callable[[List[ChatMessage]], Awaitable[Optional[ChatMessage]]],
+):
+    async def wrapper(conversation: List[ChatMessage]) -> Optional[ChatMessage]:
+        if self.span:
+            self.span.update(attributes={"input": conversation[-1].content})
+        response = await execute(conversation)
+        if self.span:
+            if response:
+                self.span.end(
+                    attributes={
+                        "output": {
+                            "content": response.content,
+                            "evidences": [e.dict() for e in response.evidences or []],
+                            "function_call_request": (
+                                response.function_call_request.dict()
+                                if response.function_call_request
+                                else None
+                            ),
+                            "function_specs": (
+                                response.function_specs.dict()
+                                if response.function_specs
+                                else None
+                            ),
+                        }
+                    }
+                )
+            else:
+                self.span.end()
+        return response
+
+    return wrapper
+
+
 class ChatAgent(ABC):
     agent_name: ClassVar[str]
+    span: Optional[Span] = None
     debug_backend: Optional[Callable[[Any], Any]] = None
     tools_registry: ToolsRegistry = ToolsRegistry()
 
+    def __getattribute__(self, name: str) -> Any:
+        if name == "execute":
+            return instrument_execute(self, super().__getattribute__(name))
+        return super().__getattribute__(name)
+
     def debug(self, msg: Any) -> Any:
+        if self.span:
+            self.span.add_event(
+                name="debug log", attributes={"input": msg, "level": "DEBUG"}
+            )
         if self.debug_backend:
             return self.debug_backend(msg)
 
@@ -47,6 +104,13 @@ class ChatAgent(ABC):
 
 
 class StreamableChatAgent(ChatAgent):
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "execute_streaming":
+            # TODO: implement
+            return super().__getattribute__(name)
+        return super().__getattribute__(name)
+
     async def execute(self, conversation: List[ChatMessage]) -> Optional[ChatMessage]:
         full_message: Optional[ChatMessage] = None
         async for message in self.execute_streaming(conversation):

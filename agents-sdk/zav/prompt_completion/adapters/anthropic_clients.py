@@ -10,7 +10,9 @@ from zav.llm_domain import (
     LLMModelType,
     LLMProviderName,
 )
+from zav.llm_tracing import Span
 
+from zav.prompt_completion.adapters.tracing import create_span, end_span
 from zav.prompt_completion.client import (
     BotConversation,
     ChatClientRequest,
@@ -68,10 +70,12 @@ class AnthropicChatClient(ChatCompletionClient):
         self,
         client: Union[anthropic.AsyncAnthropic, anthropic.AsyncAnthropicBedrock],
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ):
         self.__client = client
         self.__model_name = model_configuration.name
         self.__model_temperature = model_configuration.temperature
+        self.__span = span
 
     def __messages_from(
         self,
@@ -125,22 +129,19 @@ class AnthropicChatClient(ChatCompletionClient):
     @overload
     async def complete(  # type: ignore
         self, request: ChatClientRequest, stream: Literal[False] = False
-    ) -> ChatResponse:
-        pass
+    ) -> ChatResponse: ...
 
     @overload
     async def complete(
         self, request: ChatClientRequest, stream: Literal[True] = True
-    ) -> AsyncIterator[ChatResponse]:
-        pass
+    ) -> AsyncIterator[ChatResponse]: ...
 
     @overload
     async def complete(
         self,
         request: ChatClientRequest,
         stream: bool = False,
-    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        pass
+    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]: ...
 
     async def complete(
         self,
@@ -156,6 +157,14 @@ class AnthropicChatClient(ChatCompletionClient):
         except ValueError as e:
             return ChatResponse(error=e, chat_message=None)
         try:
+            generation_span = create_span(
+                messages=messages,
+                model_name=self.__model_name,
+                model_temperature=self.__model_temperature,
+                span=self.__span,
+                max_tokens=request["max_tokens"],
+                stream=stream,
+            )
             response = await self.__client.messages.create(
                 model=self.__model_name,
                 messages=messages,
@@ -163,9 +172,34 @@ class AnthropicChatClient(ChatCompletionClient):
                 temperature=self.__model_temperature,
                 **({"system": system_prompt} if system_prompt else {}),  # type: ignore
             )
+            end_span(
+                usage=(
+                    {
+                        "usage": {
+                            "input": response.usage.input_tokens,
+                            "output": response.usage.output_tokens,
+                            "total": response.usage.input_tokens
+                            + response.usage.output_tokens,
+                            "unit": "TOKENS",
+                        }
+                    }
+                    if response.usage
+                    else {}
+                ),
+                span=generation_span,
+                content=response.content[0].text,
+                role=response.role,
+            )
             chat_message = self.__chat_message_from(response)
             return ChatResponse(error=None, chat_message=chat_message)
         except anthropic.BadRequestError as e:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": e.message,
+                    }
+                )
             if "prompt is too long" in e.message:
                 extra_tokens = None
                 if m := re.search(
@@ -178,6 +212,13 @@ class AnthropicChatClient(ChatCompletionClient):
                 )
             return ChatResponse(error=e, chat_message=None)
         except Exception as error:
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": str(error),
+                    }
+                )
             return ChatResponse(error=error, chat_message=None)
 
     @classmethod
@@ -185,6 +226,7 @@ class AnthropicChatClient(ChatCompletionClient):
         cls,
         vendor_configuration: AnthropicConfiguration,
         model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
     ) -> "AnthropicChatClient":
         client = build_client(vendor_configuration)
-        return cls(client, model_configuration)
+        return cls(client, model_configuration, span=span)

@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from zav.llm_domain import LLMClientConfiguration
 
 
@@ -13,12 +14,35 @@ def merge_dicts(d1, d2):
             d1[key] = value
 
 
+class LangfuseConfiguration(BaseModel):
+    host: str
+    secret_key: str
+    public_key: str
+    enabled: bool = True
+
+
+class TracingVendorConfiguration(BaseModel):
+    langfuse: Optional[LangfuseConfiguration] = None
+
+
+class TracingVendorName(str, Enum):
+    LANGFUSE = "langfuse"
+
+
+class TracingConfiguration(BaseModel):
+    vendor: TracingVendorName
+    vendor_configuration: TracingVendorConfiguration = Field(
+        default_factory=TracingVendorConfiguration
+    )
+
+
 class AgentSetup(BaseModel):
     agent_identifier: str
     agent_name: str
     llm_client_configuration: Optional[LLMClientConfiguration] = None
     agent_configuration: Optional[Dict[str, Any]] = None
     sub_agent_mapping: Optional[Dict[str, str]] = None
+    tracing_configuration: Optional[TracingConfiguration] = None
 
     def patch(self, update: Optional[Dict] = None):
         """Creates a new instance of AgentSetup with the updated values."""

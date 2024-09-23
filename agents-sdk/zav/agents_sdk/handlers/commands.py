@@ -3,7 +3,7 @@ from typing import Optional
 
 from zav.message_bus import Command
 
-from zav.agents_sdk.domain import ChatRequest, ChatStreamRequest, RequestHeaders
+from zav.agents_sdk.domain import ChatRequest, RequestHeaders
 
 
 @dataclass
@@ -18,5 +18,5 @@ class CreateChatResponse(Command):
 class CreateChatStream(Command):
     tenant: str
     request_headers: RequestHeaders
-    chat_request: ChatStreamRequest
+    chat_request: ChatRequest
     index_id: Optional[str] = None

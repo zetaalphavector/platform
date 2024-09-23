@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from pydantic.utils import GetterDict
 from typing_extensions import Literal
 from zav.llm_domain import LLMClientConfiguration
+from zav.llm_tracing import Span
 from zav.prompt_completion import (
     BotConversation,
     ChatClientFactory,
@@ -137,15 +138,28 @@ async def execute_tool_call_request(
     tools_registry: ToolsRegistry,
     tool_call_requests: Optional[List[ToolCallRequest]] = None,
     log_fn: Optional[Callable] = None,
+    span: Optional[Span] = None,
 ):
     if not tool_call_requests:
         return None
     if log_fn:
         log_fn({"Tool Call Requests": tool_call_requests})
+
     tool_outputs: List = []
     for tool_call_request in tool_call_requests:
         tool_call_id = tool_call_request.id
         function_call_request = tool_call_request.function_call_request
+        new_span = (
+            span.new(
+                name=function_call_request.name,
+                attributes={
+                    "metadata": {"tool_call_id": tool_call_id},
+                    "input": function_call_request.params or {},
+                },
+            )
+            if span
+            else None
+        )
         if function_call_request.name not in tools_registry.tools_index:
             tool_outputs.append(
                 {
@@ -154,6 +168,13 @@ async def execute_tool_call_request(
                     "Please provide a valid tool name.",
                 }
             )
+            if new_span:
+                new_span.end(
+                    attributes={
+                        "output": f"Tool {function_call_request.name} not found. "
+                        "Please provide a valid tool name."
+                    }
+                )
             continue
 
         try:
@@ -166,11 +187,15 @@ async def execute_tool_call_request(
                 )
             else:
                 tool_response = executable(**(function_call_request.params or {}))
+            if new_span:
+                new_span.end(attributes={"output": tool_response})
             tool_outputs.append({"id": tool_call_id, "response": tool_response})
         except Exception as e:
             tool_response = f"Error in executing tool {function_call_request.name}: {e}"
             if log_fn:
                 log_fn({"Error": tool_response})
+            if new_span:
+                new_span.end(attributes={"output": tool_response})
             tool_outputs.append({"id": tool_call_id, "response": tool_response})
 
     return ChatCompletion(
@@ -190,8 +215,10 @@ class ZAVChatCompletionClient:
     def __init__(
         self,
         chat_completion_client: ChatCompletionClient,
+        span: Optional[Span] = None,
     ) -> None:
         self.__chat_completion_client = chat_completion_client
+        self.__span = span
 
     @overload
     async def complete(  # type: ignore
@@ -207,8 +234,7 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
-    ) -> ChatResponse:
-        pass
+    ) -> ChatResponse: ...
 
     @overload
     async def complete(
@@ -224,8 +250,7 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
-    ) -> AsyncIterator[ChatResponse]:
-        pass
+    ) -> AsyncIterator[ChatResponse]: ...
 
     @overload
     async def complete(
@@ -241,8 +266,7 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
-    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        pass
+    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]: ...
 
     async def complete(
         self,
@@ -308,7 +332,6 @@ class ZAVChatCompletionClient:
         chat_response = await self.__chat_completion_client.complete(
             request=req, stream=stream
         )
-
         if isinstance(chat_response, AsyncIterator):
 
             async def stream_response_chunks(chat_response):
@@ -326,6 +349,7 @@ class ZAVChatCompletionClient:
                         execute_tools=execute_tools,
                         log_fn=log_fn,
                         max_nesting_level=max_nesting_level,
+                        span=self.__span,
                     )
                     if inner_response_iterator:
                         async for inner_response in inner_response_iterator:
@@ -348,6 +372,7 @@ class ZAVChatCompletionClient:
                 execute_tools=execute_tools,
                 log_fn=log_fn,
                 max_nesting_level=max_nesting_level,
+                span=self.__span,
             )
             if inner_response:
                 return inner_response
@@ -435,8 +460,8 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
-    ) -> Optional[ChatResponse]:
-        pass
+        span: Optional[Span] = None,
+    ) -> Optional[ChatResponse]: ...
 
     @overload
     async def __parse_inner_response(
@@ -452,8 +477,8 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
-    ) -> Optional[AsyncIterator[ChatResponse]]:
-        pass
+        span: Optional[Span] = None,
+    ) -> Optional[AsyncIterator[ChatResponse]]: ...
 
     @overload
     async def __parse_inner_response(
@@ -469,8 +494,8 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
-    ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]:
-        pass
+        span: Optional[Span] = None,
+    ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]: ...
 
     async def __parse_inner_response(
         self,
@@ -485,12 +510,14 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        span: Optional[Span] = None,
     ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]:
         tool_completion = (
             await execute_tool_call_request(
                 tools_registry=tools,
                 tool_call_requests=response.chat_completion.tool_call_requests,
                 log_fn=log_fn,
+                span=span,
             )
             if (
                 response.chat_completion
@@ -524,6 +551,8 @@ class ZAVChatCompletionClient:
 
 class ZAVChatCompletionClientFactory(AgentDependencyFactory):
     @classmethod
-    def create(cls, config: LLMClientConfiguration) -> ZAVChatCompletionClient:
-        chat_completion_client = ChatClientFactory.create(config)
-        return ZAVChatCompletionClient(chat_completion_client)
+    def create(
+        cls, config: LLMClientConfiguration, span: Optional[Span] = None
+    ) -> ZAVChatCompletionClient:
+        chat_completion_client = ChatClientFactory.create(config, span=span)
+        return ZAVChatCompletionClient(chat_completion_client, span=span)

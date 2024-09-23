@@ -1,6 +1,7 @@
-from typing import Callable, Dict, Generic, Tuple, Type, TypeVar
+from typing import Callable, Dict, Generic, Optional, Tuple, Type, TypeVar
 
 from zav.llm_domain import LLMClientConfiguration, LLMModelType, LLMProviderName
+from zav.llm_tracing import Span
 
 from zav.prompt_completion.client import BaseCompletionClient
 
@@ -36,6 +37,7 @@ class BaseClientFactory(Generic[PROMPT_COMPLETION_CLIENT]):
     def create(
         cls,
         config: LLMClientConfiguration,
+        span: Optional[Span] = None,
     ) -> PROMPT_COMPLETION_CLIENT:
         vendor_configuration = getattr(
             config.vendor_configuration, config.vendor.value, None
@@ -47,4 +49,5 @@ class BaseClientFactory(Generic[PROMPT_COMPLETION_CLIENT]):
         ].from_configuration(
             vendor_configuration=vendor_configuration,
             model_configuration=config.model_configuration,
+            span=span,
         )

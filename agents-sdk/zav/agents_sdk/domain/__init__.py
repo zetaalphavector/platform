@@ -7,9 +7,5 @@ from zav.agents_sdk.domain.chat_message import (
     FunctionCallRequest,
     FunctionSpec,
 )
-from zav.agents_sdk.domain.chat_request import (
-    ChatRequest,
-    ChatStreamRequest,
-    ConversationContext,
-)
+from zav.agents_sdk.domain.chat_request import ChatRequest, ConversationContext
 from zav.agents_sdk.domain.request_headers import RequestHeaders
