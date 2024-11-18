@@ -20,7 +20,7 @@ extras_require = {
 	"anthropic": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anthropic==0.34.2",
@@ -114,7 +114,7 @@ extras_require = {
 	"bedrock": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anthropic[bedrock]==0.34.2",
@@ -208,7 +208,7 @@ extras_require = {
 	"langchain-anthropic": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anthropic==0.34.2",
@@ -313,7 +313,7 @@ extras_require = {
 	"langchain-aws": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anyio==4.5.0",
@@ -412,7 +412,7 @@ extras_require = {
 	"langchain-openai": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anyio==4.5.0",
@@ -513,7 +513,7 @@ extras_require = {
 	"langchain": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anyio==4.5.0",
@@ -611,7 +611,7 @@ extras_require = {
 	"langfuse": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anyio==4.5.0",
@@ -702,7 +702,7 @@ extras_require = {
 	"openai": [
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anyio==4.5.0",
@@ -801,7 +801,7 @@ setup(
 	install_requires=[
 		"aiofiles==24.1.0",
 		"aiohappyeyeballs==2.4.0",
-		"aiohttp==3.10.5",
+		"aiohttp==3.10.11",
 		"aiosignal==1.3.1",
 		"altair==5.4.1",
 		"anyio==4.5.0",
