@@ -2,6 +2,7 @@ import inspect
 from typing import (
     Any,
     Callable,
+    Coroutine,
     Dict,
     Optional,
     Type,
@@ -16,8 +17,10 @@ from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span
 
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
+from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
 from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
+from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistryProtocol
 from zav.agents_sdk.domain.chat_request import ConversationContext
 
 
@@ -45,17 +48,6 @@ def init_sub_agent_span(
 
 
 class ChatAgentFactory:
-    registry: Dict[str, Type[ChatAgent]] = {}
-
-    @classmethod
-    def register(cls) -> Callable:
-        def inner_wrapper(
-            wrapped_class: Type[ChatAgent],
-        ) -> Type[ChatAgent]:
-            cls.registry[wrapped_class.agent_name] = wrapped_class
-            return wrapped_class
-
-        return inner_wrapper
 
     @classmethod
     async def _parse_sub_agent(
@@ -67,13 +59,13 @@ class ChatAgentFactory:
         sub_agent_name: str,
         sub_agent_identifier: str,
         param_default: Any,
+        chat_agent_class_registry: ChatAgentClassRegistryProtocol,
         agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
     ):
         sub_agent_setup = await agent_setup_retriever.get(
-            tenant=handler_params.get("tenant", ""),
             agent_identifier=sub_agent_identifier,
         )
         try:
@@ -81,6 +73,7 @@ class ChatAgentFactory:
                 agent_name=sub_agent_name,
                 agent_setup_retriever=agent_setup_retriever,
                 handler_params=handler_params,
+                chat_agent_class_registry=chat_agent_class_registry,
                 agent_dependency_registry=agent_dependency_registry,
                 debug_backend=debug_backend,
                 agent_setup=sub_agent_setup,
@@ -158,6 +151,7 @@ class ChatAgentFactory:
         param_name: str,
         handler_params: Dict[str, Any],
         agent_setup_retriever: AgentSetupRetriever,
+        chat_agent_class_registry: ChatAgentClassRegistryProtocol,
         agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
@@ -188,6 +182,7 @@ class ChatAgentFactory:
                             param_name=param_name,
                             handler_params=handler_params,
                             agent_setup_retriever=agent_setup_retriever,
+                            chat_agent_class_registry=chat_agent_class_registry,
                             agent_dependency_registry=agent_dependency_registry,
                             debug_backend=debug_backend,
                             agent_setup=agent_setup,
@@ -223,6 +218,7 @@ class ChatAgentFactory:
                 sub_agent_name=sub_agent_name,
                 sub_agent_identifier=sub_agent_identifier,
                 param_default=param.default,
+                chat_agent_class_registry=chat_agent_class_registry,
                 agent_dependency_registry=agent_dependency_registry,
                 debug_backend=debug_backend,
                 conversation_context=conversation_context,
@@ -268,16 +264,17 @@ class ChatAgentFactory:
         agent_name: str,
         agent_setup_retriever: AgentSetupRetriever,
         handler_params: Dict[str, Any],
+        chat_agent_class_registry: ChatAgentClassRegistryProtocol,
         agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
+        publish_event: Optional[
+            Callable[[AgentEvent], Coroutine[None, None, None]]
+        ] = None,
     ) -> ChatAgent:
-        if agent_name not in cls.registry:
-            raise ValueError(f"Unknown agent: {agent_name}")
-
-        agent_cls = cls.registry[agent_name]
+        agent_cls = await chat_agent_class_registry.get(agent_name=agent_name)
         agent_cls_params = inspect.signature(agent_cls).parameters
         agent_cls_param_values = {
             param_name: await cls._parse_value(
@@ -285,6 +282,7 @@ class ChatAgentFactory:
                 param_name=param_name,
                 handler_params=handler_params,
                 agent_setup_retriever=agent_setup_retriever,
+                chat_agent_class_registry=chat_agent_class_registry,
                 agent_dependency_registry=agent_dependency_registry,
                 debug_backend=debug_backend,
                 agent_setup=agent_setup,
@@ -294,6 +292,8 @@ class ChatAgentFactory:
             for param_name, param in agent_cls_params.items()
         }
         agent_instance = agent_cls(**agent_cls_param_values)
+        if agent_setup:
+            agent_instance.agent_identifier = agent_setup.agent_identifier
         if span:
             span_agent_params = {
                 param_name: param_value
@@ -329,6 +329,9 @@ class ChatAgentFactory:
 
         agent_instance.debug_backend = debug_backend
         agent_instance.span = span
+
+        if publish_event:
+            agent_instance.publish_event = publish_event
         return agent_instance
 
     @classmethod
@@ -337,21 +340,27 @@ class ChatAgentFactory:
         agent_name: str,
         agent_setup_retriever: AgentSetupRetriever,
         handler_params: Dict[str, Any],
+        chat_agent_class_registry: ChatAgentClassRegistryProtocol,
         agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
+        publish_event: Optional[
+            Callable[[AgentEvent], Coroutine[None, None, None]]
+        ] = None,
     ) -> StreamableChatAgent:
         agent_instance = await cls.create(
             agent_name=agent_name,
             agent_setup_retriever=agent_setup_retriever,
             handler_params=handler_params,
+            chat_agent_class_registry=chat_agent_class_registry,
             agent_dependency_registry=agent_dependency_registry,
             debug_backend=debug_backend,
             agent_setup=agent_setup,
             conversation_context=conversation_context,
             span=span,
+            publish_event=publish_event,
         )
         if not isinstance(agent_instance, StreamableChatAgent):
             raise ValueError(f"Agent {agent_name} is not streamable")

@@ -16,7 +16,12 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 from openai.types.chat.completion_create_params import Function
 from openai.types.completion_choice import CompletionChoice
-from pydantic import BaseModel
+
+try:
+    from pydantic.v1 import BaseModel
+except ImportError:
+    from pydantic import BaseModel  # type: ignore
+
 from typing_extensions import Literal
 from zav.llm_domain import (
     LLMModelConfiguration,
@@ -186,7 +191,9 @@ class OpenAiPromptWithLogitsClient(PromptCompletionWithLogitsClient):
                 )
             # Same error for any number of prompts, the message refers to the
             # first prompt that was too long. It doesn't say which one.
-            if e.status_code == 400 and "context_length_exceeded" in e.message:
+            if e.status_code == 400 and (
+                "context_length_exceeded" in e.message or "string too long" in e.message
+            ):
                 error = generate_prompt_too_long_error(e.message)
             else:
                 error = Exception(f"Prompt completion failed with error: {e.message}")
@@ -311,7 +318,9 @@ class OpenAiPromptClient(PromptCompletionClient):
                 )
             # Same error for any number of prompts, the message refers to the
             # first prompt that was too long. It doesn't say which one.
-            if e.status_code == 400 and "context_length_exceeded" in e.message:
+            if e.status_code == 400 and (
+                "context_length_exceeded" in e.message or "string too long" in e.message
+            ):
                 error = generate_prompt_too_long_error(e.message)
                 return PromptResponse(error=error, prompt_answer=None)
             else:
@@ -479,7 +488,7 @@ class OpenAiChatClient(ChatCompletionClient):
                                 if chunk.usage
                                 else {}
                             )
-                        choice_chunk = chunk.choices[0]
+                        choice_chunk = chunk.choices[0] if chunk.choices else None
                         if choice_chunk is None:
                             # This is a completion chunk with no choices, skip it
                             continue
@@ -634,7 +643,9 @@ class OpenAiChatClient(ChatCompletionClient):
                         "status_message": e.message,
                     }
                 )
-            if e.status_code == 400 and "context_length_exceeded" in e.message:
+            if e.status_code == 400 and (
+                "context_length_exceeded" in e.message or "string too long" in e.message
+            ):
                 error = generate_prompt_too_long_error(e.message)
             else:
                 error = e

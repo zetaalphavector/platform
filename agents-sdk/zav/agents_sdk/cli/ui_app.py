@@ -16,14 +16,22 @@ from zav.agents_sdk import (
     AgentSetupRetrieverFromFile,
     ChatMessage,
     ChatMessageSender,
+    ContentPartTool,
     ConversationContext,
+    CustomContext,
+    CustomContextItem,
     DocumentContext,
+)
+from zav.agents_sdk.adapters import AgentDependencyRegistry
+from zav.agents_sdk.adapters.local_agent_registries_factory import (
+    LocalAgentRegistriesFactory,
 )
 from zav.agents_sdk.bootstrap import setup_bootstrap
 from zav.agents_sdk.cli.load_chat_agent_factory import (
-    from_string as import_chat_agent_factory_from_string,
+    from_string as import_chat_agent_class_registry_from_string,
 )
 from zav.agents_sdk.domain import ChatRequest, RequestHeaders
+from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
 from zav.agents_sdk.handlers import commands
 
 st.markdown(
@@ -50,7 +58,7 @@ storage_backend = os.environ["STORAGE_BACKEND"]
 storage_path = os.environ["STORAGE_PATH"]
 
 object_storage_repo = ObjectRepositoryFactory.create(storage_backend)
-chat_agent_factory = import_chat_agent_factory_from_string(zav_project_dir)
+import_chat_agent_class_registry_from_string(zav_project_dir)
 # No secrets in this retriever, so it's safe to store
 safe_agent_setup_retriever = AgentSetupRetrieverFromFile(file_path=zav_agent_setup_src)
 agent_setup_retriever = AgentSetupRetrieverFromFile(
@@ -60,7 +68,7 @@ agent_setup_retriever = AgentSetupRetrieverFromFile(
 os.environ["OPENAI_API_KEY"] = next(
     iter(
         api_key
-        for ags in asyncio.run(agent_setup_retriever.list(""))
+        for ags in asyncio.run(agent_setup_retriever.list())
         if ags.llm_client_configuration
         and (openai_conf := ags.llm_client_configuration.vendor_configuration.openai)
         and (api_key := openai_conf.openai_api_key.get_unencrypted_secret())
@@ -70,8 +78,11 @@ os.environ["OPENAI_API_KEY"] = next(
 
 debug_storage: List[Any] = []
 bootstrap = setup_bootstrap(
-    agent_setup_retriever=agent_setup_retriever,
-    chat_agent_factory=chat_agent_factory,
+    agent_registries_factory=LocalAgentRegistriesFactory(
+        agent_setup_retriever=agent_setup_retriever,
+        chat_agent_class_registry=ChatAgentClassRegistry,
+        agent_dependency_registry=AgentDependencyRegistry,
+    ),
     debug_backend=debug_storage.append,
 )
 
@@ -182,8 +193,37 @@ def start_new_conversation():
         new_trace_file_name(agent_identifier=st.session_state.agent_identifier)
 
 
+def render_tool_content(tool: ContentPartTool):
+    if tool.name == "query_creator_agent":
+        msg = "Exploring the topic of"
+        if tool.params is not None:
+            msg += f" {tool.params.get('message', '')}"
+        if tool.response is not None:
+            msg += f" - {tool.response.get('content', msg)}"
+    elif tool.name == "searcher_agent":
+        msg = "Searching for "
+        if tool.params is not None:
+            msg += f"\"{tool.params.get('query', '')}\""
+        if tool.response is not None:
+            msg += (
+                f" Found - {tool.response.get('number_of_relevant_hits_found', 0)}"
+                " relevant docs"
+            )
+    return msg
+
+
 def render_chat_message_item_content(st_elem, content: ChatMessage):
-    parsed_content = content.content
+    parsed_content = ""
+    if content.content_parts is not None:
+        for content_part in content.content_parts:
+            if content_part.type == "tool" and content_part.tool:
+                parsed_content = render_tool_content(content_part.tool)
+            elif content_part.type == "text" and content_part.text:
+                parsed_content = content_part.text
+            elif content_part.type == "table":
+                parsed_content = content.content
+    else:
+        parsed_content = content.content
     if content.evidences:
         seen_evidences = set()
         for evidence in content.evidences:
@@ -257,6 +297,7 @@ async def create_chat_response(
         return results.pop(0)
 
     agent_debug_logs = None
+    debug_panel_status = None
     if chat_message_item_debug_panel_status is not None:
         debug_panel_status = chat_message_item_debug_panel_status.status(
             "Debug", expanded=True
@@ -292,7 +333,8 @@ async def create_chat_response(
         last_message = conversation_result.conversation[-1]
         render_chat_message_item_content(chat_message_item_content, last_message)
 
-    debug_panel_status.update(state="complete")
+    if debug_panel_status:
+        debug_panel_status.update(state="complete")
     if last_message:
         return ChatMessageItem(
             message=last_message,
@@ -379,24 +421,28 @@ def render_chat_configuration_item(
             )
 
             st.subheader("Conversation context")
-            st.caption("Document IDs")
             cc = chat_configuration_item.conversation_context
-            st.json(
-                json.dumps(
-                    (
-                        cc.document_context.document_ids
-                        if cc and cc.document_context
-                        else []
-                    ),
-                    indent=2,
+            if cc and cc.document_context:
+                st.caption("Document IDs")
+                st.json(
+                    json.dumps(
+                        (
+                            cc.document_context.document_ids
+                            if cc and cc.document_context
+                            else []
+                        ),
+                        indent=2,
+                    )
                 )
-            )
-            st.caption("Retrieval unit")
-            st.text(
-                cc.document_context.retrieval_unit
-                if cc and cc.document_context
-                else None
-            )
+                st.caption("Retrieval unit")
+                st.text(
+                    cc.document_context.retrieval_unit
+                    if cc and cc.document_context
+                    else None
+                )
+            elif cc and cc.custom_context:
+                st.caption("Custom context items")
+                st.json(cc.custom_context.json(indent=2))
 
 
 def render_chat_message_item(
@@ -545,12 +591,12 @@ with st.sidebar:
         st.session_state.entries = trace_file_content.entries
 
     with st.expander("Agent configuration", expanded=True):
-        all_agent_setups = asyncio.run(agent_setup_retriever.list(tenant=""))
+        all_agent_setups = asyncio.run(agent_setup_retriever.list())
         st.selectbox(
             "Agent",
             set(
                 [agent_setup.agent_identifier for agent_setup in all_agent_setups]
-                + [agent for agent in chat_agent_factory.registry]
+                + [agent for agent in ChatAgentClassRegistry.registry]
             ),
             key="agent_identifier",
         )
@@ -565,7 +611,6 @@ with st.sidebar:
         )
         agent_setup = asyncio.run(
             safe_agent_setup_retriever.get(
-                "",
                 st.session_state.agent_identifier,
             )
         )
@@ -618,13 +663,27 @@ with st.sidebar:
 
     conversation_context: Optional[ConversationContext] = None
     with st.expander("Conversation context"):
+        st.caption("Document context")
         sel_document_ids = st.text_area("Document IDs", json.dumps([], indent=2))
         sel_retrieval_unit = st.text_input("Retrieval unit")
+
+        st.caption("Custom context")
+        sel_custom_context_items = st.text_area("Items", json.dumps([], indent=2))
+
     if sel_document_ids and sel_retrieval_unit:
         conversation_context = ConversationContext(
             document_context=DocumentContext(
                 document_ids=json.loads(sel_document_ids),
                 retrieval_unit=sel_retrieval_unit,
+            )
+        )
+    elif sel_custom_context_items:
+        conversation_context = ConversationContext(
+            custom_context=CustomContext(
+                items=[
+                    CustomContextItem(**item)
+                    for item in json.loads(sel_custom_context_items)
+                ]
             )
         )
     st.session_state.conversation_context = conversation_context

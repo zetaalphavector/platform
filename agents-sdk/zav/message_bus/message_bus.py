@@ -1,3 +1,4 @@
+import random
 from asyncio import sleep
 from typing import Callable, Dict, List, Type
 
@@ -33,18 +34,25 @@ class MessageBus:
                 except RetryableHandlerError as retryable_error:
                     if retry_attempts >= retryable_error.max_retries:
                         logger.exception(
-                            f"Message {message} failed after {retry_attempts} retries. "
+                            f"Message {message.__class__.__name__} failed after "
+                            f"{retry_attempts} retries. "
                             f"Error: {e}"
                         )
                         raise NonRetryableHandlerError(e)
                     attempt = retry_attempts + 1
+                    delay = attempt * retryable_error.base_delay
+                    # Add random jitter to delay based on its value
+                    jitter = random.uniform(-0.1 * delay, 0.1 * delay)
+                    delay += jitter
                     logger.info(
                         (
-                            f"Retry attempt #{attempt} for message {message}. "
+                            f"Retry attempt #{attempt} for message "
+                            f"{message.__class__.__name__}. "
+                            "Will retry in {delay} seconds."
                             f"Error: {e}"
                         )
                     )
-                    await sleep(attempt * retryable_error.base_delay)
+                    await sleep(delay)
                     return await self.handle(message, attempt)
                 except Exception as non_retryable_exception:
                     logger.exception(f"Non retryable error: {non_retryable_exception}")

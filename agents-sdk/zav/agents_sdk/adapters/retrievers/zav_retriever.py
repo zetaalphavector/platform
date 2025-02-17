@@ -6,6 +6,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel
 from zav.api.errors import UnknownException
 from zav.search_api import ApiClient, Configuration
+from zav.search_api.apis import DocumentAssetsApi as DocumentAssetsApiSync
 from zav.search_api.apis import DocumentsApi as DocumentsApiSync
 from zav.search_api.exceptions import ApiException
 from zav.search_api.model.index_cluster_string import IndexClusterString
@@ -35,6 +36,15 @@ class RetrievedHistoryItem(BaseModel):
 
 
 class DocumentsApi(DocumentsApiSync):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def __getattribute__(self, name):
+        original = object.__getattribute__(self, name)
+        return force_async(original) if is_bound_function(original) else original
+
+
+class DocumentAssetsApi(DocumentAssetsApiSync):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -112,6 +122,7 @@ class ZAVRetriever:
             api_client.set_default_header("X-Auth", request_headers.x_auth)
         self.__retrieved_history: List[RetrievedHistoryItem] = []
         self.__documents = DocumentsApi(api_client)
+        self.__document_assets = DocumentAssetsApi(api_client)
         self.__internal_headers = request_headers.dict(
             exclude_none=True, exclude={"authorization", "x_auth"}
         )
@@ -150,6 +161,9 @@ class ZAVRetriever:
         visibility: Optional[List[str]] = None,
         document_types: Optional[List[str]] = None,
         date: Optional[Dict] = None,
+        sources: Optional[List[str]] = None,
+        requested_field_paths: Optional[List[str]] = None,
+        tag_ids: Optional[List[str]] = None,
     ) -> Dict:
         date = _parse_dates_to_str(date) if date else None
 
@@ -170,6 +184,8 @@ class ZAVRetriever:
             index_id=sel_index_id,
             visibility=visibility,
             document_types=document_types,
+            sources=sources,
+            tag_ids=tag_ids,
         )
         search_post_request = SearchPostRequest(
             tenant=self.__tenant,
@@ -241,6 +257,13 @@ class ZAVRetriever:
             ),
             **({"visibility": visibility} if visibility else {}),
             **({"document_types": document_types} if document_types else {}),
+            **({"sources": sources} if sources else {}),
+            **(
+                {"requested_field_paths": requested_field_paths}
+                if requested_field_paths
+                else {}
+            ),
+            **({"tag_ids": tag_ids} if tag_ids else {}),
         )
         search_response: SearchPostResponse = (
             await self.__documents.document_search_post(
@@ -333,6 +356,35 @@ class ZAVRetriever:
                     index_cluster=index_cluster,
                 )
         return response_dict
+
+    @_handle_pipeline_service_errors
+    async def get_full_text(self, document_id: Optional[str]) -> Optional[str]:
+        if not document_id:
+            return None
+        index_cluster = f"default:{self.__index_id}" if self.__index_id else None
+        document_assets_response = await self.__document_assets.retrieve_content(
+            document_id=document_id,
+            asset_type="text_url",
+            tenant=self.__tenant,
+            **({"index_cluster": index_cluster} if index_cluster else {}),
+            **self.__internal_headers,
+        )
+        doc_content = document_assets_response.read().decode("utf-8")
+        return doc_content
+
+    @_handle_pipeline_service_errors
+    async def get_image_asset(self, document_id: Optional[str]) -> Optional[bytes]:
+        if not document_id:
+            return None
+        index_cluster = f"default:{self.__index_id}" if self.__index_id else None
+        document_assets_response = await self.__document_assets.retrieve_content(
+            document_id=document_id,
+            asset_type="image_url",
+            tenant=self.__tenant,
+            **({"index_cluster": index_cluster} if index_cluster else {}),
+            **self.__internal_headers,
+        )
+        return document_assets_response.read()
 
 
 def _api_config(host: str, retries: Optional[int] = None) -> Configuration:

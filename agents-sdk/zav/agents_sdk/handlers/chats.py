@@ -7,8 +7,12 @@ from zav.message_bus import (  # noqa
     Message,
 )
 
-from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
-from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
+from zav.agents_sdk.adapters.event_publishers.event_publisher import (
+    AbstractEventPublisher,
+)
+from zav.agents_sdk.domain.agent_event import AgentEvent
+from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
+from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup
 from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
 from zav.agents_sdk.domain.chat_message import ChatMessage as DomainChatMessage
 from zav.agents_sdk.domain.chat_message import (
@@ -20,7 +24,7 @@ from zav.agents_sdk.domain.chat_message import (
 from zav.agents_sdk.domain.chat_message import FunctionSpec
 from zav.agents_sdk.domain.chat_request import ChatRequest
 from zav.agents_sdk.domain.request_headers import RequestHeaders
-from zav.agents_sdk.handlers import commands
+from zav.agents_sdk.handlers import commands, events
 
 
 def init_span(
@@ -33,14 +37,7 @@ def init_span(
 ) -> Optional[Span]:
     span: Optional[Span] = None
     if tracing_config := agent_setup.tracing_configuration:
-        tracing_vendor = tracing_config.vendor
-        tracing_vendor_config = getattr(
-            tracing_config.vendor_configuration, tracing_vendor, None
-        )
-        tracing_backend = tracing_backend_factory.create(
-            vendor_name=tracing_vendor,
-            config=tracing_vendor_config.dict() if tracing_vendor_config else {},
-        )
+        tracing_backend = tracing_backend_factory.create(config=tracing_config)
         span = Trace(tracing_backend=tracing_backend).new(
             name="agent-response",
             attributes={
@@ -60,18 +57,38 @@ def init_span(
     return span
 
 
+async def push_event_to_queue(
+    cmd: commands.CreateChatResponse,
+    agent_event: AgentEvent,
+    event_publisher: Optional[AbstractEventPublisher] = None,
+):
+    if event_publisher is None:
+        return
+
+    event = events.CreatedAgentRequest(
+        tenant=cmd.tenant,
+        index_id=cmd.index_id,
+        request_headers=cmd.request_headers.dict(),
+        agent_identifier=agent_event.recipient_agent_identifier,
+        **agent_event.payload,
+    )
+    await event_publisher.publish_event(event)
+
+
 @CommandHandlerRegistry.register(commands.CreateChatResponse)
 async def handle_create(
     cmd: commands.CreateChatResponse,
     queue: List[Message],
-    agent_setup_retriever: AgentSetupRetriever,
-    chat_agent_factory: Type[ChatAgentFactory],
+    agent_registries_factory: AgentRegistriesFactory,
     tracing_backend_factory: Type[TracingBackendFactory],
-    agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
+    event_publisher: Optional[AbstractEventPublisher] = None,
     debug_backend: Optional[Callable[[Any], Any]] = None,
 ):
+    agent_setup_retriever, chat_agent_class_registry, agent_dependency_registry = (
+        await agent_registries_factory.create(tenant=cmd.tenant)
+    )
     agent_setup = await agent_setup_retriever.get(
-        tenant=cmd.tenant, agent_identifier=cmd.chat_request.agent_identifier
+        agent_identifier=cmd.chat_request.agent_identifier
     )
     if not agent_setup:
         raise ValueError(f"Unknown agent: {cmd.chat_request.agent_identifier}")
@@ -85,9 +102,10 @@ async def handle_create(
         index_id=cmd.index_id,
     )
 
-    chat_agent = await chat_agent_factory.create(
+    chat_agent = await ChatAgentFactory.create(
         agent_name=agent_setup.agent_name,
         agent_setup_retriever=agent_setup_retriever,
+        chat_agent_class_registry=chat_agent_class_registry,
         agent_dependency_registry=agent_dependency_registry,
         debug_backend=debug_backend,
         agent_setup=agent_setup,
@@ -99,6 +117,9 @@ async def handle_create(
         },
         conversation_context=cmd.chat_request.conversation_context,
         span=span,
+        publish_event=lambda agent_event: push_event_to_queue(
+            cmd, agent_event, event_publisher
+        ),
     )
 
     chat_agent_response = await chat_agent.execute(
@@ -147,14 +168,16 @@ async def handle_create(
 async def handle_create_stream(
     cmd: commands.CreateChatStream,
     queue: List[Message],
-    agent_setup_retriever: AgentSetupRetriever,
-    chat_agent_factory: Type[ChatAgentFactory],
+    agent_registries_factory: AgentRegistriesFactory,
     tracing_backend_factory: Type[TracingBackendFactory],
-    agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
+    event_publisher: Optional[AbstractEventPublisher] = None,
     debug_backend: Optional[Callable[[Any], Any]] = None,
 ):
+    agent_setup_retriever, chat_agent_class_registry, agent_dependency_registry = (
+        await agent_registries_factory.create(tenant=cmd.tenant)
+    )
     agent_setup = await agent_setup_retriever.get(
-        tenant=cmd.tenant, agent_identifier=cmd.chat_request.agent_identifier
+        agent_identifier=cmd.chat_request.agent_identifier
     )
     if not agent_setup:
         raise ValueError(f"Unknown agent: {cmd.chat_request.agent_identifier}")
@@ -168,9 +191,10 @@ async def handle_create_stream(
         index_id=cmd.index_id,
     )
 
-    chat_agent = await chat_agent_factory.create_streamable(
+    chat_agent = await ChatAgentFactory.create_streamable(
         agent_name=agent_setup.agent_name,
         agent_setup_retriever=agent_setup_retriever,
+        chat_agent_class_registry=chat_agent_class_registry,
         agent_dependency_registry=agent_dependency_registry,
         debug_backend=debug_backend,
         agent_setup=agent_setup,
@@ -182,6 +206,9 @@ async def handle_create_stream(
         },
         conversation_context=cmd.chat_request.conversation_context,
         span=span,
+        publish_event=lambda agent_event: push_event_to_queue(
+            cmd, agent_event, event_publisher
+        ),
     )
 
     try:

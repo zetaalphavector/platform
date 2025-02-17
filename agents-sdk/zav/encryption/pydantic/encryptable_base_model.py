@@ -1,7 +1,11 @@
 from typing import Any
 
-from pydantic import BaseModel
-from pydantic.utils import sequence_like
+try:
+    from pydantic.v1 import BaseModel
+    from pydantic.v1.utils import sequence_like
+except ImportError:
+    from pydantic import BaseModel  # type: ignore
+    from pydantic.utils import sequence_like  # type: ignore
 
 from zav.encryption.encrypter import AbstractEncrypter
 from zav.encryption.pydantic.encrypted_str import EncryptedStr

@@ -2,7 +2,11 @@ import enum
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union, overload
 
-from pydantic import BaseModel
+try:
+    from pydantic.v1 import BaseModel
+except ImportError:
+    from pydantic import BaseModel  # type: ignore
+
 from typing_extensions import AsyncIterator, Literal, NotRequired, TypedDict
 from zav.llm_domain import LLMModelConfiguration
 from zav.llm_tracing import Span

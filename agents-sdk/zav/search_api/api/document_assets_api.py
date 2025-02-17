@@ -132,6 +132,8 @@ class DocumentAssetsApi(object):
                     'requester_uuid',
                     'index_cluster',
                     'tenant',
+                    'user_roles',
+                    'user_tenants',
                 ],
                 'required': [
                     'document_id',
@@ -167,6 +169,10 @@ class DocumentAssetsApi(object):
                         (str,),
                     'tenant':
                         (str,),
+                    'user_roles':
+                        (str,),
+                    'user_tenants':
+                        (str,),
                 },
                 'attribute_map': {
                     'document_id': 'document_id',
@@ -174,6 +180,8 @@ class DocumentAssetsApi(object):
                     'requester_uuid': 'requester-uuid',
                     'index_cluster': 'index_cluster',
                     'tenant': 'tenant',
+                    'user_roles': 'user-roles',
+                    'user_tenants': 'user-tenants',
                 },
                 'location_map': {
                     'document_id': 'path',
@@ -181,6 +189,8 @@ class DocumentAssetsApi(object):
                     'requester_uuid': 'header',
                     'index_cluster': 'query',
                     'tenant': 'query',
+                    'user_roles': 'header',
+                    'user_tenants': 'header',
                 },
                 'collection_format_map': {
                 }
@@ -304,6 +314,8 @@ class DocumentAssetsApi(object):
             requester_uuid (UUIDString): [optional]
             index_cluster (str): Human friendly name that specifies which index configuration to use during search. The way we convert this string into infrastructure configuration is part of the internal logic of this service. Ideally all possible values should be listed as part of another request along with the description of what each value means.  Currently, the value can be constructed by using knowledge of the index infrastructure. In particular, the value is separated by the `:` character. The part on the left of `:` represents the kubernetes namespace of the index cluster, while the part on the right specifies the infix in the index name.  For example, if a user wants to search in the index cluster located in the `foo` namespace and use the index named `my_tenant_bar_documents`, then the `index_cluster` value should be `foo:bar`. The user may also need to specify the retrieval unit and tenant as part of the request.  > Note: There's currently no endpoint for retrieving all valid values that the `index_cluster` parameter can take. . [optional]
             tenant (str): Tenant. [optional] if omitted the server will use the default value of "zetaalpha"
+            user_roles (str): [optional]
+            user_tenants (str): [optional]
             _return_http_data_only (bool): response data without head status
                 code and headers. Default is True.
             _preload_content (bool): if False, the urllib3.HTTPResponse object

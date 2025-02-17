@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Tuple, Union
 
 import httpx
 from langfuse import Langfuse
@@ -10,66 +10,64 @@ from langfuse.client import (
 
 from zav.llm_tracing.trace import Span, TracingBackend
 from zav.llm_tracing.tracing_backend_factory import TracingBackendFactory
+from zav.llm_tracing.tracing_configuration import LangfuseConfiguration
+
+
+class LangfuseClientCache:
+    # each key is a tuple of a hash of the config dict plus the public key, secret key,
+    # and host
+    __client_cache: Dict[Tuple[int, str, str, str], Langfuse] = {}
+
+    @staticmethod
+    def get_client(
+        vendor_configuration: LangfuseConfiguration,
+        httpx_client: Optional[httpx.Client],
+    ) -> Langfuse:
+        """Configure the Langfuse client.
+
+        Args:
+            vendor_configuration: Tracing configuration for Langfuse.
+            httpx_client: Pass your own httpx client for more customizability
+                of requests.
+        """
+        config_dict = tuple(sorted(vendor_configuration.dict())) + (id(httpx_client),)
+        config_hash = hash(config_dict)
+        cache_key = (
+            config_hash,
+            vendor_configuration.public_key,
+            vendor_configuration.secret_key,
+            vendor_configuration.host,
+        )
+
+        if cache_key not in LangfuseClientCache.__client_cache:
+            LangfuseClientCache.__client_cache[cache_key] = Langfuse(
+                public_key=vendor_configuration.public_key,
+                secret_key=vendor_configuration.secret_key.get_unencrypted_secret(),
+                host=vendor_configuration.host,
+                release=vendor_configuration.release,
+                debug=vendor_configuration.debug,
+                threads=vendor_configuration.threads,
+                flush_at=vendor_configuration.flush_at,
+                flush_interval=vendor_configuration.flush_interval,
+                max_retries=vendor_configuration.max_retries,
+                timeout=vendor_configuration.timeout,
+                sdk_integration=vendor_configuration.sdk_integration,
+                httpx_client=httpx_client,
+                enabled=vendor_configuration.enabled,
+                sample_rate=vendor_configuration.sample_rate,
+            )
+        return LangfuseClientCache.__client_cache[cache_key]
 
 
 @TracingBackendFactory.register("langfuse")
 class LangfuseTracingBackend(TracingBackend):
     def __init__(
         self,
-        public_key: Optional[str] = None,
-        secret_key: Optional[str] = None,
-        host: Optional[str] = None,
-        release: Optional[str] = None,
-        debug: bool = False,
-        threads: Optional[int] = None,
-        flush_at: Optional[int] = None,
-        flush_interval: Optional[float] = None,
-        max_retries: Optional[int] = None,
-        timeout: Optional[int] = None,  # seconds
-        sdk_integration: Optional[str] = "default",
+        vendor_configuration: LangfuseConfiguration,
         httpx_client: Optional[httpx.Client] = None,
-        enabled: Optional[bool] = True,
-        sample_rate: Optional[float] = None,
     ):
-        """Configure the Langfuse client.
-
-        Args:
-            public_key: Public API key of Langfuse project.
-            secret_key: Secret API key of Langfuse project.
-            host: Host of Langfuse API. Defaults to `https://cloud.langfuse.com`.
-            release: Release number/hash of the application to provide analytics
-                grouped by release.
-            debug: Enables debug mode for more verbose logging.
-            threads: Number of consumer threads to execute network requests.
-                Helps scaling the SDK for high load. Only increase this if you run
-                into scaling issues.
-            flush_at: Max batch size that's sent to the API.
-            flush_interval: Max delay until a new batch is sent to the API.
-            max_retries: Max number of retries in case of API/network errors.
-            timeout: Timeout of API requests in seconds. Defaults to 20 seconds.
-            httpx_client: Pass your own httpx client for more customizability
-                of requests.
-            sdk_integration: Used by intgerations that wrap the Langfuse SDK to
-                add context for debugging and support. Not to be used directly.
-            enabled: Enables or disables the Langfuse client.
-            sample_rate: Sampling rate for tracing. If set to 0.2, only 20% of the
-                data will be sent to the backend.
-        """
-        self.langfuse = Langfuse(
-            public_key=public_key,
-            secret_key=secret_key,
-            host=host,
-            release=release,
-            debug=debug,
-            threads=threads,
-            flush_at=flush_at,
-            flush_interval=flush_interval,
-            max_retries=max_retries,
-            timeout=timeout,
-            sdk_integration=sdk_integration,
-            httpx_client=httpx_client,
-            enabled=enabled,
-            sample_rate=sample_rate,
+        self.langfuse = LangfuseClientCache.get_client(
+            vendor_configuration, httpx_client
         )
         self.__observations_map: Dict[
             str,

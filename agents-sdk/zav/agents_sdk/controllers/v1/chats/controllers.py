@@ -56,6 +56,14 @@ def extract_create_stream_command(
     name="create_chat_response",
     operation_id="create_chat_response",
 )
+@chat_router.post(
+    "/chat/response",
+    response_model=ChatResponseItem,
+    response_model_exclude_none=True,
+    status_code=201,
+    name="create_chat",
+    operation_id="create_chat",
+)
 async def create_chat_response(
     command=Depends(extract_create_response_command),
     message_bus: MessageBus = Depends(get_message_bus),

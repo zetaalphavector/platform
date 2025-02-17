@@ -3,7 +3,10 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+try:
+    from pydantic.v1 import BaseModel, Field
+except ImportError:
+    from pydantic import BaseModel, Field  # type: ignore
 
 
 def now():
@@ -28,20 +31,24 @@ class SpanEvent(BaseModel):
 
 class TracingBackend(ABC):
     @abstractmethod
+    def __init__(self, vendor_configuration):
+        raise NotImplementedError
+
+    @abstractmethod
     def handle_new_trace(self, span: "Span"):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def handle_new(self, span: "Span"):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def handle_update(self, span: "Span"):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def handle_event(self, span: "Span"):
-        pass
+        raise NotImplementedError
 
 
 class Span(BaseModel):

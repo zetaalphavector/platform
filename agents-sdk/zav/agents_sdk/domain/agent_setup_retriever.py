@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from zav.llm_domain import LLMClientConfiguration
+from zav.llm_tracing import TracingConfiguration
 
 
 def merge_dicts(d1, d2):
@@ -12,28 +12,6 @@ def merge_dicts(d1, d2):
             merge_dicts(d1[key], value)
         else:
             d1[key] = value
-
-
-class LangfuseConfiguration(BaseModel):
-    host: str
-    secret_key: str
-    public_key: str
-    enabled: bool = True
-
-
-class TracingVendorConfiguration(BaseModel):
-    langfuse: Optional[LangfuseConfiguration] = None
-
-
-class TracingVendorName(str, Enum):
-    LANGFUSE = "langfuse"
-
-
-class TracingConfiguration(BaseModel):
-    vendor: TracingVendorName
-    vendor_configuration: TracingVendorConfiguration = Field(
-        default_factory=TracingVendorConfiguration
-    )
 
 
 class AgentSetup(BaseModel):
@@ -56,9 +34,9 @@ class AgentSetup(BaseModel):
 
 class AgentSetupRetriever(ABC):
     @abstractmethod
-    async def get(self, tenant: str, agent_identifier: str) -> Optional[AgentSetup]:
+    async def get(self, agent_identifier: str) -> Optional[AgentSetup]:
         raise NotImplementedError
 
     @abstractmethod
-    async def list(self, tenant: str) -> List[AgentSetup]:
+    async def list(self) -> List[AgentSetup]:
         raise NotImplementedError
