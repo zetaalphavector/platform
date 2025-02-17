@@ -15,8 +15,8 @@ class LocalAgentSetupRetriever(AgentSetupRetriever):
             agent_identifier
         ].patch(agent_setup_patch)
 
-    async def get(self, tenant: str, agent_identifier: str) -> Optional[AgentSetup]:
+    async def get(self, agent_identifier: str) -> Optional[AgentSetup]:
         return self.__agent_setup_map.get(agent_identifier, None)
 
-    async def list(self, tenant: str) -> List[AgentSetup]:
+    async def list(self) -> List[AgentSetup]:
         return list(self.__agent_setup_map.values())

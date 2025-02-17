@@ -5,10 +5,14 @@ from typing import Type
 
 from zav.logging import logger
 
-from zav.agents_sdk import ChatAgent, ChatAgentFactory
+from zav.agents_sdk.domain.chat_agent import ChatAgent
+from zav.agents_sdk.domain.chat_agent_registry import (
+    ChatAgentClassRegistry,
+    ChatAgentClassRegistryProtocol,
+)
 
 
-def from_string(zav_project_dir: str) -> Type[ChatAgentFactory]:
+def from_string(zav_project_dir: str) -> ChatAgentClassRegistryProtocol:
     import_str = zav_project_dir.replace("/", ".")
     module_str, _, attrs_str = import_str.partition(":")
     if not module_str:
@@ -23,18 +27,21 @@ def from_string(zav_project_dir: str) -> Type[ChatAgentFactory]:
             sys.path.append("..")
             dynamic_module = importlib.import_module(os.path.basename(zav_project_dir))
         else:
+            import sys
+
+            sys.path.append(".")
             dynamic_module = importlib.import_module(module_str)
     except ImportError as exc:
         if exc.name != module_str:
             raise exc from None
         raise Exception(f"Could not import module {module_str}.")
     instance = dynamic_module
-    chat_agent_factory = getattr(instance, "ChatAgentFactory", None)
+    chat_agent_class_registry = getattr(instance, "ChatAgentClassRegistry", None)
     if not attrs_str:
-        # Look for a class named ChatAgentFactory in the module
-        if not chat_agent_factory:
+        # Look for a class named ChatAgentClassRegistry in the module
+        if not chat_agent_class_registry:
             raise Exception(
-                f"Module {module_str} does not have a ChatAgentFactory class."
+                f"Module {module_str} does not have a ChatAgentClassRegistry class."
             )
     else:
         # Look for the attribute in the module
@@ -47,20 +54,23 @@ def from_string(zav_project_dir: str) -> Type[ChatAgentFactory]:
             )
 
         if isclass(instance):
-            if issubclass(instance, ChatAgentFactory):
-                chat_agent_factory = instance
+            if issubclass(instance, ChatAgentClassRegistry):
+                chat_agent_class_registry = instance
             elif issubclass(instance, ChatAgent):
                 chat_agent: Type[ChatAgent] = instance
-                chat_agent_factory = chat_agent_factory or ChatAgentFactory
+                chat_agent_class_registry = (
+                    chat_agent_class_registry or ChatAgentClassRegistry
+                )
                 # Make sure the chat_agent is registered with the factory
-                chat_agent_factory.register()(chat_agent)
+                chat_agent_class_registry.register()(chat_agent)
 
-    if not chat_agent_factory:
+    if not chat_agent_class_registry:
         raise Exception(
             f"Attribute {attrs_str} in module {module_str} is not a ChatAgent"
-            " or ChatAgentFactory."
+            " or ChatAgentClassRegistry."
         )
     logger.info(
-        f"Loaded {len(chat_agent_factory.registry)} chat agents from {import_str}"
+        f"Loaded {len(chat_agent_class_registry.registry)} chat agents from "
+        f"{import_str}"
     )
-    return chat_agent_factory
+    return chat_agent_class_registry

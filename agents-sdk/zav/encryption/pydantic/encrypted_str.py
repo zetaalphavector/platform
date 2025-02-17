@@ -1,15 +1,18 @@
 from typing import Any, Dict, Optional, Type
 
-from pydantic.types import OptionalInt
-from pydantic.utils import update_not_none
-from pydantic.validators import constr_length_validator, str_validator
+try:
+    from pydantic.v1.utils import update_not_none
+    from pydantic.v1.validators import constr_length_validator, str_validator
+except ImportError:
+    from pydantic.utils import update_not_none  # type: ignore
+    from pydantic.validators import constr_length_validator, str_validator  # type: ignore # noqa
 
 from zav.encryption.envelope import CipherWrapper
 
 
 class EncryptedStr(str):
-    min_length: OptionalInt = None
-    max_length: OptionalInt = None
+    min_length: Optional[int] = None
+    max_length: Optional[int] = None
 
     @classmethod
     def __modify_schema__(cls, field_schema: Dict[str, Any]) -> None:

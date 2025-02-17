@@ -29,6 +29,9 @@ class AgentDependencyRegistry:
         type, Union[Type[AgentDependencyFactory], AgentDependencyFactory]
     ] = {}
 
+    def __init_subclass__(cls):
+        cls.registry = {}
+
     @classmethod
     def register(
         cls, inst_or_cls: Union[Type[AgentDependencyFactory], AgentDependencyFactory]

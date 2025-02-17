@@ -23,6 +23,14 @@ class FunctionCallRequest(BaseModel):
         orm_mode = True
 
 
+class FunctionCallResponse(BaseModel):
+    name: str
+    result: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
 class FunctionSpec(BaseModel):
     name: str
     description: str
@@ -71,10 +79,39 @@ class ConversationContext(BaseModel):
         )
 
 
+class ContentPartTool(BaseModel):
+    name: str
+    params: Optional[Dict] = None
+    response: Optional[Dict] = None
+
+
+class ContentPartTable(BaseModel):
+    format: Literal["row", "columnar"] = "row"
+    rows: Optional[List[Dict[str, str]]] = None
+    columns: Optional[Dict[str, List[str]]] = None
+    headers: Optional[List[str]] = None
+
+    @root_validator
+    @classmethod
+    def one_of(cls, v):
+        """Verify it's just one of the fields."""
+        if not any((v.get("rows") is not None, v.get("columns") is not None)):
+            raise ValueError(
+                "At least one of the fields 'rows' and 'columns' must have a value"
+            )
+        if v.get("rows") is None and v.get("columns") is None:
+            raise ValueError(
+                "Only one of the fields 'rows' and 'columns' must have a value."
+            )
+        return v
+
+
 class ContentPart(BaseModel):
-    type: Literal["context", "text"]
+    type: Literal["context", "text", "tool", "table"]
     context: Optional[ConversationContext] = None
+    tool: Optional[ContentPartTool] = None
     text: Optional[str] = None
+    table: Optional[ContentPartTable] = None
 
 
 class ChatMessage(BaseModel):
@@ -83,6 +120,7 @@ class ChatMessage(BaseModel):
     content_parts: Optional[List[ContentPart]] = None
     image_uri: Optional[str] = None
     function_call_request: Optional[FunctionCallRequest] = None
+    function_call_response: Optional[FunctionCallResponse] = None
     evidences: Optional[List[ChatMessageEvidence]] = None
     function_specs: Optional[FunctionSpec] = None
 

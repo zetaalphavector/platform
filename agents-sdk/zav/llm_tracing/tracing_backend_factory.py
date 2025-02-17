@@ -1,6 +1,7 @@
 from typing import Callable, Dict, Type
 
 from zav.llm_tracing.trace import TracingBackend
+from zav.llm_tracing.tracing_configuration import TracingConfiguration
 
 
 class TracingBackendFactory:
@@ -17,7 +18,11 @@ class TracingBackendFactory:
         return inner_wrapper
 
     @classmethod
-    def create(cls, vendor_name: str, config) -> TracingBackend:
+    def create(cls, config: TracingConfiguration) -> TracingBackend:
+        vendor_name = config.vendor.value
+        vendor_configuration = getattr(config.vendor_configuration, vendor_name, None)
+        if not vendor_configuration:
+            raise ValueError(f"Vendor configuration not found for: {config.vendor}")
         if vendor_name not in cls.registry:
             raise ValueError(f"Unknown tracing vendor: {vendor_name}")
-        return cls.registry[vendor_name](**config)
+        return cls.registry[vendor_name](vendor_configuration)

@@ -15,8 +15,5 @@ class CreateChatResponse(Command):
 
 
 @dataclass
-class CreateChatStream(Command):
-    tenant: str
-    request_headers: RequestHeaders
-    chat_request: ChatRequest
-    index_id: Optional[str] = None
+class CreateChatStream(CreateChatResponse):
+    pass

@@ -121,7 +121,6 @@ from zav.search_api.model.private_doc_status import PrivateDocStatus
 from zav.search_api.model.private_doc_status_code import PrivateDocStatusCode
 from zav.search_api.model.qa_configuration import QAConfiguration
 from zav.search_api.model.query_analysis_configuration import QueryAnalysisConfiguration
-from zav.search_api.model.query_encoder_service_string import QueryEncoderServiceString
 from zav.search_api.model.query_string import QueryString
 from zav.search_api.model.recommendation_settings import RecommendationSettings
 from zav.search_api.model.representations import Representations
@@ -129,6 +128,8 @@ from zav.search_api.model.representations_chunk_bounding_boxes import Representa
 from zav.search_api.model.resources import Resources
 from zav.search_api.model.retrieval_method_string import RetrievalMethodString
 from zav.search_api.model.retrieval_unit import RetrievalUnit
+from zav.search_api.model.retrieval_unit_configuration import RetrievalUnitConfiguration
+from zav.search_api.model.retrieval_unit_settings import RetrievalUnitSettings
 from zav.search_api.model.search_engine_string import SearchEngineString
 from zav.search_api.model.search_filter_settings import SearchFilterSettings
 from zav.search_api.model.search_filter_settings_filter_type_settings import SearchFilterSettingsFilterTypeSettings

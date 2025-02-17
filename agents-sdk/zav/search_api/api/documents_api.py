@@ -269,6 +269,7 @@ class DocumentsApi(object):
                     'page_size',
                     'collapse',
                     'index_cluster',
+                    'requested_field_paths',
                 ],
                 'required': [
                     'retrieval_unit',
@@ -349,6 +350,8 @@ class DocumentsApi(object):
                         (str, none_type,),
                     'index_cluster':
                         (str,),
+                    'requested_field_paths':
+                        ([str],),
                 },
                 'attribute_map': {
                     'retrieval_unit': 'retrieval_unit',
@@ -362,6 +365,7 @@ class DocumentsApi(object):
                     'page_size': 'page_size',
                     'collapse': 'collapse',
                     'index_cluster': 'index_cluster',
+                    'requested_field_paths': 'requested_field_paths',
                 },
                 'location_map': {
                     'retrieval_unit': 'path',
@@ -375,9 +379,11 @@ class DocumentsApi(object):
                     'page_size': 'query',
                     'collapse': 'query',
                     'index_cluster': 'query',
+                    'requested_field_paths': 'query',
                 },
                 'collection_format_map': {
                     'property_values': 'csv',
+                    'requested_field_paths': 'multi',
                 }
             },
             headers_map={
@@ -430,8 +436,6 @@ class DocumentsApi(object):
                     'simplified_query',
                     'with_code',
                     'index_cluster',
-                    'query_encoder_service',
-                    'reranker_service',
                     'visibility',
                     'location_cities',
                     'location_countries',
@@ -454,8 +458,6 @@ class DocumentsApi(object):
                     'page',
                     'page_size',
                     'index_cluster',
-                    'query_encoder_service',
-                    'reranker_service',
                 ]
             },
             root_map={
@@ -472,18 +474,6 @@ class DocumentsApi(object):
 
                         'regex': {
                             'pattern': r'^[a-zA-Z0-9-_]+:[a-zA-Z0-9-_]+$',  # noqa: E501
-                        },
-                    },
-                    ('query_encoder_service',): {
-
-                        'regex': {
-                            'pattern': r'^[a-zA-Z0-9-_]+:(production|staging)$',  # noqa: E501
-                        },
-                    },
-                    ('reranker_service',): {
-
-                        'regex': {
-                            'pattern': r'^[a-zA-Z0-9-_]+:(production|staging)$',  # noqa: E501
                         },
                     },
                 },
@@ -585,10 +575,6 @@ class DocumentsApi(object):
                         (bool,),
                     'index_cluster':
                         (str,),
-                    'query_encoder_service':
-                        (str,),
-                    'reranker_service':
-                        (str,),
                     'visibility':
                         ([str],),
                     'location_cities':
@@ -630,8 +616,6 @@ class DocumentsApi(object):
                     'simplified_query': 'simplified_query',
                     'with_code': 'with_code',
                     'index_cluster': 'index_cluster',
-                    'query_encoder_service': 'query_encoder_service',
-                    'reranker_service': 'reranker_service',
                     'visibility': 'visibility',
                     'location_cities': 'location_cities',
                     'location_countries': 'location_countries',
@@ -669,8 +653,6 @@ class DocumentsApi(object):
                     'simplified_query': 'query',
                     'with_code': 'query',
                     'index_cluster': 'query',
-                    'query_encoder_service': 'query',
-                    'reranker_service': 'query',
                     'visibility': 'query',
                     'location_cities': 'query',
                     'location_countries': 'query',
@@ -798,8 +780,6 @@ class DocumentsApi(object):
                     'vos_size',
                     'with_code',
                     'index_cluster',
-                    'query_encoder_service',
-                    'reranker_service',
                     'visibility',
                     'location_cities',
                     'location_countries',
@@ -817,8 +797,6 @@ class DocumentsApi(object):
                 ],
                 'validation': [
                     'index_cluster',
-                    'query_encoder_service',
-                    'reranker_service',
                 ]
             },
             root_map={
@@ -827,18 +805,6 @@ class DocumentsApi(object):
 
                         'regex': {
                             'pattern': r'^[a-zA-Z0-9-_]+:[a-zA-Z0-9-_]+$',  # noqa: E501
-                        },
-                    },
-                    ('query_encoder_service',): {
-
-                        'regex': {
-                            'pattern': r'^[a-zA-Z0-9-_]+:(production|staging)$',  # noqa: E501
-                        },
-                    },
-                    ('reranker_service',): {
-
-                        'regex': {
-                            'pattern': r'^[a-zA-Z0-9-_]+:(production|staging)$',  # noqa: E501
                         },
                     },
                 },
@@ -926,10 +892,6 @@ class DocumentsApi(object):
                         (bool,),
                     'index_cluster':
                         (str,),
-                    'query_encoder_service':
-                        (str,),
-                    'reranker_service':
-                        (str,),
                     'visibility':
                         ([str],),
                     'location_cities':
@@ -967,8 +929,6 @@ class DocumentsApi(object):
                     'vos_size': 'vos_size',
                     'with_code': 'with_code',
                     'index_cluster': 'index_cluster',
-                    'query_encoder_service': 'query_encoder_service',
-                    'reranker_service': 'reranker_service',
                     'visibility': 'visibility',
                     'location_cities': 'location_cities',
                     'location_countries': 'location_countries',
@@ -1002,8 +962,6 @@ class DocumentsApi(object):
                     'vos_size': 'query',
                     'with_code': 'query',
                     'index_cluster': 'query',
-                    'query_encoder_service': 'query',
-                    'reranker_service': 'query',
                     'visibility': 'query',
                     'location_cities': 'query',
                     'location_countries': 'query',
@@ -1218,6 +1176,7 @@ class DocumentsApi(object):
             page_size (int): Page size. [optional] if omitted the server will use the default value of 10
             collapse (str, none_type): Field on which to collapse results. [optional] if omitted the server will use the default value of "uid"
             index_cluster (str): Human friendly name that specifies which index configuration to use during search. The way we convert this string into infrastructure configuration is part of the internal logic of this service. Ideally all possible values should be listed as part of another request along with the description of what each value means.  Currently, the value can be constructed by using knowledge of the index infrastructure. In particular, the value is separated by the `:` character. The part on the left of `:` represents the kubernetes namespace of the index cluster, while the part on the right specifies the infix in the index name.  For example, if a user wants to search in the index cluster located in the `foo` namespace and use the index named `my_tenant_bar_documents`, then the `index_cluster` value should be `foo:bar`. The user may also need to specify the retrieval unit and tenant as part of the request.  > Note: There's currently no endpoint for retrieving all valid values that the `index_cluster` parameter can take. . [optional]
+            requested_field_paths ([str]): Requested field paths. [optional]
             _return_http_data_only (bool): response data without head status
                 code and headers. Default is True.
             _preload_content (bool): if False, the urllib3.HTTPResponse object
@@ -1329,8 +1288,6 @@ class DocumentsApi(object):
             simplified_query (bool): Generates a simplified elastic query without any boostings related to query terms.. [optional] if omitted the server will use the default value of False
             with_code (bool): Output only papers with code.. [optional] if omitted the server will use the default value of False
             index_cluster (str): Human friendly name that specifies which index configuration to use during search. The way we convert this string into infrastructure configuration is part of the internal logic of this service. Ideally all possible values should be listed as part of another request along with the description of what each value means.  Currently, the value can be constructed by using knowledge of the index infrastructure. In particular, the value is separated by the `:` character. The part on the left of `:` represents the kubernetes namespace of the index cluster, while the part on the right specifies the infix in the index name.  For example, if a user wants to search in the index cluster located in the `foo` namespace and use the index named `my_tenant_bar_documents`, then the `index_cluster` value should be `foo:bar`. The user may also need to specify the retrieval unit and tenant as part of the request.  > Note: There's currently no endpoint for retrieving all valid values that the `index_cluster` parameter can take. . [optional]
-            query_encoder_service (str): Human friendly name that specifies which query encoder service to use during transformer search.  Currently, the value can be constructed by appending the service version to the kubernetes namespace, separated by a `:`.  For example, if a user wants to use the query encoder version `pr-X` located in the `foo` namespace , then the `query_encoder_service` value should be `pr-X:foo`. To use the stable version of the service, use `stable:<namespace>`. For instance `stable:staging` uses the latest version in the master branch.  > Note: There's currently no endpoint for retrieving all valid values that the `query_encoder_service` parameter can take. . [optional]
-            reranker_service (str): Human friendly name that specifies which reranker service to use during reranking.  Currently, the value can be constructed by appending the service version to the kubernetes namespace, separated by a `:`.  For example, if a user wants to use the reranker service version `pr-X` located in the `foo` namespace , then the `reranker_service` value should be `pr-X:foo`. To use the stable version of the service, use `stable:<namespace>`. For instance `stable:staging` uses the latest version in the master branch.  > Note: There's currently no endpoint for retrieving all valid values that the `reranker_service` parameter can take. . [optional]
             visibility ([str]): Filter documents by their visibility.. [optional]
             location_cities ([str]): Limit results to documents of authors located in cities. [optional]
             location_countries ([str]): Limit results to documents of authors located in countries. [optional]
@@ -1512,8 +1469,6 @@ class DocumentsApi(object):
             vos_size (int): Set the number of scientific items to visualize.. [optional] if omitted the server will use the default value of 1000
             with_code (bool): Output only papers with code.. [optional] if omitted the server will use the default value of False
             index_cluster (str): Human friendly name that specifies which index configuration to use during search. The way we convert this string into infrastructure configuration is part of the internal logic of this service. Ideally all possible values should be listed as part of another request along with the description of what each value means.  Currently, the value can be constructed by using knowledge of the index infrastructure. In particular, the value is separated by the `:` character. The part on the left of `:` represents the kubernetes namespace of the index cluster, while the part on the right specifies the infix in the index name.  For example, if a user wants to search in the index cluster located in the `foo` namespace and use the index named `my_tenant_bar_documents`, then the `index_cluster` value should be `foo:bar`. The user may also need to specify the retrieval unit and tenant as part of the request.  > Note: There's currently no endpoint for retrieving all valid values that the `index_cluster` parameter can take. . [optional]
-            query_encoder_service (str): Human friendly name that specifies which query encoder service to use during transformer search.  Currently, the value can be constructed by appending the service version to the kubernetes namespace, separated by a `:`.  For example, if a user wants to use the query encoder version `pr-X` located in the `foo` namespace , then the `query_encoder_service` value should be `pr-X:foo`. To use the stable version of the service, use `stable:<namespace>`. For instance `stable:staging` uses the latest version in the master branch.  > Note: There's currently no endpoint for retrieving all valid values that the `query_encoder_service` parameter can take. . [optional]
-            reranker_service (str): Human friendly name that specifies which reranker service to use during reranking.  Currently, the value can be constructed by appending the service version to the kubernetes namespace, separated by a `:`.  For example, if a user wants to use the reranker service version `pr-X` located in the `foo` namespace , then the `reranker_service` value should be `pr-X:foo`. To use the stable version of the service, use `stable:<namespace>`. For instance `stable:staging` uses the latest version in the master branch.  > Note: There's currently no endpoint for retrieving all valid values that the `reranker_service` parameter can take. . [optional]
             visibility ([str]): Filter documents by their visibility.. [optional]
             location_cities ([str]): Limit results to documents of authors located in cities. [optional]
             location_countries ([str]): Limit results to documents of authors located in countries. [optional]

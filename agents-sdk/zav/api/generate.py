@@ -9,6 +9,7 @@ from zav.api.setup_routers import setup_routers
 
 if __name__ == "__main__":
     app = FastAPI()
+    app.openapi_version = "3.0.2"
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--destination",

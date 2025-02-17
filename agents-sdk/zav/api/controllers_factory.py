@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import APIRouter, Body, Depends, Response
 from pydantic import BaseModel
+from pydantic.version import VERSION as PYDANTIC_VERSION
 from zav.logging import logger
 from zav.message_bus import Command, MessageBus
 
@@ -11,6 +12,7 @@ from zav.api.dependencies import get_message_bus, pagination
 from zav.api.errors import NotFoundException, UnknownException
 from zav.api.response_models import PaginatedResponse
 
+PYDANTIC_V2 = PYDANTIC_VERSION.startswith("2.")
 CRUD_TYPE = Union[
     Literal["create"],
     Literal["retrieve"],
@@ -138,7 +140,11 @@ class ControllersFactory:
             if not result:
                 raise UnknownException(f"Could not create {self.resource_name}.")
             if "response_model" in responses:
-                return responses["response_model"].from_orm(result)
+                return (
+                    responses["response_model"].model_validate(result)
+                    if PYDANTIC_V2
+                    else responses["response_model"].from_orm(result)
+                )
             return None
 
     def __retrieve_mixin(self, crud_mixin: CrudMixin, command_cls: Type[Command]):
@@ -184,7 +190,11 @@ class ControllersFactory:
             if not result:
                 raise NotFoundException(f"{self.resource_name.title()} not found.")
             if "response_model" in responses:
-                return responses["response_model"].from_orm(result)
+                return (
+                    responses["response_model"].model_validate(result)
+                    if PYDANTIC_V2
+                    else responses["response_model"].from_orm(result)
+                )
             return None
 
     def __filter_mixin(self, crud_mixin: CrudMixin, command_cls: Type[Command]):
@@ -295,7 +305,11 @@ class ControllersFactory:
             if not result:
                 raise NotFoundException(f"{self.resource_name.title()} not found.")
             if "response_model" in responses:
-                return responses["response_model"].from_orm(result)
+                return (
+                    responses["response_model"].model_validate(result)
+                    if PYDANTIC_V2
+                    else responses["response_model"].from_orm(result)
+                )
             return None
 
     def __replace_mixin(self, crud_mixin: CrudMixin, command_cls: Type[Command]):
@@ -352,7 +366,11 @@ class ControllersFactory:
             if not result:
                 raise NotFoundException(f"{self.resource_name.title()} not found.")
             if "response_model" in responses:
-                return responses["response_model"].from_orm(result)
+                return (
+                    responses["response_model"].model_validate(result)
+                    if PYDANTIC_V2
+                    else responses["response_model"].from_orm(result)
+                )
             return None
 
     def __delete_mixin(self, crud_mixin: CrudMixin, command_cls: Type[Command]):
@@ -399,7 +417,11 @@ class ControllersFactory:
             if not result:
                 raise NotFoundException(f"{self.resource_name.title()} not found.")
             if "response_model" in responses:
-                return responses["response_model"].from_orm(result)
+                return (
+                    responses["response_model"].model_validate(result)
+                    if PYDANTIC_V2
+                    else responses["response_model"].from_orm(result)
+                )
             return None
 
     async def __call_message_bus(

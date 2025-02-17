@@ -35,7 +35,6 @@ def lazy_import():
     from zav.search_api.model.facets_configuration import FacetsConfiguration
     from zav.search_api.model.filters_configuration import FiltersConfiguration
     from zav.search_api.model.index_cluster_string import IndexClusterString
-    from zav.search_api.model.query_encoder_service_string import QueryEncoderServiceString
     from zav.search_api.model.query_string import QueryString
     from zav.search_api.model.retrieval_method_string import RetrievalMethodString
     from zav.search_api.model.retrieval_unit import RetrievalUnit
@@ -49,7 +48,6 @@ def lazy_import():
     globals()['FacetsConfiguration'] = FacetsConfiguration
     globals()['FiltersConfiguration'] = FiltersConfiguration
     globals()['IndexClusterString'] = IndexClusterString
-    globals()['QueryEncoderServiceString'] = QueryEncoderServiceString
     globals()['QueryString'] = QueryString
     globals()['RetrievalMethodString'] = RetrievalMethodString
     globals()['RetrievalUnit'] = RetrievalUnit
@@ -147,8 +145,6 @@ class SearchPostRequest(ModelNormal):
             'rerank_top_n': (int,),  # noqa: E501
             'aggregate_reranked_results': (bool,),  # noqa: E501
             'index_cluster': (IndexClusterString,),  # noqa: E501
-            'query_encoder_service': (QueryEncoderServiceString,),  # noqa: E501
-            'reranker_service': (QueryEncoderServiceString,),  # noqa: E501
             'visibility': ([str],),  # noqa: E501
             'year': (YearRangeSchema,),  # noqa: E501
             'sources': ([str],),  # noqa: E501
@@ -194,8 +190,6 @@ class SearchPostRequest(ModelNormal):
         'rerank_top_n': 'rerank_top_n',  # noqa: E501
         'aggregate_reranked_results': 'aggregate_reranked_results',  # noqa: E501
         'index_cluster': 'index_cluster',  # noqa: E501
-        'query_encoder_service': 'query_encoder_service',  # noqa: E501
-        'reranker_service': 'reranker_service',  # noqa: E501
         'visibility': 'visibility',  # noqa: E501
         'year': 'year',  # noqa: E501
         'sources': 'sources',  # noqa: E501
@@ -278,8 +272,6 @@ class SearchPostRequest(ModelNormal):
             rerank_top_n (int): [optional] if omitted the server will use the default value of 30  # noqa: E501
             aggregate_reranked_results (bool): [optional] if omitted the server will use the default value of False  # noqa: E501
             index_cluster (IndexClusterString): [optional]  # noqa: E501
-            query_encoder_service (QueryEncoderServiceString): [optional]  # noqa: E501
-            reranker_service (QueryEncoderServiceString): [optional]  # noqa: E501
             visibility ([str]): [optional]  # noqa: E501
             year (YearRangeSchema): [optional]  # noqa: E501
             sources ([str]): [optional]  # noqa: E501
@@ -401,8 +393,6 @@ class SearchPostRequest(ModelNormal):
             rerank_top_n (int): [optional] if omitted the server will use the default value of 30  # noqa: E501
             aggregate_reranked_results (bool): [optional] if omitted the server will use the default value of False  # noqa: E501
             index_cluster (IndexClusterString): [optional]  # noqa: E501
-            query_encoder_service (QueryEncoderServiceString): [optional]  # noqa: E501
-            reranker_service (QueryEncoderServiceString): [optional]  # noqa: E501
             visibility ([str]): [optional]  # noqa: E501
             year (YearRangeSchema): [optional]  # noqa: E501
             sources ([str]): [optional]  # noqa: E501

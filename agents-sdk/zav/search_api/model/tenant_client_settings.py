@@ -105,6 +105,7 @@ class TenantClientSettings(ModelNormal):
             'pdf_viewer': (PDFViewer,),  # noqa: E501
             'tags_section': (TagsSection,),  # noqa: E501
             'document_card': (DocumentCard,),  # noqa: E501
+            'note_card': (DocumentCard,),  # noqa: E501
             'bot_configurations': ([BotConfiguration],),  # noqa: E501
         }
 
@@ -120,6 +121,7 @@ class TenantClientSettings(ModelNormal):
         'pdf_viewer': 'pdf_viewer',  # noqa: E501
         'tags_section': 'tags_section',  # noqa: E501
         'document_card': 'document_card',  # noqa: E501
+        'note_card': 'note_card',  # noqa: E501
         'bot_configurations': 'bot_configurations',  # noqa: E501
     }
 
@@ -170,6 +172,7 @@ class TenantClientSettings(ModelNormal):
             pdf_viewer (PDFViewer): [optional]  # noqa: E501
             tags_section (TagsSection): [optional]  # noqa: E501
             document_card (DocumentCard): [optional]  # noqa: E501
+            note_card (DocumentCard): [optional]  # noqa: E501
             bot_configurations ([BotConfiguration]): [optional]  # noqa: E501
         """
 
@@ -258,6 +261,7 @@ class TenantClientSettings(ModelNormal):
             pdf_viewer (PDFViewer): [optional]  # noqa: E501
             tags_section (TagsSection): [optional]  # noqa: E501
             document_card (DocumentCard): [optional]  # noqa: E501
+            note_card (DocumentCard): [optional]  # noqa: E501
             bot_configurations ([BotConfiguration]): [optional]  # noqa: E501
         """
 

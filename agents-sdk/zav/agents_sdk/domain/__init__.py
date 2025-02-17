@@ -9,3 +9,4 @@ from zav.agents_sdk.domain.chat_message import (
 )
 from zav.agents_sdk.domain.chat_request import ChatRequest, ConversationContext
 from zav.agents_sdk.domain.request_headers import RequestHeaders
+from zav.agents_sdk.domain.table import Table

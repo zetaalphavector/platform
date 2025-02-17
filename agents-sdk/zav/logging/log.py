@@ -1,9 +1,9 @@
 import logging
 import os
-from distutils.util import strtobool
 from typing import Optional
 
 from pythonjsonlogger import jsonlogger
+from zav.strtobool import strtobool
 
 JSON_LOGGING = bool(strtobool(os.getenv("JSON_LOGGING", "true")))
 
