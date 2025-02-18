@@ -763,6 +763,10 @@ def config_set(
     assert base_url is not None
     assert tenant is not None
     assert api_key is not None
+
+    if not base_url.endswith("/v0/service"):
+        base_url = f"{base_url}/v0/service"
+
     config_path = store_client_config(
         project_dir=project_dir, base_url=base_url, api_key=api_key, tenant=tenant
     )
