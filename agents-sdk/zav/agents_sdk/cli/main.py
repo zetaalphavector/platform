@@ -26,7 +26,7 @@ from zav.agents_sdk.domain.agent_code_bundle import AgentCodeBundle
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
 from zav.agents_sdk.version import __version__
 
-ZA_BASE_URL = "https://api.zeta-alpha.com/v0/service"
+ZA_BASE_URL = "https://api.zeta-alpha.com"
 app = typer.Typer(no_args_is_help=True)
 config_app = typer.Typer()
 app.add_typer(
@@ -519,7 +519,10 @@ def upload(
         raise typer.Exit()
 
     # Prepare API client with authentication configuration
-    api_config = Configuration(host=config["base_url"])
+    host = config["base_url"]
+    if not host.rstrip("/").endswith("v0/service"):
+        host = host.rstrip("/") + "/v0/service"
+    api_config = Configuration(host=host)
     api_client = ApiClient(api_config)
     api_client.set_default_header("X-Auth", config["api_key"])
     agent_bundles_api = AgentBundlesApi(api_client)
@@ -662,7 +665,10 @@ def list_remote(
         config = load_client_config(project_dir)
 
     # Prepare API client with authentication configuration
-    api_config = Configuration(host=config["base_url"])
+    host = config["base_url"]
+    if not host.rstrip("/").endswith("v0/service"):
+        host = host.rstrip("/") + "/v0/service"
+    api_config = Configuration(host=host)
     api_client = ApiClient(api_config)
     api_client.set_default_header("X-Auth", config["api_key"])
     agent_bundles_api = AgentBundlesApi(api_client)
@@ -763,9 +769,6 @@ def config_set(
     assert base_url is not None
     assert tenant is not None
     assert api_key is not None
-
-    if not base_url.endswith("/v0/service"):
-        base_url = f"{base_url}/v0/service"
 
     config_path = store_client_config(
         project_dir=project_dir, base_url=base_url, api_key=api_key, tenant=tenant

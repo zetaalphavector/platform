@@ -5,7 +5,6 @@ from typing import (
     Coroutine,
     Dict,
     Optional,
-    Type,
     Union,
     cast,
     get_args,
@@ -16,7 +15,7 @@ from pydantic import BaseModel
 from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span
 
-from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
+from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistryProtocol
 from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
 from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
@@ -60,7 +59,7 @@ class ChatAgentFactory:
         sub_agent_identifier: str,
         param_default: Any,
         chat_agent_class_registry: ChatAgentClassRegistryProtocol,
-        agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
+        agent_dependency_registry: Optional[AgentDependencyRegistryProtocol] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
@@ -152,7 +151,7 @@ class ChatAgentFactory:
         handler_params: Dict[str, Any],
         agent_setup_retriever: AgentSetupRetriever,
         chat_agent_class_registry: ChatAgentClassRegistryProtocol,
-        agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
+        agent_dependency_registry: Optional[AgentDependencyRegistryProtocol] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,
@@ -169,7 +168,7 @@ class ChatAgentFactory:
         is_class = inspect.isclass(param_annotation)
         # Parse agent dependency
         if agent_dependency_registry and is_class:
-            agent_dependency = agent_dependency_registry.registry.get(param_annotation)
+            agent_dependency = agent_dependency_registry.get(param_annotation)
             if agent_dependency:
                 # The agent dependency needs to be inspected and initialized
                 agent_dependency_params = inspect.signature(
@@ -265,7 +264,7 @@ class ChatAgentFactory:
         agent_setup_retriever: AgentSetupRetriever,
         handler_params: Dict[str, Any],
         chat_agent_class_registry: ChatAgentClassRegistryProtocol,
-        agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
+        agent_dependency_registry: Optional[AgentDependencyRegistryProtocol] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,
@@ -341,7 +340,7 @@ class ChatAgentFactory:
         agent_setup_retriever: AgentSetupRetriever,
         handler_params: Dict[str, Any],
         chat_agent_class_registry: ChatAgentClassRegistryProtocol,
-        agent_dependency_registry: Optional[Type[AgentDependencyRegistry]] = None,
+        agent_dependency_registry: Optional[AgentDependencyRegistryProtocol] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         agent_setup: Optional[AgentSetup] = None,
         conversation_context: Optional[ConversationContext] = None,

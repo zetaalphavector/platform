@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 import io
 import os
@@ -47,13 +48,21 @@ class AgentCodeBundle(BaseModel):
     def store_on_disk(
         self, base_path: str = "dynamic_agents", load_registries: bool = False
     ):
+        bundle_hash = hashlib.sha256(self.agent_bundle).hexdigest()
         os.makedirs(base_path, exist_ok=True)
         # Unzip the agent bundle. The files will be in {base_path}/{self.project}
         with io.BytesIO(self.agent_bundle) as bytes_io:
             with zipfile.ZipFile(bytes_io) as zip_file:
-                zip_file.extractall(base_path)
+                for zip_info in zip_file.filelist:
+                    if zip_info.filename.startswith(f"{self.project}/"):
+                        zip_info.filename = zip_info.filename.replace(
+                            f"{self.project}/", f"{self.project}-{bundle_hash}/"
+                        )
+                    zip_file.extract(zip_info, base_path)
         if load_registries:
-            self.load_agent_registries_from(project=self.project, base_path=base_path)
+            self.load_agent_registries_from(
+                project=f"{self.project}-{bundle_hash}", base_path=base_path
+            )
 
     @classmethod
     def load_agent_registries_from(
@@ -66,7 +75,6 @@ class AgentCodeBundle(BaseModel):
             if project is None:
                 raise ValueError("Either project or project_dir must be provided.")
             project_dir = os.path.join(base_path, project)
-
         _load_python_module(project_dir)
 
     @classmethod

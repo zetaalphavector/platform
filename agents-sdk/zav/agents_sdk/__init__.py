@@ -6,6 +6,7 @@ from zav.agents_sdk.domain.agent_code_bundle import AgentCodeBundle
 from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyFactory,
     AgentDependencyRegistry,
+    AgentDependencyRegistryProtocol,
 )
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
 from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
@@ -40,6 +41,7 @@ __all__ = [
     "AbstractEventPublisher",
     "AgentDependencyFactory",
     "AgentDependencyRegistry",
+    "AgentDependencyRegistryProtocol",
     "AgentSetup",
     "AgentSetupRetriever",
     "ChatAgent",

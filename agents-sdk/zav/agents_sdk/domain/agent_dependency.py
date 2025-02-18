@@ -1,6 +1,6 @@
 import inspect
 from abc import ABC, abstractmethod
-from typing import Dict, Generic, Type, TypeVar, Union
+from typing import Dict, Generic, Optional, Protocol, Type, TypeVar, Union
 
 from typing_extensions import ParamSpec
 
@@ -24,13 +24,26 @@ class AgentDependencyFactory(ABC, Generic[DEPENDENCY_PARAMS, T]):
         raise NotImplementedError
 
 
-class AgentDependencyRegistry:
+class AgentDependencyRegistryProtocol(Protocol):
+
+    def get(
+        self, t: type
+    ) -> Optional[Union[Type[AgentDependencyFactory], AgentDependencyFactory]]: ...
+
+
+class AgentDependencyRegistry(AgentDependencyRegistryProtocol):
     registry: Dict[
         type, Union[Type[AgentDependencyFactory], AgentDependencyFactory]
     ] = {}
 
     def __init_subclass__(cls):
         cls.registry = {}
+
+    @classmethod
+    def get(
+        cls, t: type
+    ) -> Optional[Union[Type[AgentDependencyFactory], AgentDependencyFactory]]:
+        return cls.registry.get(t)
 
     @classmethod
     def register(
