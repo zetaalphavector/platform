@@ -21,8 +21,17 @@ class RetryableHandlerError(Exception):
         self.base_delay = base_delay
 
 
+class ResourceAlreadyExists(HandlerException):
+    def __init__(self, resource_name: str, resource_id: str):
+        self.resource_name = resource_name
+        self.resource_id = resource_id
+
+    def __str__(self):
+        return f"{self.resource_name} with id {self.resource_id} already exists."
+
+
 HandlerExceptionHandler = Callable[
-    [Any], Union[NonRetryableHandlerError, RetryableHandlerError]
+    [Any], Union[NonRetryableHandlerError, RetryableHandlerError, ResourceAlreadyExists]
 ]
 
 

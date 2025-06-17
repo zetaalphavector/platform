@@ -19,9 +19,7 @@ class ZAVLangchainRetriever(BaseRetriever):
     retrieval_method: Optional[Literal["knn", "keyword", "mixed"]] = None
     filters: Optional[Dict] = None
     facets: Optional[List[Dict]] = None
-    search_engine: Optional[
-        Literal["zeta_alpha", "google_scholar", "bing", "google"]
-    ] = None
+    search_engine: Optional[str] = None
     include_default_filters: Optional[bool] = None
     page: Optional[int] = None
     page_size: Optional[int] = None
@@ -85,9 +83,7 @@ class ZAVLangchainStore:
         retrieval_method: Optional[Literal["knn", "keyword", "mixed"]] = None,
         filters: Optional[Dict] = None,
         facets: Optional[List[Dict]] = None,
-        search_engine: Optional[
-            Literal["zeta_alpha", "google_scholar", "bing", "google"]
-        ] = None,
+        search_engine: Optional[str] = None,
         include_default_filters: Optional[bool] = None,
         page: Optional[int] = None,
         page_size: Optional[int] = None,

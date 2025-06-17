@@ -5,7 +5,7 @@ import os
 import zipfile
 from typing import List, Optional
 
-from pydantic import BaseModel
+from zav.pydantic_compat import BaseModel
 
 
 def _load_python_module(project_dir: str):

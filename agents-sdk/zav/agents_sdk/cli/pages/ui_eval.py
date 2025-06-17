@@ -1,7 +1,7 @@
 import hashlib
 import json
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -21,11 +21,14 @@ from ragelo.types.configurations import (
     ReasonerEvaluatorConfig,
 )
 from zav.logging import logger
+from zav.pydantic_compat import PYDANTIC_V2
 
-from zav.agents_sdk.cli.pages.ui_collect import (
+from zav.agents_sdk.cli.models import (
     EvaluationFileContent,
     RageloEvaluation,
     RageloLLMConfig,
+)
+from zav.agents_sdk.cli.pages.ui_collect import (
     get_eval_file_names,
     retrieve_eval_file_content,
     storage_path,
@@ -42,6 +45,16 @@ from zav.agents_sdk.cli.ui_app import (
     start_new_conversation,
 )
 from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
+
+
+def format_model_json(model: Any) -> str:
+    """
+    Render a Pydantic model as a JSON string in a version-compatible way.
+    """
+    if PYDANTIC_V2:
+        return model.model_dump_json(indent=2)
+    return model.json(indent=2)
+
 
 st.markdown(
     """
@@ -235,7 +248,7 @@ if ragelo:
         json.loads(
             st.sidebar.text_area(
                 "LLM Configuration",
-                value=json.dumps(ragelo.llm_config.dict(), indent=2),
+                value=format_model_json(ragelo.llm_config),
                 disabled=True,
             )
         )
@@ -244,7 +257,7 @@ if ragelo:
         json.loads(
             st.sidebar.text_area(
                 "Reasoner Evaluator Configuration",
-                value=json.dumps(ragelo.reasoner_config.dict(), indent=2),
+                value=format_model_json(ragelo.reasoner_config),
                 disabled=True,
             )
         )
@@ -253,7 +266,7 @@ if ragelo:
         json.loads(
             st.sidebar.text_area(
                 "Custom Prompt Answer Evaluator Configuration",
-                value=json.dumps(ragelo.custom_agent_eval_config.dict(), indent=2),
+                value=format_model_json(ragelo.custom_agent_eval_config),
                 disabled=True,
             )
         )
@@ -262,7 +275,7 @@ if ragelo:
         json.loads(
             st.sidebar.text_area(
                 "Pairwise Evaluator Configuration",
-                value=json.dumps(ragelo.pairwise_config.dict(), indent=2),
+                value=format_model_json(ragelo.pairwise_config),
                 disabled=True,
             )
         )
@@ -271,7 +284,7 @@ if ragelo:
         json.loads(
             st.sidebar.text_area(
                 "Elo Ranker Configuration",
-                value=json.dumps(ragelo.elo_ranker_config.dict(), indent=2),
+                value=format_model_json(ragelo.elo_ranker_config),
                 disabled=False,
             )
         )

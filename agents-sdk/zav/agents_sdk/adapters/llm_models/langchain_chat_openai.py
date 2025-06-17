@@ -9,7 +9,10 @@ from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 class ChatOpenAIFactory(AgentDependencyFactory):
     @classmethod
     def create(cls, config: LLMClientConfiguration) -> ChatOpenAI:
-        if config.vendor == LLMProviderName.OPENAI and (
+        if (
+            config.vendor == LLMProviderName.OPENAI
+            or config.vendor == LLMProviderName.OLLAMA
+        ) and (
             openai_config := cast(
                 Optional[OpenAIConfiguration],
                 getattr(config.vendor_configuration, config.vendor.value, None),

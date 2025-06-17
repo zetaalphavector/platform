@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from pydantic import ValidationError
 from zav.message_bus import HandlerException
+from zav.pydantic_compat import ValidationError
 
 from zav.api.errors import (
     BadRequestException,

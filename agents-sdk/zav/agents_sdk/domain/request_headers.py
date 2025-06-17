@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, Field
 
 
 class RequestHeaders(BaseModel):
@@ -10,6 +10,10 @@ class RequestHeaders(BaseModel):
     authorization: Optional[str] = Field(None, alias="Authorization")
     x_auth: Optional[str] = Field(None, alias="X-Auth")
 
-    class Config:
-        orm_mode = True
-        allow_population_by_field_name = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    else:
+
+        class Config:
+            orm_mode = True
+            allow_population_by_field_name = True

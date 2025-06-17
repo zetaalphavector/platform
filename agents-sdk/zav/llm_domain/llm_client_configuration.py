@@ -1,13 +1,9 @@
 from enum import Enum
 from typing import Literal, Optional, Union
 
-try:
-    from pydantic.v1 import BaseModel, Field, root_validator
-except ImportError:
-    from pydantic import BaseModel, Field, root_validator  # type: ignore
-
 from typing_extensions import TypedDict
 from zav.encryption.pydantic import EncryptedStr
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, Field, root_validator
 
 
 class LLMModelType(str, Enum):
@@ -18,6 +14,7 @@ class LLMModelType(str, Enum):
 
 class LLMProviderName(str, Enum):
     OPENAI = "openai"
+    OLLAMA = "ollama"
     ANTHROPIC = "anthropic"
 
 
@@ -42,13 +39,17 @@ class LLMVendorConfiguration(BaseModel):
     openai: Optional[OpenAIConfiguration] = None
     anthropic: Optional[AnthropicConfiguration] = None
 
-    @root_validator
+    @root_validator()
     @classmethod
-    def one_of(cls, v):
+    def one_of(cls, values):
         """Verify it's just one of the fields."""
-        if len([val for val in v.values() if val]) > 1:
+        if PYDANTIC_V2:
+            vals = values.model_dump()
+        else:
+            vals = values
+        if len([val for val in vals.values() if val]) > 1:
             raise ValueError("Only one field must have a value.")
-        return v
+        return values
 
 
 class LLMModelConfiguration(BaseModel):

@@ -3,16 +3,14 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import APIRouter, Body, Depends, Response
-from pydantic import BaseModel
-from pydantic.version import VERSION as PYDANTIC_VERSION
 from zav.logging import logger
 from zav.message_bus import Command, MessageBus
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel
 
 from zav.api.dependencies import get_message_bus, pagination
 from zav.api.errors import NotFoundException, UnknownException
 from zav.api.response_models import PaginatedResponse
 
-PYDANTIC_V2 = PYDANTIC_VERSION.startswith("2.")
 CRUD_TYPE = Union[
     Literal["create"],
     Literal["retrieve"],
@@ -86,6 +84,11 @@ class ControllersFactory:
     def __create_router(self):
         self.domain_router = APIRouter(tags=self.router_tags)
 
+    def __safe_depends(self, dependency):
+        if dependency is None:
+            return lambda: None
+        return Depends(dependency)
+
     def __create_mixin(self, crud_mixin: CrudMixin, command_cls: Type[Command]):
         form_model = crud_mixin.form_model
         if form_model is None:
@@ -126,8 +129,8 @@ class ControllersFactory:
         async def func(
             body: form_model = body_default,  # type: ignore
             message_bus: MessageBus = Depends(get_message_bus),
-            query_params=Depends(crud_mixin.query_params),
-            path_params=Depends(crud_mixin.path_params),
+            query_params=self.__safe_depends(crud_mixin.query_params),
+            path_params=self.__safe_depends(crud_mixin.path_params),
         ):
             result = await self.__call_message_bus(
                 message_bus=message_bus,
@@ -177,8 +180,8 @@ class ControllersFactory:
         )
         async def func(
             message_bus: MessageBus = Depends(get_message_bus),
-            query_params=Depends(crud_mixin.query_params),
-            path_params=Depends(crud_mixin.path_params),
+            query_params=self.__safe_depends(crud_mixin.query_params),
+            path_params=self.__safe_depends(crud_mixin.path_params),
         ):
             result = await self.__call_message_bus(
                 message_bus=message_bus,
@@ -234,8 +237,8 @@ class ControllersFactory:
         async def func(
             pagination=Depends(pagination),
             message_bus: MessageBus = Depends(get_message_bus),
-            query_params=Depends(crud_mixin.query_params),
-            path_params=Depends(crud_mixin.path_params),
+            query_params=self.__safe_depends(crud_mixin.query_params),
+            path_params=self.__safe_depends(crud_mixin.path_params),
         ):
             total, results, page, page_size = await self.__call_message_bus(
                 message_bus=message_bus,
@@ -291,8 +294,8 @@ class ControllersFactory:
         async def func(
             body: form_model = body_default,  # type: ignore
             message_bus: MessageBus = Depends(get_message_bus),
-            query_params=Depends(crud_mixin.query_params),
-            path_params=Depends(crud_mixin.path_params),
+            query_params=self.__safe_depends(crud_mixin.query_params),
+            path_params=self.__safe_depends(crud_mixin.path_params),
         ):
             result = await self.__call_message_bus(
                 message_bus=message_bus,
@@ -352,8 +355,8 @@ class ControllersFactory:
         async def func(
             body: form_model = body_default,  # type: ignore
             message_bus: MessageBus = Depends(get_message_bus),
-            query_params=Depends(crud_mixin.query_params),
-            path_params=Depends(crud_mixin.path_params),
+            query_params=self.__safe_depends(crud_mixin.query_params),
+            path_params=self.__safe_depends(crud_mixin.path_params),
         ):
             result = await self.__call_message_bus(
                 message_bus=message_bus,
@@ -404,8 +407,8 @@ class ControllersFactory:
         )
         async def func(
             message_bus: MessageBus = Depends(get_message_bus),
-            query_params=Depends(crud_mixin.query_params),
-            path_params=Depends(crud_mixin.path_params),
+            query_params=self.__safe_depends(crud_mixin.query_params),
+            path_params=self.__safe_depends(crud_mixin.path_params),
         ):
             result = await self.__call_message_bus(
                 message_bus=message_bus,

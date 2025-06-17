@@ -1,7 +1,7 @@
 import enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, root_validator
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, root_validator
 
 
 class ChatMessageSender(str, enum.Enum):
@@ -58,14 +58,19 @@ class ConversationContext(BaseModel):
     document_context: Optional[DocumentContext] = None
     custom_context: Optional[CustomContext] = None
 
-    @root_validator
+    @root_validator()
     @classmethod
     def at_most_one(cls, values):
-        document_context = values.get("document_context")
-        custom_resources = values.get("custom_resources")
-        if document_context and custom_resources:
+        # ensure only one of document_context and custom_context
+        if PYDANTIC_V2:
+            doc = values.document_context
+            custom = values.custom_context
+        else:
+            doc = values.get("document_context")
+            custom = values.get("custom_context")
+        if doc and custom:
             raise ValueError(
-                "At most one of document_context and custom_resources can be set"
+                "At most one of document_context and custom_context can be set"
             )
         return values
 
@@ -91,15 +96,24 @@ class ContentPartTable(BaseModel):
     columns: Optional[Dict[str, List[str]]] = None
     headers: Optional[List[str]] = None
 
-    @root_validator
+    @root_validator()
     @classmethod
     def one_of(cls, v):
-        """Verify it's just one of the fields."""
-        if not any((v.get("rows") is not None, v.get("columns") is not None)):
+        """Verify exactly one of 'rows' or 'columns' is provided."""
+        # accept v as dict (v1) or model instance (v2)
+        if PYDANTIC_V2:
+            rows = v.rows
+            columns = v.columns
+        else:
+            rows = v.get("rows")
+            columns = v.get("columns")
+        # At least one must be set
+        if rows is None and columns is None:
             raise ValueError(
                 "At least one of the fields 'rows' and 'columns' must have a value"
             )
-        if v.get("rows") is None and v.get("columns") is None:
+        # Only one may be set
+        if rows is not None and columns is not None:
             raise ValueError(
                 "Only one of the fields 'rows' and 'columns' must have a value."
             )

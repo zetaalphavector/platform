@@ -32,10 +32,8 @@ from zav.search_api.exceptions import ApiAttributeError
 def lazy_import():
     from zav.search_api.model.hit import Hit
     from zav.search_api.model.retrieval_unit import RetrievalUnit
-    from zav.search_api.model.search_engine_string import SearchEngineString
     globals()['Hit'] = Hit
     globals()['RetrievalUnit'] = RetrievalUnit
-    globals()['SearchEngineString'] = SearchEngineString
 
 
 class SearchResponse(ModelNormal):
@@ -96,7 +94,7 @@ class SearchResponse(ModelNormal):
         """
         lazy_import()
         return {
-            'search_engine': (SearchEngineString,),  # noqa: E501
+            'search_engine': (str,),  # noqa: E501
             'retrieval_method': (str,),  # noqa: E501
             'number_of_pages': (int,),  # noqa: E501
             'total_hits': (int,),  # noqa: E501
@@ -139,7 +137,7 @@ class SearchResponse(ModelNormal):
         """SearchResponse - a model defined in OpenAPI
 
         Args:
-            search_engine (SearchEngineString):
+            search_engine (str):
             retrieval_method (str):
             number_of_pages (int):
             total_hits (int):
@@ -239,7 +237,7 @@ class SearchResponse(ModelNormal):
         """SearchResponse - a model defined in OpenAPI
 
         Args:
-            search_engine (SearchEngineString):
+            search_engine (str):
             retrieval_method (str):
             number_of_pages (int):
             total_hits (int):

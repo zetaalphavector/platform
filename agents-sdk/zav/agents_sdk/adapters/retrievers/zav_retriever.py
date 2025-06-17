@@ -3,17 +3,17 @@ from datetime import date, datetime
 from functools import wraps
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel
 from zav.api.errors import UnknownException
+from zav.pydantic_compat import BaseModel
 from zav.search_api import ApiClient, Configuration
 from zav.search_api.apis import DocumentAssetsApi as DocumentAssetsApiSync
 from zav.search_api.apis import DocumentsApi as DocumentsApiSync
 from zav.search_api.exceptions import ApiException
-from zav.search_api.model.index_cluster_string import IndexClusterString
 from zav.search_api.models import (
     DateRangeSchema,
     DocumentIdString,
     FacetConfiguration,
+    FacetsConfiguration,
     FiltersConfiguration,
     ListResponse,
     QueryString,
@@ -21,8 +21,12 @@ from zav.search_api.models import (
     RetrievalUnit,
     SearchPostRequest,
     SearchPostResponse,
+    SortingConfiguration,
+    SortingConfigurationList,
     SortOrderSchema,
     SortSchema,
+    UIDString,
+    YearRangeSchema,
 )
 
 from zav.agents_sdk.adapters.async_wrapper import force_async, is_bound_function
@@ -144,11 +148,10 @@ class ZAVRetriever:
         retrieval_method: Optional[Literal["knn", "keyword", "mixed"]] = None,
         filters: Optional[Dict] = None,
         facets: Optional[List[Dict]] = None,
+        sorting: Optional[List[Dict]] = None,
         sort: Optional[Dict] = None,
         sort_order: Optional[List[str]] = None,
-        search_engine: Optional[
-            Literal["zeta_alpha", "google_scholar", "bing", "google"]
-        ] = None,
+        search_engine: Optional[str] = None,
         query_string: Optional[str] = None,
         include_default_filters: Optional[bool] = None,
         page: Optional[int] = None,
@@ -156,6 +159,7 @@ class ZAVRetriever:
         rerank: Optional[bool] = None,
         rerank_top_n: Optional[int] = None,
         index_id: Optional[str] = None,
+        index_type: Literal["internal", "federated"] = "internal",
         collapse: Optional[str] = "__NOT_SET",
         doc_ids: Optional[List[str]] = None,
         visibility: Optional[List[str]] = None,
@@ -164,6 +168,9 @@ class ZAVRetriever:
         sources: Optional[List[str]] = None,
         requested_field_paths: Optional[List[str]] = None,
         tag_ids: Optional[List[str]] = None,
+        similar_to: Optional[List[str]] = None,
+        include_doc_in_similar_to: Optional[bool] = None,
+        year: Optional[Dict] = None,
     ) -> Dict:
         date = _parse_dates_to_str(date) if date else None
 
@@ -182,10 +189,14 @@ class ZAVRetriever:
             rerank=rerank,
             rerank_top_n=rerank_top_n,
             index_id=sel_index_id,
+            index_type=index_type,
             visibility=visibility,
             document_types=document_types,
             sources=sources,
             tag_ids=tag_ids,
+            similar_to=similar_to,
+            include_doc_in_similar_to=include_doc_in_similar_to,
+            year=year,
         )
         search_post_request = SearchPostRequest(
             tenant=self.__tenant,
@@ -206,12 +217,30 @@ class ZAVRetriever:
             ),
             **(
                 {
-                    "facets": [
-                        FacetConfiguration(**facet, _configuration=self.__configuration)
-                        for facet in facets
-                    ]
+                    "facets": FacetsConfiguration(
+                        value=[
+                            FacetConfiguration(
+                                **facet, _configuration=self.__configuration
+                            )
+                            for facet in facets
+                        ]
+                    )
                 }
                 if facets
+                else {}
+            ),
+            **(
+                {
+                    "sorting": SortingConfigurationList(
+                        [
+                            SortingConfiguration(
+                                **s, _configuration=self.__configuration
+                            )
+                            for s in sorting
+                        ]
+                    )
+                }
+                if sorting
                 else {}
             ),
             **(
@@ -244,11 +273,8 @@ class ZAVRetriever:
             **({"page_size": page_size} if page_size else {}),
             **({"rerank": rerank} if rerank else {}),
             **({"rerank_top_n": rerank_top_n} if rerank_top_n else {}),
-            **(
-                {"index_cluster": IndexClusterString(f"default:{sel_index_id}")}
-                if sel_index_id
-                else {}
-            ),
+            **({"index_id": sel_index_id} if sel_index_id else {}),
+            **({"index_type": index_type} if index_type else {}),
             **({"collapse": collapse} if collapse != "__NOT_SET" else {}),
             **(
                 {"doc_ids": [DocumentIdString(doc_id) for doc_id in doc_ids]}
@@ -264,6 +290,26 @@ class ZAVRetriever:
                 else {}
             ),
             **({"tag_ids": tag_ids} if tag_ids else {}),
+            **(
+                {
+                    "similar_to": [
+                        UIDString(uid, _configuration=self.__configuration)
+                        for uid in similar_to
+                    ]
+                }
+                if similar_to
+                else {}
+            ),
+            **(
+                {"include_doc_in_similar_to": include_doc_in_similar_to}
+                if include_doc_in_similar_to
+                else {}
+            ),
+            **(
+                {"year": YearRangeSchema(**year, _configuration=self.__configuration)}
+                if year
+                else {}
+            ),
         )
         search_response: SearchPostResponse = (
             await self.__documents.document_search_post(
@@ -283,11 +329,26 @@ class ZAVRetriever:
                         f"default:{self.__index_id}" if self.__index_id else None
                     ),
                 )
+                chunk_id = hit["id"]
+                doc_id = chunk_id.split("_")[0] + "_0"
+                if any(
+                    resource.get("resource_type") == "pdf_url"
+                    for resource in hit.get("custom_metadata", {}).get("resources", [])
+                ):
+                    hit["document_url"] = f"/pdf/{doc_id}?chunkId={chunk_id}"
+                else:
+                    hit["document_url"] = f"/documents/{doc_id}"
+
                 if "document_content" in hit:
                     hit["document_content"] = [
                         document_content.to_dict()
                         for document_content in hit["document_content"]
                     ]
+        if "facet_results" in response_dict:
+            response_dict["facet_results"] = [
+                facet_result.to_dict()
+                for facet_result in response_dict["facet_results"]
+            ]
         self.update_retrieved_history(
             RetrievedHistoryItem(
                 search_payload=search_payload,
@@ -320,7 +381,7 @@ class ZAVRetriever:
             retrieval_unit=retrieval_unit,  # type: ignore
             property_name=property_name,
             property_values=[property_values],
-            **({"index_id": index_id} if index_id else {}),
+            **({"index_id": index_id} if index_id else {}),  # type: ignore
         )
 
     @_handle_pipeline_service_errors
@@ -330,6 +391,8 @@ class ZAVRetriever:
         property_name: str = "id",
         property_values: List[str] = [],
         index_id: Optional[str] = None,
+        page: Optional[int] = None,
+        page_size: Optional[int] = None,
     ) -> Dict:
         if index_id:
             index_cluster = f"default:{index_id}"
@@ -342,6 +405,8 @@ class ZAVRetriever:
             property_name=property_name,
             property_values=property_values,
             tenant=self.__tenant,
+            **({"page": page} if page else {}),
+            **({"page_size": page_size} if page_size else {}),
             **({"index_cluster": index_cluster} if index_cluster else {}),
             **self.__internal_headers,
         )
@@ -352,7 +417,9 @@ class ZAVRetriever:
                     tenant=self.__tenant,
                     retrieval_unit=retrieval_unit,
                     property_name=property_name,
-                    property_values=hit[property_name],
+                    property_values=hit[
+                        "document_id" if property_name == "guid" else property_name
+                    ],
                     index_cluster=index_cluster,
                 )
         return response_dict
@@ -380,6 +447,20 @@ class ZAVRetriever:
         document_assets_response = await self.__document_assets.retrieve_content(
             document_id=document_id,
             asset_type="image_url",
+            tenant=self.__tenant,
+            **({"index_cluster": index_cluster} if index_cluster else {}),
+            **self.__internal_headers,
+        )
+        return document_assets_response.read()
+
+    @_handle_pipeline_service_errors
+    async def get_pdf_asset(self, document_id: Optional[str]) -> Optional[bytes]:
+        if not document_id:
+            return None
+        index_cluster = f"default:{self.__index_id}" if self.__index_id else None
+        document_assets_response = await self.__document_assets.retrieve_content(
+            document_id=document_id,
+            asset_type="pdf_url",
             tenant=self.__tenant,
             **({"index_cluster": index_cluster} if index_cluster else {}),
             **self.__internal_headers,

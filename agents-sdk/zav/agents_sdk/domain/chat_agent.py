@@ -1,3 +1,6 @@
+import base64
+import inspect
+import json
 from abc import ABC, abstractmethod
 from typing import (
     Any,
@@ -12,12 +15,14 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel
 from zav.llm_tracing import Span
+from zav.logging import logger
+from zav.pydantic_compat import BaseModel
 
 from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
 from zav.agents_sdk.domain.tools import ToolsRegistry
+from zav.agents_sdk.mem_utils import cleanup_memory
 
 
 def instrument_execute(
@@ -52,6 +57,7 @@ def instrument_execute(
                 )
             else:
                 self.span.end()
+        await self.cleanup()
         return response
 
     return wrapper
@@ -94,6 +100,7 @@ def instrument_execute_streaming(
                 )
             else:
                 self.span.end()
+        await self.cleanup()
 
     return wrapper
 
@@ -102,9 +109,9 @@ class ChatAgent(ABC):
     agent_name: ClassVar[str]
     span: Optional[Span] = None
     debug_backend: Optional[Callable[[Any], Any]] = None
-    tools_registry: ToolsRegistry = ToolsRegistry()
     publish_event: Optional[Callable[[AgentEvent], Coroutine[None, None, None]]] = None
     __agent_identifier: Optional[str] = None
+    __tools_registry: Optional[ToolsRegistry] = None
 
     @property
     def agent_identifier(self) -> str:
@@ -113,6 +120,16 @@ class ChatAgent(ABC):
     @agent_identifier.setter
     def agent_identifier(self, value: str):
         self.__agent_identifier = value
+
+    @property
+    def tools_registry(self) -> ToolsRegistry:
+        if self.__tools_registry is None:
+            self.__tools_registry = ToolsRegistry()
+        return self.__tools_registry
+
+    @tools_registry.setter
+    def tools_registry(self, value: ToolsRegistry):
+        self.__tools_registry = value
 
     def __getattribute__(self, name: str) -> Any:
         """Get attribute of the ChatAgent instance."""
@@ -169,6 +186,35 @@ class ChatAgent(ABC):
     async def execute(self, conversation: List[ChatMessage]) -> Optional[ChatMessage]:
         raise NotImplementedError
 
+    async def cleanup(self):
+        """Async cleanup for agent attributes. Calls async cleanup methods if present,
+        then deletes attributes. Triggers a garbage collection to also cleanup
+        circular references."""
+
+        for attr_name in list(set(self.__dict__.keys())):
+            attr = getattr(self, attr_name, None)
+            if attr is not None:
+                # Look for any callable attribute named 'cleanup', 'aclose', etc.
+                for method_name in ("aclose", "cleanup", "async_cleanup"):
+                    method = getattr(attr, method_name, None)
+                    if method and callable(method):
+                        try:
+                            if inspect.iscoroutinefunction(method):
+                                await method()
+                            else:
+                                method()
+                        except Exception as e:
+                            logger.warning(
+                                f"Error calling cleanup method '{method_name}' "
+                                f"on {attr_name}: {e}"
+                            )
+                        break  # Only call one cleanup per attribute
+            try:
+                delattr(self, attr_name)
+            except Exception as e:
+                logger.warning(f"Error cleaning up {attr_name}: {e}")
+        cleanup_memory()
+
 
 class StreamableChatAgent(ChatAgent):
     def __getattribute__(self, name: str) -> Any:
@@ -196,4 +242,25 @@ class StreamableChatAgent(ChatAgent):
     def execute_streaming(
         self, conversation: List[ChatMessage]
     ) -> AsyncGenerator[ChatMessage, None]:
+        raise NotImplementedError
+
+
+class ProcessorAgent(ChatAgent):
+    async def execute(self, conversation: List[ChatMessage]) -> Optional[ChatMessage]:
+        agent_outputs: Dict[str, Any] = {}
+        if conversation:
+            reprs = json.loads(conversation[-1].content)
+            if "pdf" in reprs and isinstance(reprs["pdf"], str):
+                reprs["pdf"] = base64.b64decode(reprs["pdf"])
+            agent_outputs = await self.process_representations(reprs)
+
+        return ChatMessage(
+            sender=ChatMessageSender.BOT,
+            content=json.dumps(agent_outputs),
+        )
+
+    @abstractmethod
+    async def process_representations(
+        self, representations: Dict[str, Any]
+    ) -> Dict[str, Any]:
         raise NotImplementedError

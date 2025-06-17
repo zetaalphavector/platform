@@ -3,6 +3,7 @@ from zav.agents_sdk import _hack  # isort: skip # noqa F401
 from zav.agents_sdk.adapters.agent_setup_retrievers import *
 from zav.agents_sdk.adapters.event_publishers import AbstractEventPublisher
 from zav.agents_sdk.domain.agent_code_bundle import AgentCodeBundle
+from zav.agents_sdk.domain.agent_creator import AgentCreator
 from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyFactory,
     AgentDependencyRegistry,
@@ -10,7 +11,11 @@ from zav.agents_sdk.domain.agent_dependency import (
 )
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
 from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
-from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
+from zav.agents_sdk.domain.chat_agent import (
+    ChatAgent,
+    ProcessorAgent,
+    StreamableChatAgent,
+)
 from zav.agents_sdk.domain.chat_agent_registry import (
     ChatAgentClassRegistry,
     ChatAgentClassRegistryProtocol,
@@ -36,6 +41,7 @@ from zav.agents_sdk.domain.tools import Tool, ToolsRegistry
 from zav.agents_sdk.setup_app import setup_app
 
 __all__ = [
+    "AgentCreator",
     "AgentRegistriesFactory",
     "AgentCodeBundle",
     "AbstractEventPublisher",
@@ -45,6 +51,7 @@ __all__ = [
     "AgentSetup",
     "AgentSetupRetriever",
     "ChatAgent",
+    "ProcessorAgent",
     "StreamableChatAgent",
     "ChatAgentClassRegistry",
     "ChatAgentClassRegistryProtocol",

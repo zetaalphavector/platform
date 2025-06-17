@@ -1,10 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-try:
-    from pydantic.v1 import BaseModel
-except ImportError:
-    from pydantic import BaseModel  # type: ignore
+from zav.pydantic_compat import BaseModel
 
 
 class ObjectStorageItem(BaseModel):

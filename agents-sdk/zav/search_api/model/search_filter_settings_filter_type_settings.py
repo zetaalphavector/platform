@@ -30,8 +30,14 @@ from zav.search_api.exceptions import ApiAttributeError
 
 
 def lazy_import():
+    from zav.search_api.model.autocomplete_filter_type_settings import AutocompleteFilterTypeSettings
     from zav.search_api.model.checkbox_filter_type_settings import CheckboxFilterTypeSettings
+    from zav.search_api.model.faceted_checkbox_filter_type_settings import FacetedCheckboxFilterTypeSettings
+    from zav.search_api.model.nested_checkbox_filter_type_settings import NestedCheckboxFilterTypeSettings
+    globals()['AutocompleteFilterTypeSettings'] = AutocompleteFilterTypeSettings
     globals()['CheckboxFilterTypeSettings'] = CheckboxFilterTypeSettings
+    globals()['FacetedCheckboxFilterTypeSettings'] = FacetedCheckboxFilterTypeSettings
+    globals()['NestedCheckboxFilterTypeSettings'] = NestedCheckboxFilterTypeSettings
 
 
 class SearchFilterSettingsFilterTypeSettings(ModelNormal):
@@ -88,6 +94,9 @@ class SearchFilterSettingsFilterTypeSettings(ModelNormal):
         lazy_import()
         return {
             'checkbox': (CheckboxFilterTypeSettings,),  # noqa: E501
+            'autocomplete': (AutocompleteFilterTypeSettings,),  # noqa: E501
+            'nested_checkbox': (NestedCheckboxFilterTypeSettings,),  # noqa: E501
+            'faceted_checkbox': (FacetedCheckboxFilterTypeSettings,),  # noqa: E501
         }
 
     @cached_property
@@ -97,6 +106,9 @@ class SearchFilterSettingsFilterTypeSettings(ModelNormal):
 
     attribute_map = {
         'checkbox': 'checkbox',  # noqa: E501
+        'autocomplete': 'autocomplete',  # noqa: E501
+        'nested_checkbox': 'nested_checkbox',  # noqa: E501
+        'faceted_checkbox': 'faceted_checkbox',  # noqa: E501
     }
 
     read_only_vars = {
@@ -141,6 +153,9 @@ class SearchFilterSettingsFilterTypeSettings(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             checkbox (CheckboxFilterTypeSettings): [optional]  # noqa: E501
+            autocomplete (AutocompleteFilterTypeSettings): [optional]  # noqa: E501
+            nested_checkbox (NestedCheckboxFilterTypeSettings): [optional]  # noqa: E501
+            faceted_checkbox (FacetedCheckboxFilterTypeSettings): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -223,6 +238,9 @@ class SearchFilterSettingsFilterTypeSettings(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             checkbox (CheckboxFilterTypeSettings): [optional]  # noqa: E501
+            autocomplete (AutocompleteFilterTypeSettings): [optional]  # noqa: E501
+            nested_checkbox (NestedCheckboxFilterTypeSettings): [optional]  # noqa: E501
+            faceted_checkbox (FacetedCheckboxFilterTypeSettings): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
