@@ -331,13 +331,14 @@ class ZAVRetriever:
                 )
                 chunk_id = hit["id"]
                 doc_id = chunk_id.split("_")[0] + "_0"
+                uri_hash = hit["uri_hash"]
                 if any(
                     resource.get("resource_type") == "pdf_url"
                     for resource in hit.get("custom_metadata", {}).get("resources", [])
                 ):
                     hit["document_url"] = f"/pdf/{doc_id}?chunkId={chunk_id}"
                 else:
-                    hit["document_url"] = f"/documents/{doc_id}"
+                    hit["document_url"] = f"/documents/{uri_hash}"
 
                 if "document_content" in hit:
                     hit["document_content"] = [
@@ -461,6 +462,20 @@ class ZAVRetriever:
         document_assets_response = await self.__document_assets.retrieve_content(
             document_id=document_id,
             asset_type="pdf_url",
+            tenant=self.__tenant,
+            **({"index_cluster": index_cluster} if index_cluster else {}),
+            **self.__internal_headers,
+        )
+        return document_assets_response.read()
+
+    @_handle_pipeline_service_errors
+    async def get_content_asset(self, document_id: Optional[str]) -> Optional[bytes]:
+        if not document_id:
+            return None
+        index_cluster = f"default:{self.__index_id}" if self.__index_id else None
+        document_assets_response = await self.__document_assets.retrieve_content(
+            document_id=document_id,
+            asset_type="content_url",
             tenant=self.__tenant,
             **({"index_cluster": index_cluster} if index_cluster else {}),
             **self.__internal_headers,

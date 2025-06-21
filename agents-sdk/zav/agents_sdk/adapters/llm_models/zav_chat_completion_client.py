@@ -287,7 +287,7 @@ class ZAVChatCompletionClient:
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
+        max_nesting_level: int = 20,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
         if max_nesting_level == 0:
             error_response = ChatResponse(

@@ -239,9 +239,7 @@ if run_cases:
                     st.caption(f"Saving to trace file: {trace_file_name}")
                     render_entry(
                         entries=st.session_state.entries,
-                        entry=ChatEntry(
-                            chat_configuration_item=chat_configuration_item
-                        ),
+                        entry=ChatEntry.from_configuration(chat_configuration_item),
                         print_debug_logs=True,
                         render_expander_title=True,
                         chat_configuration_key_postfix=chat_configuration_hash
@@ -249,8 +247,8 @@ if run_cases:
                     )
                     render_entry(
                         entries=st.session_state.entries,
-                        entry=ChatEntry(
-                            chat_message_item=ChatMessageItem(
+                        entry=ChatEntry.from_message(
+                            ChatMessageItem(
                                 message=ChatMessage(
                                     sender=ChatMessageSender.USER,
                                     content=row["query"],

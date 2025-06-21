@@ -563,8 +563,8 @@ if sel_existing_eval:  # noqa
                 start_new_conversation()
                 render_entry(
                     entries=st.session_state.entries,
-                    entry=ChatEntry(
-                        chat_message_item=ChatMessageItem(
+                    entry=ChatEntry.from_message(
+                        ChatMessageItem(
                             message=ChatMessage(
                                 sender=ChatMessageSender.USER,
                                 content=q.query,
@@ -582,8 +582,8 @@ if sel_existing_eval:  # noqa
                         ):
                             render_entry(
                                 entries=st.session_state.entries,
-                                entry=ChatEntry(
-                                    chat_message_item=ChatMessageItem(
+                                entry=ChatEntry.from_message(
+                                    ChatMessageItem(
                                         message=ChatMessage(
                                             sender=ChatMessageSender.BOT,
                                             content=game.agent_a_answer.text,
@@ -593,8 +593,8 @@ if sel_existing_eval:  # noqa
                             )
                             render_entry(
                                 entries=st.session_state.entries,
-                                entry=ChatEntry(
-                                    chat_message_item=ChatMessageItem(
+                                entry=ChatEntry.from_message(
+                                    ChatMessageItem(
                                         message=ChatMessage(
                                             sender=ChatMessageSender.BOT,
                                             content=game.agent_b_answer.text,
@@ -610,8 +610,8 @@ if sel_existing_eval:  # noqa
                                     st.markdown(f"###### [{doc.did}]\n {doc.text}")
                             render_entry(
                                 entries=st.session_state.entries,
-                                entry=ChatEntry(
-                                    evaluator_item=EvaluatorItem(
+                                entry=ChatEntry.from_evaluator(
+                                    EvaluatorItem(
                                         verdict=str(eval.answer),
                                         explanation=eval.raw_answer,
                                     ),
@@ -629,8 +629,8 @@ if sel_existing_eval:  # noqa
             start_new_conversation()
             render_entry(
                 entries=st.session_state.entries,
-                entry=ChatEntry(
-                    chat_message_item=ChatMessageItem(
+                entry=ChatEntry.from_message(
+                    ChatMessageItem(
                         message=ChatMessage(
                             sender=ChatMessageSender.USER,
                             content=q.query,
@@ -647,8 +647,8 @@ if sel_existing_eval:  # noqa
                     with st.expander(agent_display_name(answer.agent)):
                         render_entry(
                             entries=st.session_state.entries,
-                            entry=ChatEntry(
-                                chat_message_item=ChatMessageItem(
+                            entry=ChatEntry.from_message(
+                                ChatMessageItem(
                                     message=ChatMessage(
                                         sender=ChatMessageSender.BOT,
                                         content=answer.text,
@@ -661,8 +661,8 @@ if sel_existing_eval:  # noqa
                                 st.markdown(f"###### [{doc.did}]\n {doc.text}")
                         render_entry(
                             entries=st.session_state.entries,
-                            entry=ChatEntry(
-                                evaluator_item=EvaluatorItem(
+                            entry=ChatEntry.from_evaluator(
+                                EvaluatorItem(
                                     verdict=(
                                         f"```{json.dumps(answer.evaluation.answer)}```"
                                         if isinstance(answer.evaluation.answer, dict)

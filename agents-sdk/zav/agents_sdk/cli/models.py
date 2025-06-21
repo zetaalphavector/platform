@@ -9,7 +9,7 @@ from ragelo.types.configurations import (
     ReasonerEvaluatorConfig,
 )
 from zav.message_bus import MessageBus
-from zav.pydantic_compat import BaseModel
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel
 
 from zav.agents_sdk import AgentSetup, ChatMessage, ConversationContext
 
@@ -40,6 +40,26 @@ class ChatEntry(BaseModel):
     chat_message_item: Optional[ChatMessageItem] = None
     evaluator_item: Optional[EvaluatorItem] = None
 
+    @classmethod
+    def from_configuration(
+        cls, chat_configuration_item: ChatConfigurationItem
+    ) -> "ChatEntry":
+        return (cls.model_construct if PYDANTIC_V2 else cls)(
+            chat_configuration_item=chat_configuration_item
+        )
+
+    @classmethod
+    def from_message(cls, chat_message_item: ChatMessageItem) -> "ChatEntry":
+        return (cls.model_construct if PYDANTIC_V2 else cls)(
+            chat_message_item=chat_message_item
+        )
+
+    @classmethod
+    def from_evaluator(cls, evaluator_item: EvaluatorItem) -> "ChatEntry":
+        return (cls.model_construct if PYDANTIC_V2 else cls)(
+            evaluator_item=evaluator_item
+        )
+
 
 class ComputeChatMessageItem(BaseModel):
     message_bus: MessageBus
@@ -50,7 +70,11 @@ class ComputeChatMessageItem(BaseModel):
 
 
 class TraceFileContent(BaseModel):
-    entries: List[ChatEntry] = []
+    entries: List[ChatEntry]
+
+    @classmethod
+    def from_entries(cls, entries: List[ChatEntry]) -> "TraceFileContent":
+        return (cls.model_construct if PYDANTIC_V2 else cls)(entries=entries)
 
 
 class EvaluationAnswerTrace(BaseModel):

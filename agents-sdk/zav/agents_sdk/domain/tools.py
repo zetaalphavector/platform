@@ -94,8 +94,68 @@ def _parse_params(signature: inspect.Signature, params: Optional[Dict[str, Any]]
     exec_params = dict(params) if params else {}
 
     for param_name, param in signature.parameters.items():
-        if param_name in exec_params and hasattr(param.annotation, "__fields__"):
-            exec_params[param_name] = param.annotation(**exec_params[param_name])
+        if param_name in exec_params:
+            param_annotation = param.annotation
+            origin_type = get_origin(param_annotation)
+
+            # Handle Union (Optional) types
+            if origin_type is Union:
+                # Get the arguments of the Union type (e.g., for Optional[List[Model]]
+                # -> [List[Model], None])
+                union_args = get_args(param_annotation)
+                # Find non-None types in the union
+                non_none_types = [t for t in union_args if t is not type(None)]
+
+                # If there's only one non-None type, it's an Optional[...] pattern
+                if len(non_none_types) == 1:
+                    inner_type = non_none_types[0]
+                    inner_origin = get_origin(inner_type)
+
+                    # Handle Optional[List[...]]
+                    if inner_origin is list or inner_origin is List:
+                        list_item_type = (
+                            get_args(inner_type)[0] if get_args(inner_type) else None
+                        )
+                        if list_item_type and hasattr(list_item_type, "__fields__"):
+                            # Convert each item in the list if it exists
+                            # (Optional might be None)
+                            if isinstance(exec_params[param_name], list):
+                                exec_params[param_name] = [
+                                    (
+                                        list_item_type(**item)
+                                        if isinstance(item, dict)
+                                        else item
+                                    )
+                                    for item in exec_params[param_name]
+                                ]
+                    # Handle Optional[BaseModel]
+                    elif hasattr(inner_type, "__fields__"):
+                        if isinstance(exec_params[param_name], dict):
+                            exec_params[param_name] = inner_type(
+                                **exec_params[param_name]
+                            )
+
+            # Original handling for non-Optional types
+            elif origin_type is list or origin_type is List:
+                # Check if the list items are Pydantic models
+                list_item_type = (
+                    get_args(param_annotation)[0]
+                    if get_args(param_annotation)
+                    else None
+                )
+                if list_item_type and hasattr(list_item_type, "__fields__"):
+                    # Convert each item in the list
+                    if isinstance(exec_params[param_name], list):
+                        exec_params[param_name] = [
+                            list_item_type(**item) if isinstance(item, dict) else item
+                            for item in exec_params[param_name]
+                        ]
+            elif hasattr(param_annotation, "__fields__"):
+                # Handle single Pydantic model
+                if isinstance(exec_params[param_name], dict):
+                    exec_params[param_name] = param_annotation(
+                        **exec_params[param_name]
+                    )
 
     return exec_params
 

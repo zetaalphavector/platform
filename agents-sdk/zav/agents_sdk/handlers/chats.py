@@ -26,6 +26,7 @@ from zav.agents_sdk.domain.chat_message import (
 from zav.agents_sdk.domain.chat_request import ChatRequest
 from zav.agents_sdk.handlers import commands, events
 from zav.agents_sdk.mem_utils import cleanup_memory
+from zav.agents_sdk.security import sanitize_bot_params
 
 
 async def push_event_to_queue(
@@ -84,10 +85,10 @@ async def handle_create(
         agent_identifier=cmd.chat_request.agent_identifier,
         conversation_context=cmd.chat_request.conversation_context,
         handler_params={
+            **sanitize_bot_params(cmd.chat_request.bot_params),
             **({"tenant": cmd.tenant} if cmd.tenant else {}),
             **({"request_headers": cmd.request_headers} if cmd.request_headers else {}),
             **({"index_id": cmd.index_id} if cmd.index_id else {}),
-            **(cmd.chat_request.bot_params if cmd.chat_request.bot_params else {}),
         },
     )
 
@@ -178,10 +179,10 @@ async def handle_create_stream(
         agent_identifier=cmd.chat_request.agent_identifier,
         conversation_context=cmd.chat_request.conversation_context,
         handler_params={
+            **sanitize_bot_params(cmd.chat_request.bot_params),
             **({"tenant": cmd.tenant} if cmd.tenant else {}),
             **({"request_headers": cmd.request_headers} if cmd.request_headers else {}),
             **({"index_id": cmd.index_id} if cmd.index_id else {}),
-            **(cmd.chat_request.bot_params if cmd.chat_request.bot_params else {}),
         },
     )
 

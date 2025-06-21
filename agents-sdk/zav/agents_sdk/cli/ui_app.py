@@ -127,7 +127,7 @@ def store_trace_file_content(agent_identifier: str, entries: List[ChatEntry]):
     else:
         trace_file_name = st.session_state.trace_file_name
 
-    content = TraceFileContent(entries=entries)
+    content = TraceFileContent.from_entries(entries=entries)
     if PYDANTIC_V2:
         text = content.model_dump_json(indent=2)
     else:
@@ -484,7 +484,7 @@ def render_entry(
                 entry.chat_message_item,
                 **options,
             )
-            entries.append(ChatEntry(chat_message_item=created_chat_message_item))
+            entries.append(ChatEntry.from_message(created_chat_message_item))
         elif entry.chat_configuration_item:
             render_chat_configuration_item(entry.chat_configuration_item, **options)
             entries.append(entry)
@@ -498,7 +498,7 @@ def render_entry(
             compute_message_item,
             **options,
         )
-        entries.append(ChatEntry(chat_message_item=created_chat_message_item))
+        entries.append(ChatEntry.from_message(created_chat_message_item))
 
 
 st.logo(
@@ -728,14 +728,14 @@ else:
             )
             render_entry(
                 entries=st.session_state.entries,
-                entry=ChatEntry(chat_configuration_item=chat_configuration_item),
+                entry=ChatEntry.from_configuration(chat_configuration_item),
                 print_debug_logs=sel_print_debug_logs,
                 streaming_mode=sel_streaming_mode,
             )
         render_entry(
             entries=st.session_state.entries,
-            entry=ChatEntry(
-                chat_message_item=ChatMessageItem(
+            entry=ChatEntry.from_message(
+                ChatMessageItem(
                     message=ChatMessage(
                         sender=ChatMessageSender.USER,
                         content=content,

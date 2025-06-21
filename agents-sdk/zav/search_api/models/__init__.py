@@ -107,6 +107,7 @@ from zav.search_api.model.generic_error import GenericError
 from zav.search_api.model.git_hub_repo import GitHubRepo
 from zav.search_api.model.hit import Hit
 from zav.search_api.model.hit_metadata import HitMetadata
+from zav.search_api.model.homepage_settings import HomepageSettings
 from zav.search_api.model.id_string import IDString
 from zav.search_api.model.index_cluster_string import IndexClusterString
 from zav.search_api.model.inline_response400 import InlineResponse400

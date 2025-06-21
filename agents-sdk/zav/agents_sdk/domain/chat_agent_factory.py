@@ -23,6 +23,7 @@ from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRe
 from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistryProtocol
 from zav.agents_sdk.domain.chat_request import ConversationContext
+from zav.agents_sdk.security import sanitize_bot_params
 
 
 def check_is_optional(field):
@@ -201,7 +202,10 @@ class ChatAgentFactory:
             ):
                 return await self.create(
                     agent_identifier=factory_agent_identifier,
-                    handler_params={**handler_params, **bot_params},
+                    handler_params={
+                        **handler_params,
+                        **sanitize_bot_params(bot_params),
+                    },
                     conversation_context=factory_conversation_context,
                     span=init_sub_agent_span(
                         span=span, agent_identifier=factory_agent_identifier
