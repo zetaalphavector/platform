@@ -83,11 +83,9 @@ class SearchPostRequest(ModelNormal):
     """
 
     allowed_values = {
-        ('search_engine',): {
-            'ZETA_ALPHA': "zeta_alpha",
-            'GOOGLE_SCHOLAR': "google_scholar",
-            'BING': "bing",
-            'GOOGLE': "google",
+        ('index_type',): {
+            'INTERNAL': "internal",
+            'FEDERATED': "federated",
         },
         ('document_types',): {
             'DOCUMENT': "document",
@@ -135,6 +133,8 @@ class SearchPostRequest(ModelNormal):
             'search_profile_name': (str,),  # noqa: E501
             'requested_field_paths': ([str],),  # noqa: E501
             'tenant': (str,),  # noqa: E501
+            'index_id': (str,),  # noqa: E501
+            'index_type': (str,),  # noqa: E501
             'search_engine': (str,),  # noqa: E501
             'query_string': (QueryString,),  # noqa: E501
             'retrieval_method': (RetrievalMethodString,),  # noqa: E501
@@ -164,6 +164,7 @@ class SearchPostRequest(ModelNormal):
             'sort': (SortSchema,),  # noqa: E501
             'sort_order': (SortOrderSchema,),  # noqa: E501
             'similar_to': ([UIDString],),  # noqa: E501
+            'include_doc_in_similar_to': (bool,),  # noqa: E501
             'collapse': (str, none_type,),  # noqa: E501
         }
 
@@ -180,6 +181,8 @@ class SearchPostRequest(ModelNormal):
         'search_profile_name': 'search_profile_name',  # noqa: E501
         'requested_field_paths': 'requested_field_paths',  # noqa: E501
         'tenant': 'tenant',  # noqa: E501
+        'index_id': 'index_id',  # noqa: E501
+        'index_type': 'index_type',  # noqa: E501
         'search_engine': 'search_engine',  # noqa: E501
         'query_string': 'query_string',  # noqa: E501
         'retrieval_method': 'retrieval_method',  # noqa: E501
@@ -209,6 +212,7 @@ class SearchPostRequest(ModelNormal):
         'sort': 'sort',  # noqa: E501
         'sort_order': 'sort_order',  # noqa: E501
         'similar_to': 'similar_to',  # noqa: E501
+        'include_doc_in_similar_to': 'include_doc_in_similar_to',  # noqa: E501
         'collapse': 'collapse',  # noqa: E501
     }
 
@@ -262,7 +266,9 @@ class SearchPostRequest(ModelNormal):
             search_profile_name (str): [optional]  # noqa: E501
             requested_field_paths ([str]): [optional]  # noqa: E501
             tenant (str): [optional] if omitted the server will use the default value of "zetaalpha"  # noqa: E501
-            search_engine (str): [optional] if omitted the server will use the default value of "zeta_alpha"  # noqa: E501
+            index_id (str): [optional]  # noqa: E501
+            index_type (str): [optional] if omitted the server will use the default value of "internal"  # noqa: E501
+            search_engine (str): This field is deprecated. Use index_id and index_type instead.. [optional] if omitted the server will use the default value of "zeta_alpha"  # noqa: E501
             query_string (QueryString): [optional]  # noqa: E501
             retrieval_method (RetrievalMethodString): [optional]  # noqa: E501
             include_default_filters (bool): [optional] if omitted the server will use the default value of True  # noqa: E501
@@ -291,6 +297,7 @@ class SearchPostRequest(ModelNormal):
             sort (SortSchema): [optional]  # noqa: E501
             sort_order (SortOrderSchema): [optional]  # noqa: E501
             similar_to ([UIDString]): [optional]  # noqa: E501
+            include_doc_in_similar_to (bool): [optional] if omitted the server will use the default value of False  # noqa: E501
             collapse (str, none_type): [optional]  # noqa: E501
         """
 
@@ -383,7 +390,9 @@ class SearchPostRequest(ModelNormal):
             search_profile_name (str): [optional]  # noqa: E501
             requested_field_paths ([str]): [optional]  # noqa: E501
             tenant (str): [optional] if omitted the server will use the default value of "zetaalpha"  # noqa: E501
-            search_engine (str): [optional] if omitted the server will use the default value of "zeta_alpha"  # noqa: E501
+            index_id (str): [optional]  # noqa: E501
+            index_type (str): [optional] if omitted the server will use the default value of "internal"  # noqa: E501
+            search_engine (str): This field is deprecated. Use index_id and index_type instead.. [optional] if omitted the server will use the default value of "zeta_alpha"  # noqa: E501
             query_string (QueryString): [optional]  # noqa: E501
             retrieval_method (RetrievalMethodString): [optional]  # noqa: E501
             include_default_filters (bool): [optional] if omitted the server will use the default value of True  # noqa: E501
@@ -412,6 +421,7 @@ class SearchPostRequest(ModelNormal):
             sort (SortSchema): [optional]  # noqa: E501
             sort_order (SortOrderSchema): [optional]  # noqa: E501
             similar_to ([UIDString]): [optional]  # noqa: E501
+            include_doc_in_similar_to (bool): [optional] if omitted the server will use the default value of False  # noqa: E501
             collapse (str, none_type): [optional]  # noqa: E501
         """
 

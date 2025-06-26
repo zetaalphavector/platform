@@ -1,10 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Callable, Dict, Optional, Type
 
-try:
-    from pydantic.v1 import BaseModel
-except ImportError:
-    from pydantic import BaseModel  # type: ignore
+from zav.pydantic_compat import BaseModel
 
 from zav.encryption.configuration import (
     AesConfiguration,

@@ -26,7 +26,6 @@ from zav.search_api.model.guid_string import GUIDString
 from zav.search_api.model.generic_error import GenericError
 from zav.search_api.model.list_response import ListResponse
 from zav.search_api.model.query_string import QueryString
-from zav.search_api.model.search_engine_string import SearchEngineString
 from zav.search_api.model.search_post_request import SearchPostRequest
 from zav.search_api.model.search_post_response import SearchPostResponse
 from zav.search_api.model.search_response import SearchResponse
@@ -522,7 +521,7 @@ class DocumentsApi(object):
                     'tenant':
                         (str,),
                     'search_engine':
-                        (SearchEngineString,),
+                        (str,),
                     'query_string':
                         (QueryString,),
                     'retrieval_method':
@@ -1261,7 +1260,7 @@ class DocumentsApi(object):
             requester_uuid (UUIDString): [optional]
             user_roles (str): [optional]
             tenant (str): Tenant. [optional] if omitted the server will use the default value of "zetaalpha"
-            search_engine (SearchEngineString): Search engine to use. [optional]
+            search_engine (str): Search engine to use. [optional]
             query_string (QueryString): Query string. [optional]
             retrieval_method (str): Method used for retrieval. [optional] if omitted the server will use the default value of "keyword"
             year (YearRangeSchema): Limit results to those in year range (inclusive). [optional]

@@ -5,6 +5,7 @@ from zav.message_bus.errors import (
     ExceptionHandlerRegistry,
     HandlerException,
     NonRetryableHandlerError,
+    ResourceAlreadyExists,
     RetryableHandlerError,
 )
 from zav.message_bus.handler_registry import (

@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from zav.pydantic_compat import BaseModel
 
 from zav.agents_sdk.domain.chat_message import ChatMessage, ConversationContext
 

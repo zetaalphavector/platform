@@ -16,12 +16,6 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 from openai.types.chat.completion_create_params import Function
 from openai.types.completion_choice import CompletionChoice
-
-try:
-    from pydantic.v1 import BaseModel
-except ImportError:
-    from pydantic import BaseModel  # type: ignore
-
 from typing_extensions import Literal
 from zav.llm_domain import (
     LLMModelConfiguration,
@@ -30,6 +24,7 @@ from zav.llm_domain import (
     OpenAIConfiguration,
 )
 from zav.llm_tracing import Span, now
+from zav.pydantic_compat import BaseModel
 
 from zav.prompt_completion.adapters.tracing import create_span, end_span
 from zav.prompt_completion.client import (
@@ -354,12 +349,14 @@ class OpenAiChatClient(ChatCompletionClient):
         ChatMessageSender.USER: "user",
         ChatMessageSender.FUNCTION: "function",
         ChatMessageSender.TOOL: "tool",
+        ChatMessageSender.DEVELOPER: "developer",
     }
     __ROLE_TO_SENDER = {
         "assistant": ChatMessageSender.BOT,
         "user": ChatMessageSender.USER,
         "function": ChatMessageSender.FUNCTION,
         "tool": ChatMessageSender.TOOL,
+        "developer": ChatMessageSender.DEVELOPER,
     }
 
     def __init__(
@@ -401,6 +398,7 @@ class OpenAiChatClient(ChatCompletionClient):
         request: ChatClientRequest,
         stream: Union[Literal[True, False], bool] = False,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
+        generation_span = None
         try:
             messages = self.__messages_from(request["conversation"])
             functions_dict = (
@@ -436,14 +434,14 @@ class OpenAiChatClient(ChatCompletionClient):
                     )
                     if (
                         (tool_choice := request.get("tool_choice"))
-                        and tool_choice not in ["auto", "none"]
+                        and tool_choice not in ["auto", "none", "required"]
                     )
                     else request.get("tool_choice", "auto")
                 )
             response = await self.__client.chat.completions.create(
                 model=self.__model_name,
                 messages=messages,
-                max_tokens=request["max_tokens"],
+                max_completion_tokens=request["max_tokens"],
                 temperature=self.__model_temperature,
                 stream=stream,
                 **functions_dict,
@@ -454,6 +452,7 @@ class OpenAiChatClient(ChatCompletionClient):
                 ),  # type: ignore
                 **tools_dict,
             )
+
             if isinstance(response, AsyncIterator):
 
                 async def stream_response(
@@ -723,7 +722,10 @@ class OpenAiChatClient(ChatCompletionClient):
                 )
 
             else:
-                if message.sender == ChatMessageSender.BOT:
+                if message.sender in [
+                    ChatMessageSender.BOT,
+                    ChatMessageSender.DEVELOPER,
+                ]:
                     messages.append(
                         {
                             "role": self.__SENDER_TO_ROLE[message.sender],
@@ -893,6 +895,9 @@ class OpenAiChatClient(ChatCompletionClient):
     ) -> "OpenAiChatClient":
         client = build_client(vendor_configuration)
         return cls(client=client, model_configuration=model_configuration, span=span)
+
+    def __del__(self):
+        asyncio.create_task(self.__client.close())
 
 
 @PromptClientFactory.register(LLMProviderName.OPENAI, LLMModelType.CHAT)

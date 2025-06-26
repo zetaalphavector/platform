@@ -3,7 +3,6 @@ import io
 import json
 import os
 import sys
-from importlib.metadata import distribution
 from typing import Optional
 
 import typer
@@ -339,7 +338,7 @@ def dev(
     sys.argv = [
         "streamlit",
         "run",
-        str(distribution("zetaalpha.rag-agents").locate_file("zav/agents_sdk/cli/ui_app.py")),
+        os.path.join(os.path.dirname(__file__), "ui_app.py"),
         "--server.port",
         "8000",
         "--server.runOnSave",
@@ -637,7 +636,7 @@ def list_remote(
             callback=get_project_directory,
             help="The project directory where the agents are located.",
         ),
-    ] = None
+    ] = None,
 ):
     """
     Lists the projects and agents available on the Zeta Alpha Platform.

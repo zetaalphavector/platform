@@ -1,20 +1,6 @@
 from typing import Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel
-from pydantic.version import VERSION as PYDANTIC_VERSION
-
-PYDANTIC_V2 = PYDANTIC_VERSION.startswith("2.")
-
-if PYDANTIC_V2:
-    from pydantic import BaseModel as GenericModel
-    from pydantic import model_validator
-
-    validator = model_validator(mode="after")
-else:
-    from pydantic.class_validators import root_validator
-    from pydantic.generics import GenericModel  # type: ignore
-
-    validator = root_validator()  # type: ignore
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, GenericModel, root_validator
 
 T = TypeVar("T")
 
@@ -34,7 +20,7 @@ class PaginatedResponse(GenericModel, Generic[T]):
     page: int = 1
     page_size: int = 10
 
-    @validator
+    @root_validator()
     @classmethod
     def check_consistency(cls, values):
         # For Pydantic v1, treat 'values' as a dictionary.

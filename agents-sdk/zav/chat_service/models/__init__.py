@@ -33,6 +33,7 @@ from zav.chat_service.model.document_context import DocumentContext
 from zav.chat_service.model.function_call_request import FunctionCallRequest
 from zav.chat_service.model.function_call_response import FunctionCallResponse
 from zav.chat_service.model.function_spec import FunctionSpec
+from zav.chat_service.model.generate_recommendations_form import GenerateRecommendationsForm
 from zav.chat_service.model.http_validation_error import HTTPValidationError
 from zav.chat_service.model.page_params import PageParams
 from zav.chat_service.model.paginated_response_agent_bundle_item import PaginatedResponseAgentBundleItem

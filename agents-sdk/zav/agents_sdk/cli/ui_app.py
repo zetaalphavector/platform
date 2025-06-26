@@ -2,14 +2,12 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from hashlib import sha1
 from typing import Any, List, Optional
 
 import streamlit as st
-from pydantic import BaseModel
 from zav.llm_domain import LLMModelType
-from zav.message_bus import MessageBus
 from zav.object_storage_repo import ObjectRepositoryFactory, ObjectStorageItem
+from zav.pydantic_compat import PYDANTIC_V2
 
 from zav.agents_sdk import (
     AgentSetup,
@@ -29,6 +27,14 @@ from zav.agents_sdk.adapters.local_agent_registries_factory import (
 from zav.agents_sdk.bootstrap import setup_bootstrap
 from zav.agents_sdk.cli.load_chat_agent_factory import (
     from_string as import_chat_agent_class_registry_from_string,
+)
+from zav.agents_sdk.cli.models import (
+    ChatConfigurationItem,
+    ChatEntry,
+    ChatMessageItem,
+    ComputeChatMessageItem,
+    EvaluatorItem,
+    TraceFileContent,
 )
 from zav.agents_sdk.domain import ChatRequest, RequestHeaders
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
@@ -93,45 +99,6 @@ TO_CHAT_MESSAGE_NAME = {
 }
 
 
-class ChatConfigurationItem(BaseModel):
-    agent_identifier: str
-    agent_setup: AgentSetup
-    conversation_context: Optional[ConversationContext] = None
-
-    def hash(self) -> str:
-        return str(
-            sha1(self.json(exclude_none=True).encode("utf-8")).hexdigest()  # nosec
-        )
-
-
-class ChatMessageItem(BaseModel):
-    message: ChatMessage
-    debug_storage: Optional[List[Any]] = None
-
-
-class EvaluatorItem(BaseModel):
-    verdict: str
-    explanation: str
-
-
-class ChatEntry(BaseModel):
-    chat_configuration_item: Optional[ChatConfigurationItem] = None
-    chat_message_item: Optional[ChatMessageItem] = None
-    evaluator_item: Optional[EvaluatorItem] = None
-
-
-class ComputeChatMessageItem(BaseModel):
-    message_bus: MessageBus
-    chat_configuration_item: ChatConfigurationItem
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
-class TraceFileContent(BaseModel):
-    entries: List[ChatEntry] = []
-
-
 def new_trace_file_name(agent_identifier: str):
     time_now = str(datetime.now().isoformat())
     trace_file_name = (
@@ -160,13 +127,18 @@ def store_trace_file_content(agent_identifier: str, entries: List[ChatEntry]):
     else:
         trace_file_name = st.session_state.trace_file_name
 
+    content = TraceFileContent.from_entries(entries=entries)
+    if PYDANTIC_V2:
+        text = content.model_dump_json(indent=2)
+    else:
+        text = content.json(indent=2)
+    payload_bytes = text.encode("utf-8")
+
     asyncio.run(
         object_storage_repo.add(
             ObjectStorageItem(
                 url=trace_file_name,
-                payload=TraceFileContent(entries=entries)
-                .json(indent=2)
-                .encode("utf-8"),
+                payload=payload_bytes,
             )
         )
     )
@@ -442,7 +414,10 @@ def render_chat_configuration_item(
                 )
             elif cc and cc.custom_context:
                 st.caption("Custom context items")
-                st.json(cc.custom_context.json(indent=2))
+                if PYDANTIC_V2:
+                    st.json(cc.custom_context.model_dump_json(indent=2))
+                else:
+                    st.json(cc.custom_context.json(indent=2))
 
 
 def render_chat_message_item(
@@ -509,11 +484,7 @@ def render_entry(
                 entry.chat_message_item,
                 **options,
             )
-            entries.append(
-                ChatEntry(
-                    chat_message_item=created_chat_message_item,
-                )
-            )
+            entries.append(ChatEntry.from_message(created_chat_message_item))
         elif entry.chat_configuration_item:
             render_chat_configuration_item(entry.chat_configuration_item, **options)
             entries.append(entry)
@@ -527,11 +498,7 @@ def render_entry(
             compute_message_item,
             **options,
         )
-        entries.append(
-            ChatEntry(
-                chat_message_item=created_chat_message_item,
-            )
-        )
+        entries.append(ChatEntry.from_message(created_chat_message_item))
 
 
 st.logo(
@@ -761,14 +728,14 @@ else:
             )
             render_entry(
                 entries=st.session_state.entries,
-                entry=ChatEntry(chat_configuration_item=chat_configuration_item),
+                entry=ChatEntry.from_configuration(chat_configuration_item),
                 print_debug_logs=sel_print_debug_logs,
                 streaming_mode=sel_streaming_mode,
             )
         render_entry(
             entries=st.session_state.entries,
-            entry=ChatEntry(
-                chat_message_item=ChatMessageItem(
+            entry=ChatEntry.from_message(
+                ChatMessageItem(
                     message=ChatMessage(
                         sender=ChatMessageSender.USER,
                         content=content,

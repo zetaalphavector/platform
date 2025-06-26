@@ -31,6 +31,7 @@ from zav.search_api.exceptions import ApiAttributeError
 
 def lazy_import():
     from zav.search_api.model.bot_configuration import BotConfiguration
+    from zav.search_api.model.chat_page import ChatPage
     from zav.search_api.model.client_index_settings import ClientIndexSettings
     from zav.search_api.model.document_card import DocumentCard
     from zav.search_api.model.pdf_viewer import PDFViewer
@@ -38,6 +39,7 @@ def lazy_import():
     from zav.search_api.model.white_label_settings import WhiteLabelSettings
     from zav.search_api.model.widgets_configuration import WidgetsConfiguration
     globals()['BotConfiguration'] = BotConfiguration
+    globals()['ChatPage'] = ChatPage
     globals()['ClientIndexSettings'] = ClientIndexSettings
     globals()['DocumentCard'] = DocumentCard
     globals()['PDFViewer'] = PDFViewer
@@ -103,6 +105,7 @@ class TenantClientSettings(ModelNormal):
             'indexes': ([ClientIndexSettings],),  # noqa: E501
             'widgets': (WidgetsConfiguration,),  # noqa: E501
             'pdf_viewer': (PDFViewer,),  # noqa: E501
+            'chat_page': (ChatPage,),  # noqa: E501
             'tags_section': (TagsSection,),  # noqa: E501
             'document_card': (DocumentCard,),  # noqa: E501
             'note_card': (DocumentCard,),  # noqa: E501
@@ -119,6 +122,7 @@ class TenantClientSettings(ModelNormal):
         'indexes': 'indexes',  # noqa: E501
         'widgets': 'widgets',  # noqa: E501
         'pdf_viewer': 'pdf_viewer',  # noqa: E501
+        'chat_page': 'chat_page',  # noqa: E501
         'tags_section': 'tags_section',  # noqa: E501
         'document_card': 'document_card',  # noqa: E501
         'note_card': 'note_card',  # noqa: E501
@@ -170,6 +174,7 @@ class TenantClientSettings(ModelNormal):
             indexes ([ClientIndexSettings]): [optional]  # noqa: E501
             widgets (WidgetsConfiguration): [optional]  # noqa: E501
             pdf_viewer (PDFViewer): [optional]  # noqa: E501
+            chat_page (ChatPage): [optional]  # noqa: E501
             tags_section (TagsSection): [optional]  # noqa: E501
             document_card (DocumentCard): [optional]  # noqa: E501
             note_card (DocumentCard): [optional]  # noqa: E501
@@ -259,6 +264,7 @@ class TenantClientSettings(ModelNormal):
             indexes ([ClientIndexSettings]): [optional]  # noqa: E501
             widgets (WidgetsConfiguration): [optional]  # noqa: E501
             pdf_viewer (PDFViewer): [optional]  # noqa: E501
+            chat_page (ChatPage): [optional]  # noqa: E501
             tags_section (TagsSection): [optional]  # noqa: E501
             document_card (DocumentCard): [optional]  # noqa: E501
             note_card (DocumentCard): [optional]  # noqa: E501

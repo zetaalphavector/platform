@@ -167,6 +167,7 @@ class S3ObjectRepository(ObjectRepository):
     async def filter_objects_attributes(
         self, url_prefix: str
     ) -> List[ObjectStorageAttributes]:
+        """Note: This method only returns the first 1000 objects."""
         try:
             bucket_name, key_prefix = self._parse_url(url_prefix)
             response = await force_async(self.__s3_client.list_objects_v2)(

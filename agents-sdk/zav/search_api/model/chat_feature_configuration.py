@@ -83,6 +83,7 @@ class ChatFeatureConfiguration(ModelNormal):
         return {
             'default_bot_identifier': (str,),  # noqa: E501
             'extra_bot_identifiers': ([str],),  # noqa: E501
+            'show_sender_avatar': (bool,),  # noqa: E501
         }
 
     @cached_property
@@ -93,6 +94,7 @@ class ChatFeatureConfiguration(ModelNormal):
     attribute_map = {
         'default_bot_identifier': 'default_bot_identifier',  # noqa: E501
         'extra_bot_identifiers': 'extra_bot_identifiers',  # noqa: E501
+        'show_sender_avatar': 'show_sender_avatar',  # noqa: E501
     }
 
     read_only_vars = {
@@ -140,6 +142,7 @@ class ChatFeatureConfiguration(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             extra_bot_identifiers ([str]): [optional]  # noqa: E501
+            show_sender_avatar (bool): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -226,6 +229,7 @@ class ChatFeatureConfiguration(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             extra_bot_identifiers ([str]): [optional]  # noqa: E501
+            show_sender_avatar (bool): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

@@ -1,15 +1,13 @@
 import enum
+import math
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union, overload
-
-try:
-    from pydantic.v1 import BaseModel
-except ImportError:
-    from pydantic import BaseModel  # type: ignore
 
 from typing_extensions import AsyncIterator, Literal, NotRequired, TypedDict
 from zav.llm_domain import LLMModelConfiguration
 from zav.llm_tracing import Span
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, root_validator
 
 TokenScore = Dict[str, float]
 
@@ -23,8 +21,8 @@ class PromptAnswerWithLogits(PromptAnswer):
 
 
 class PromptResponse(BaseModel):
-    error: Optional[Exception]
-    prompt_answer: Optional[Union[PromptAnswer, PromptAnswerWithLogits]]
+    error: Optional[Exception] = None
+    prompt_answer: Optional[Union[PromptAnswer, PromptAnswerWithLogits]] = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -35,6 +33,7 @@ class ChatMessageSender(str, enum.Enum):
     BOT = "bot"
     FUNCTION = "function"
     TOOL = "tool"
+    DEVELOPER = "developer"
 
 
 class FunctionCallRequest(BaseModel):
@@ -57,10 +56,41 @@ class ToolCallResponse(BaseModel):
     tool_response: Optional[str] = None
 
 
+class DocumentContentPart(BaseModel):
+    document_base64: str
+    mime_type: str
+
+
+class ImageContentPart(BaseModel):
+    image_uri: str
+
+    @root_validator()
+    @classmethod
+    def check_image_length(cls, values):
+        if PYDANTIC_V2:
+            image_uri = values.image_uri or ""
+        else:
+            image_uri = values.get("image_uri", "")
+
+        image_byte_limit = int(os.getenv("IMAGE_BYTE_LIMIT", 20_000_000))
+        # The 50 is a buffer for additional metadata
+        max_base64_length = 4 * math.ceil(image_byte_limit / 3) + 50
+        if len(image_uri) > max_base64_length:
+            raise ValueError(f"Image URI length exceeds {image_byte_limit} characters.")
+        return values
+
+
+class ContentPart(BaseModel):
+    text: Optional[str] = None
+    image: Optional[ImageContentPart] = None
+    document: Optional[DocumentContentPart] = None
+
+
 class ChatMessage(BaseModel):
     sender: ChatMessageSender
     content: str
     image_uri: Optional[str] = None
+    content_parts: Optional[List[ContentPart]] = None
     function_call_request: Optional[FunctionCallRequest] = None
     function_call_response: Optional[FunctionCallResponse] = None
     tool_call_requests: Optional[List[ToolCallRequest]] = None
@@ -103,15 +133,15 @@ class ChatMessage(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    error: Optional[Exception]
-    chat_message: Optional[ChatMessage]
+    error: Optional[Exception] = None
+    chat_message: Optional[ChatMessage] = None
 
     class Config:
         arbitrary_types_allowed = True
 
 
 class BotConversation(BaseModel):
-    bot_setup_description: Optional[str]
+    bot_setup_description: Optional[str] = None
     messages: List[ChatMessage]
 
 

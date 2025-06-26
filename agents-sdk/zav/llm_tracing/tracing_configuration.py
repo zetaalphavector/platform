@@ -1,12 +1,8 @@
 from enum import Enum
 from typing import Optional
 
-try:
-    from pydantic.v1 import BaseModel, Field
-except ImportError:
-    from pydantic import BaseModel, Field  # type: ignore
-
 from zav.encryption.pydantic import EncryptedStr
+from zav.pydantic_compat import BaseModel, Field
 
 
 class LangfuseConfiguration(BaseModel):

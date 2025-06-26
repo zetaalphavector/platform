@@ -3,10 +3,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-try:
-    from pydantic.v1 import BaseModel, Field
-except ImportError:
-    from pydantic import BaseModel, Field  # type: ignore
+from zav.pydantic_compat import BaseModel, Field
 
 
 def now():

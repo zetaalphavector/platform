@@ -32,11 +32,9 @@ from zav.search_api.exceptions import ApiAttributeError
 def lazy_import():
     from zav.search_api.model.facet_results import FacetResults
     from zav.search_api.model.retrieval_unit import RetrievalUnit
-    from zav.search_api.model.search_engine_string import SearchEngineString
     from zav.search_api.model.search_hit import SearchHit
     globals()['FacetResults'] = FacetResults
     globals()['RetrievalUnit'] = RetrievalUnit
-    globals()['SearchEngineString'] = SearchEngineString
     globals()['SearchHit'] = SearchHit
 
 
@@ -65,6 +63,10 @@ class SearchPostResponse(ModelNormal):
     """
 
     allowed_values = {
+        ('index_type',): {
+            'INTERNAL': "internal",
+            'FEDERATED': "federated",
+        },
         ('retrieval_method',): {
             'KEYWORD': "keyword",
             'KNN': "knn",
@@ -98,7 +100,10 @@ class SearchPostResponse(ModelNormal):
         """
         lazy_import()
         return {
-            'search_engine': (SearchEngineString,),  # noqa: E501
+            'search_engine': (str,),  # noqa: E501
+            'tenant': (str,),  # noqa: E501
+            'index_id': (str,),  # noqa: E501
+            'index_type': (str,),  # noqa: E501
             'retrieval_method': (str,),  # noqa: E501
             'number_of_pages': (int,),  # noqa: E501
             'total_hits': (int,),  # noqa: E501
@@ -119,6 +124,9 @@ class SearchPostResponse(ModelNormal):
 
     attribute_map = {
         'search_engine': 'search_engine',  # noqa: E501
+        'tenant': 'tenant',  # noqa: E501
+        'index_id': 'index_id',  # noqa: E501
+        'index_type': 'index_type',  # noqa: E501
         'retrieval_method': 'retrieval_method',  # noqa: E501
         'number_of_pages': 'number_of_pages',  # noqa: E501
         'total_hits': 'total_hits',  # noqa: E501
@@ -139,11 +147,14 @@ class SearchPostResponse(ModelNormal):
 
     @classmethod
     @convert_js_args_to_python_args
-    def _from_openapi_data(cls, search_engine, retrieval_method, number_of_pages, total_hits, retrieval_unit, hits, *args, **kwargs):  # noqa: E501
+    def _from_openapi_data(cls, search_engine, tenant, index_id, index_type, retrieval_method, number_of_pages, total_hits, retrieval_unit, hits, *args, **kwargs):  # noqa: E501
         """SearchPostResponse - a model defined in OpenAPI
 
         Args:
-            search_engine (SearchEngineString):
+            search_engine (str):
+            tenant (str):
+            index_id (str):
+            index_type (str):
             retrieval_method (str):
             number_of_pages (int):
             total_hits (int):
@@ -215,6 +226,9 @@ class SearchPostResponse(ModelNormal):
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
         self.search_engine = search_engine
+        self.tenant = tenant
+        self.index_id = index_id
+        self.index_type = index_type
         self.retrieval_method = retrieval_method
         self.number_of_pages = number_of_pages
         self.total_hits = total_hits
@@ -240,11 +254,14 @@ class SearchPostResponse(ModelNormal):
     ])
 
     @convert_js_args_to_python_args
-    def __init__(self, search_engine, retrieval_method, number_of_pages, total_hits, retrieval_unit, hits, *args, **kwargs):  # noqa: E501
+    def __init__(self, search_engine, tenant, index_id, index_type, retrieval_method, number_of_pages, total_hits, retrieval_unit, hits, *args, **kwargs):  # noqa: E501
         """SearchPostResponse - a model defined in OpenAPI
 
         Args:
-            search_engine (SearchEngineString):
+            search_engine (str):
+            tenant (str):
+            index_id (str):
+            index_type (str):
             retrieval_method (str):
             number_of_pages (int):
             total_hits (int):
@@ -314,6 +331,9 @@ class SearchPostResponse(ModelNormal):
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
         self.search_engine = search_engine
+        self.tenant = tenant
+        self.index_id = index_id
+        self.index_type = index_type
         self.retrieval_method = retrieval_method
         self.number_of_pages = number_of_pages
         self.total_hits = total_hits

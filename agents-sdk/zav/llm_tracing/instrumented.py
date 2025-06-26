@@ -2,10 +2,7 @@ import inspect
 import json
 from typing import Any, Generic, TypeVar, cast
 
-try:
-    from pydantic.v1.json import pydantic_encoder
-except ImportError:
-    from pydantic.json import pydantic_encoder  # type: ignore
+from zav.pydantic_compat import pydantic_encoder
 
 from zav.llm_tracing.trace import Span
 

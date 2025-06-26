@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
 from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import TracingConfiguration
+from zav.pydantic_compat import BaseModel
 
 
 def merge_dicts(d1, d2):

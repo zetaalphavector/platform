@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from pydantic import BaseModel
+from zav.pydantic_compat import BaseModel
 
 
 class AgentEvent(BaseModel):

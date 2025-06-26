@@ -30,18 +30,32 @@ from zav.search_api.exceptions import ApiAttributeError
 
 
 def lazy_import():
+    from zav.search_api.model.homepage_settings import HomepageSettings
+    from zav.search_api.model.white_label_app_settings import WhiteLabelAppSettings
+    from zav.search_api.model.white_label_colors_settings import WhiteLabelColorsSettings
+    from zav.search_api.model.white_label_footer_settings import WhiteLabelFooterSettings
     from zav.search_api.model.white_label_header_settings import WhiteLabelHeaderSettings
     from zav.search_api.model.white_label_icons_settings import WhiteLabelIconsSettings
     from zav.search_api.model.white_label_logo_settings import WhiteLabelLogoSettings
     from zav.search_api.model.white_label_main_content_settings import WhiteLabelMainContentSettings
+    from zav.search_api.model.white_label_onboarding_settings import WhiteLabelOnboardingSettings
     from zav.search_api.model.white_label_pages_settings import WhiteLabelPagesSettings
+    from zav.search_api.model.white_label_pdf_note_export_settings import WhiteLabelPDFNoteExportSettings
     from zav.search_api.model.white_label_search_bar_settings import WhiteLabelSearchBarSettings
+    from zav.search_api.model.white_label_tags_settings import WhiteLabelTagsSettings
+    globals()['HomepageSettings'] = HomepageSettings
+    globals()['WhiteLabelAppSettings'] = WhiteLabelAppSettings
+    globals()['WhiteLabelColorsSettings'] = WhiteLabelColorsSettings
+    globals()['WhiteLabelFooterSettings'] = WhiteLabelFooterSettings
     globals()['WhiteLabelHeaderSettings'] = WhiteLabelHeaderSettings
     globals()['WhiteLabelIconsSettings'] = WhiteLabelIconsSettings
     globals()['WhiteLabelLogoSettings'] = WhiteLabelLogoSettings
     globals()['WhiteLabelMainContentSettings'] = WhiteLabelMainContentSettings
+    globals()['WhiteLabelOnboardingSettings'] = WhiteLabelOnboardingSettings
+    globals()['WhiteLabelPDFNoteExportSettings'] = WhiteLabelPDFNoteExportSettings
     globals()['WhiteLabelPagesSettings'] = WhiteLabelPagesSettings
     globals()['WhiteLabelSearchBarSettings'] = WhiteLabelSearchBarSettings
+    globals()['WhiteLabelTagsSettings'] = WhiteLabelTagsSettings
 
 
 class WhiteLabelSettings(ModelNormal):
@@ -103,6 +117,14 @@ class WhiteLabelSettings(ModelNormal):
             'search_bar': (WhiteLabelSearchBarSettings,),  # noqa: E501
             'icons': (WhiteLabelIconsSettings,),  # noqa: E501
             'main_content': (WhiteLabelMainContentSettings,),  # noqa: E501
+            'colors': (WhiteLabelColorsSettings,),  # noqa: E501
+            'tags': (WhiteLabelTagsSettings,),  # noqa: E501
+            'favicon': (str,),  # noqa: E501
+            'footer': (WhiteLabelFooterSettings,),  # noqa: E501
+            'app': (WhiteLabelAppSettings,),  # noqa: E501
+            'onboarding': (WhiteLabelOnboardingSettings,),  # noqa: E501
+            'pdf_note_export': (WhiteLabelPDFNoteExportSettings,),  # noqa: E501
+            'homepage': (HomepageSettings,),  # noqa: E501
         }
 
     @cached_property
@@ -117,6 +139,14 @@ class WhiteLabelSettings(ModelNormal):
         'search_bar': 'search_bar',  # noqa: E501
         'icons': 'icons',  # noqa: E501
         'main_content': 'main_content',  # noqa: E501
+        'colors': 'colors',  # noqa: E501
+        'tags': 'tags',  # noqa: E501
+        'favicon': 'favicon',  # noqa: E501
+        'footer': 'footer',  # noqa: E501
+        'app': 'app',  # noqa: E501
+        'onboarding': 'onboarding',  # noqa: E501
+        'pdf_note_export': 'pdf_note_export',  # noqa: E501
+        'homepage': 'homepage',  # noqa: E501
     }
 
     read_only_vars = {
@@ -166,6 +196,14 @@ class WhiteLabelSettings(ModelNormal):
             search_bar (WhiteLabelSearchBarSettings): [optional]  # noqa: E501
             icons (WhiteLabelIconsSettings): [optional]  # noqa: E501
             main_content (WhiteLabelMainContentSettings): [optional]  # noqa: E501
+            colors (WhiteLabelColorsSettings): [optional]  # noqa: E501
+            tags (WhiteLabelTagsSettings): [optional]  # noqa: E501
+            favicon (str): [optional]  # noqa: E501
+            footer (WhiteLabelFooterSettings): [optional]  # noqa: E501
+            app (WhiteLabelAppSettings): [optional]  # noqa: E501
+            onboarding (WhiteLabelOnboardingSettings): [optional]  # noqa: E501
+            pdf_note_export (WhiteLabelPDFNoteExportSettings): [optional]  # noqa: E501
+            homepage (HomepageSettings): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -253,6 +291,14 @@ class WhiteLabelSettings(ModelNormal):
             search_bar (WhiteLabelSearchBarSettings): [optional]  # noqa: E501
             icons (WhiteLabelIconsSettings): [optional]  # noqa: E501
             main_content (WhiteLabelMainContentSettings): [optional]  # noqa: E501
+            colors (WhiteLabelColorsSettings): [optional]  # noqa: E501
+            tags (WhiteLabelTagsSettings): [optional]  # noqa: E501
+            favicon (str): [optional]  # noqa: E501
+            footer (WhiteLabelFooterSettings): [optional]  # noqa: E501
+            app (WhiteLabelAppSettings): [optional]  # noqa: E501
+            onboarding (WhiteLabelOnboardingSettings): [optional]  # noqa: E501
+            pdf_note_export (WhiteLabelPDFNoteExportSettings): [optional]  # noqa: E501
+            homepage (HomepageSettings): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

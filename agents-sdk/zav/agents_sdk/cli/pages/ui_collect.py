@@ -5,22 +5,19 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-from pydantic import BaseModel
-from ragelo import Query
-from ragelo.types.configurations import (
-    CustomPromptAnswerEvaluatorConfig,
-    EloAgentRankerConfig,
-    PairwiseEvaluatorConfig,
-    ReasonerEvaluatorConfig,
-)
 from zav.object_storage_repo import ObjectStorageItem
+from zav.pydantic_compat import PYDANTIC_V2
 
 from zav.agents_sdk import ChatMessage, ChatMessageSender
-from zav.agents_sdk.cli.ui_app import (
+from zav.agents_sdk.cli.models import (
     ChatConfigurationItem,
     ChatEntry,
     ChatMessageItem,
     ComputeChatMessageItem,
+    EvaluationAnswerTrace,
+    EvaluationFileContent,
+)
+from zav.agents_sdk.cli.ui_app import (
     agent_setup_retriever,
     message_bus,
     object_storage_repo,
@@ -46,35 +43,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-
-class EvaluationAnswerTrace(BaseModel):
-    agent_hash: str
-    qid: str
-    trace_file_name: str
-
-
-class RageloLLMConfig(BaseModel):
-    llm_provider: str
-    model_name: str
-    max_tokens: int
-
-
-class RageloEvaluation(BaseModel):
-    llm_config: RageloLLMConfig
-    reasoner_config: ReasonerEvaluatorConfig
-    pairwise_config: PairwiseEvaluatorConfig
-    custom_agent_eval_config: CustomPromptAnswerEvaluatorConfig
-    elo_ranker_config: EloAgentRankerConfig
-    queries: List[Query]
-    elo_rankings: Optional[Dict[str, int]] = None
-
-
-class EvaluationFileContent(BaseModel):
-    agent_configurations: List[ChatConfigurationItem]
-    queries: Dict[str, str]
-    answer_traces: List[EvaluationAnswerTrace]
-    ragelo: Optional[RageloEvaluation] = None
 
 
 def new_eval_file_name():
@@ -108,11 +76,15 @@ def store_eval_file_content(evaluation_file_content: EvaluationFileContent):
         st.session_state.eval_file_name2content = defaultdict()
     st.session_state.eval_file_name2content[eval_file_name] = evaluation_file_content
 
+    if PYDANTIC_V2:
+        payload = evaluation_file_content.model_dump_json(indent=2)
+    else:
+        payload = evaluation_file_content.json(indent=2)
     asyncio.run(
         object_storage_repo.add(
             ObjectStorageItem(
                 url=eval_file_name,
-                payload=evaluation_file_content.json(indent=2).encode("utf-8"),
+                payload=payload.encode("utf-8"),
             )
         )
     )
@@ -155,7 +127,7 @@ def __get_existing_trace_file(agent_hash: str, qid: str, query: str) -> Optional
             if (
                 eval_trace.agent_hash == agent_hash
                 and eval_trace.qid == qid
-                and (eval_file_content.queries[qid] == query)
+                and eval_file_content.queries.get(qid) == query
             ):
                 return eval_trace.trace_file_name
     return None
@@ -199,6 +171,7 @@ if eval_chat_config_items:
         )
 else:
     st.warning("No agents selected.")
+
 
 current_eval_file_name = sel_existing_eval or new_eval_file_name()
 
@@ -266,9 +239,7 @@ if run_cases:
                     st.caption(f"Saving to trace file: {trace_file_name}")
                     render_entry(
                         entries=st.session_state.entries,
-                        entry=ChatEntry(
-                            chat_configuration_item=chat_configuration_item
-                        ),
+                        entry=ChatEntry.from_configuration(chat_configuration_item),
                         print_debug_logs=True,
                         render_expander_title=True,
                         chat_configuration_key_postfix=chat_configuration_hash
@@ -276,8 +247,8 @@ if run_cases:
                     )
                     render_entry(
                         entries=st.session_state.entries,
-                        entry=ChatEntry(
-                            chat_message_item=ChatMessageItem(
+                        entry=ChatEntry.from_message(
+                            ChatMessageItem(
                                 message=ChatMessage(
                                     sender=ChatMessageSender.USER,
                                     content=row["query"],

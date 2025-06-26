@@ -7,8 +7,13 @@
 # and thereby avoids a bug in Pydantic<=1.10.7 code for is_literal_type.
 import typing
 
-import typing_extensions
+try:
+    import typing_extensions
 
-typing.Literal = typing_extensions.Literal  # type: ignore
+    # Patch Literal in typing to avoid Pydantic<=1.10.7 is_literal_type bug
+    typing.Literal = typing_extensions.Literal  # type: ignore
+except ImportError:
+    # typing_extensions not available, skip Literal patch
+    pass
 # ---- End of patch ----
 # flake8: noqa E402

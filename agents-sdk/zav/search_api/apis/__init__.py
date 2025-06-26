@@ -23,6 +23,5 @@ from zav.search_api.api.content_api import ContentApi
 from zav.search_api.api.document_assets_api import DocumentAssetsApi
 from zav.search_api.api.documents_api import DocumentsApi
 from zav.search_api.api.person_api import PersonApi
-from zav.search_api.api.query_api import QueryApi
 from zav.search_api.api.sources_api import SourcesApi
 from zav.search_api.api.tenant_settings_api import TenantSettingsApi
