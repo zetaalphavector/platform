@@ -19,7 +19,7 @@ jobs:
       id: package-details
       run: |
         package_version=$(sed -n "s/.*__version__ = \"\(.*\)\".*/\1/p" "zav/agents_sdk/version.py")
-        package_name=$(sed -n "s/.*name=\"\(.*\)\".*/\1/p" "setup.py")
+        package_name=$(sed -n 's/^name\s*=\s*"\([^"]*\)".*/\1/p' "pyproject.toml" | head -n 1)
         github_tag="$package_name-$package_version"
 
         echo "package_name=$package_name" >> $GITHUB_OUTPUT
@@ -28,7 +28,7 @@ jobs:
       working-directory: ${{ inputs.project_path }}
     - name: Verify that the project doesn't have the private classifier
       run: |
-        grep -q "Private :: Do Not Upload" setup.py && exit 1 || exit 0
+        grep -q "Private :: Do Not Upload" pyproject.toml && exit 1 || exit 0
       working-directory: ${{ inputs.project_path }}
     - name: Verify that the tag doesn't exist
       run: |
