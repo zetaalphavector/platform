@@ -185,10 +185,15 @@ class PromptCompletionWithLogitsClient(BaseCompletionClient):
 
 class ChatClientRequest(TypedDict):
     conversation: BotConversation
-    max_tokens: int
+    max_tokens: NotRequired[int]
     functions: NotRequired[List[Dict]]
     tools: NotRequired[List[Dict]]
     tool_choice: NotRequired[str]
+    logprobs: NotRequired[bool]
+    parallel_tool_calls: NotRequired[bool]
+    seed: NotRequired[int]
+    reasoning_effort: NotRequired[str]
+    verbosity: NotRequired[str]
 
 
 class ChatCompletionClient(BaseCompletionClient):

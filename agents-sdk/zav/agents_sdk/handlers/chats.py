@@ -87,7 +87,7 @@ async def handle_create(
         handler_params={
             **sanitize_bot_params(cmd.chat_request.bot_params),
             **({"tenant": cmd.tenant} if cmd.tenant else {}),
-            **({"request_headers": cmd.request_headers} if cmd.request_headers else {}),
+            **({"request_headers": cmd.request_headers}),
             **({"index_id": cmd.index_id} if cmd.index_id else {}),
         },
     )
@@ -181,7 +181,7 @@ async def handle_create_stream(
         handler_params={
             **sanitize_bot_params(cmd.chat_request.bot_params),
             **({"tenant": cmd.tenant} if cmd.tenant else {}),
-            **({"request_headers": cmd.request_headers} if cmd.request_headers else {}),
+            **({"request_headers": cmd.request_headers}),
             **({"index_id": cmd.index_id} if cmd.index_id else {}),
         },
     )

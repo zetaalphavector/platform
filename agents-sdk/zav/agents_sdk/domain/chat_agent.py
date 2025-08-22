@@ -230,7 +230,7 @@ class StreamableChatAgent(ChatAgent):
             return ChatMessage(
                 sender=ChatMessageSender.BOT,
                 content=(
-                    "Apologies, I am unable to assist you with your request"
+                    "Apologies, I am unable to assist you with your request "
                     "at the moment. Please contact support if the issue persists."
                 ),
             )

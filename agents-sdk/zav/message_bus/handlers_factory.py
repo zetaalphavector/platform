@@ -22,8 +22,8 @@ from zav.message_bus.handler_registry import (
     EventHandlerRegistry,
 )
 
-FILTER_SPECS_ = TypeVar("FILTER_SPECS_")
-DOMAIN_MODEL_ = TypeVar("DOMAIN_MODEL_")
+FILTER_SPECS_ = TypeVar("FILTER_SPECS_")  # noqa: N808
+DOMAIN_MODEL_ = TypeVar("DOMAIN_MODEL_")  # noqa: N808
 
 CRUD_TYPE = Union[
     Literal["create"],

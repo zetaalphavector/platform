@@ -55,9 +55,29 @@ class OAIFunctionCall(BaseModel):
     arguments: str
 
 
-class OAIToolCall(BaseModel):
+class OAICustomCall(BaseModel):
+    name: str
+    input: str
+
+
+class OAIFunctionToolCall(BaseModel):
     id: str
     function: Optional[OAIFunctionCall] = None
+    type: Literal["function"] = "function"
+
+
+class OAICustomToolCall(BaseModel):
+    id: str
+    custom: Optional[OAICustomCall] = None
+    type: Literal["custom"] = "custom"
+
+
+OAIToolCall = Union[OAIFunctionToolCall, OAICustomToolCall]
+
+
+class OAILogProb(BaseModel):
+    token: str
+    logprob: float
 
 
 def __extract_int_from_text(pattern: str, text: str) -> Optional[int]:
@@ -370,6 +390,11 @@ class OpenAiChatClient(ChatCompletionClient):
         self.__model_temperature = model_configuration.temperature
         self.__json_output = model_configuration.json_output
         self.__interleave_system_message = model_configuration.interleave_system_message
+        self.__logprobs = model_configuration.logprobs
+        self.__seed = model_configuration.seed
+        self.__parallel_tool_calls = model_configuration.parallel_tool_calls
+        self.__reasoning_effort = model_configuration.reasoning_effort
+        self.__verbosity = model_configuration.verbosity
         self.__span = span
 
     @overload
@@ -393,7 +418,7 @@ class OpenAiChatClient(ChatCompletionClient):
         stream: bool = False,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]: ...
 
-    async def complete(
+    async def complete(  # noqa: C901
         self,
         request: ChatClientRequest,
         stream: Union[Literal[True, False], bool] = False,
@@ -438,20 +463,38 @@ class OpenAiChatClient(ChatCompletionClient):
                     )
                     else request.get("tool_choice", "auto")
                 )
-            response = await self.__client.chat.completions.create(
-                model=self.__model_name,
-                messages=messages,
-                max_completion_tokens=request["max_tokens"],
-                temperature=self.__model_temperature,
-                stream=stream,
+            kwargs = {
+                "model": self.__model_name,
+                "messages": messages,
+                "temperature": self.__model_temperature,
+                "stream": stream,
                 **functions_dict,
-                **(
-                    {"response_format": {"type": "json_object"}}
-                    if self.__json_output
-                    else {}
-                ),  # type: ignore
                 **tools_dict,
-            )
+            }
+            if self.__json_output:
+                kwargs["response_format"] = {"type": "json_object"}
+            if max_tokens := request.get("max_tokens"):
+                kwargs["max_completion_tokens"] = max_tokens
+            if (logprobs := request.get("logprobs", self.__logprobs)) is not None:
+                kwargs["logprobs"] = logprobs
+            if (seed := request.get("seed", self.__seed)) is not None:
+                kwargs["seed"] = seed
+            if (
+                parallel_tool_calls := request.get(
+                    "parallel_tool_calls", self.__parallel_tool_calls
+                )
+            ) is not None:
+                kwargs["parallel_tool_calls"] = parallel_tool_calls
+            if (
+                reasoning_effort := request.get(
+                    "reasoning_effort", self.__reasoning_effort
+                )
+            ) is not None:
+                kwargs["reasoning_effort"] = reasoning_effort
+            if (verbosity := request.get("verbosity", self.__verbosity)) is not None:
+                kwargs["verbosity"] = verbosity
+
+            response = await self.__client.chat.completions.create(**kwargs)
 
             if isinstance(response, AsyncIterator):
 
@@ -460,6 +503,7 @@ class OpenAiChatClient(ChatCompletionClient):
                 ) -> AsyncIterator[ChatResponse]:
                     completion_start_time: Optional[datetime] = None
                     content_buffer: Optional[str] = None
+                    log_probs_buffer: List[OAILogProb] = []
                     role_buffer: Optional[str] = None
                     function_call_buffer: Optional[OAIFunctionCall] = None
                     function_call_buffer_trace: Optional[OAIFunctionCall] = None
@@ -495,6 +539,17 @@ class OpenAiChatClient(ChatCompletionClient):
                         if choice_chunk.delta.role is not None:
                             role_buffer = choice_chunk.delta.role
 
+                        if choice_chunk.logprobs and (
+                            probs := choice_chunk.logprobs.content
+                        ):
+                            for prob in probs:
+                                log_probs_buffer.append(
+                                    OAILogProb(
+                                        token=prob.token,
+                                        logprob=prob.logprob,
+                                    )
+                                )
+
                         if (fn_call := choice_chunk.delta.function_call) is not None:
                             if fn_call.name is not None:
                                 function_call_buffer = OAIFunctionCall(
@@ -519,28 +574,58 @@ class OpenAiChatClient(ChatCompletionClient):
                             function_call_buffer_trace = function_call_buffer
                             function_call_buffer = None
 
-                        if (tool_calls := choice_chunk.delta.tool_calls) is not None:
+                        if tool_calls := choice_chunk.delta.tool_calls:
                             for tool_call in tool_calls:
                                 if tool_call.id is not None:
                                     tool_calls_buffer.append(
-                                        OAIToolCall(id=tool_call.id)
+                                        OAIFunctionToolCall(id=tool_call.id)
+                                        if tool_call.type == "function"
+                                        else OAICustomToolCall(id=tool_call.id)
                                     )
                                 if (
                                     tool_fn := tool_call.function
                                 ) is not None and tool_calls_buffer:
-                                    existing_tool_call = tool_calls_buffer[-1]
-                                    if tool_fn.name is not None:
-                                        existing_tool_call.function = OAIFunctionCall(
-                                            name=tool_fn.name,
-                                            arguments=tool_fn.arguments or "",
-                                        )
-                                    if (
-                                        tool_fn.arguments is not None
-                                        and existing_tool_call.function is not None
+                                    if isinstance(
+                                        existing_tool_call := tool_calls_buffer[-1],
+                                        OAIFunctionToolCall,
                                     ):
-                                        existing_tool_call.function.arguments += (
-                                            tool_fn.arguments
-                                        )
+                                        if tool_fn.name is not None:
+                                            existing_tool_call.function = (
+                                                OAIFunctionCall(
+                                                    name=tool_fn.name,
+                                                    arguments=tool_fn.arguments or "",
+                                                )
+                                            )
+                                        if (
+                                            tool_fn.arguments is not None
+                                            and existing_tool_call.function is not None
+                                        ):
+                                            existing_tool_call.function.arguments += (
+                                                tool_fn.arguments
+                                            )
+                                # Custom calls not yet supported in deltas
+                                # https://platform.openai.com/docs/api-reference/\
+                                # chat_streaming/streaming
+                                # if (
+                                #     tool_cm := tool_call.custom
+                                # ) is not None and tool_calls_buffer:
+                                #     if isinstance(
+                                #         existing_tool_call := tool_calls_buffer[-1],
+                                #         OAICustomToolCall,
+                                #     ):
+                                #         if tool_cm.name is not None:
+                                #             existing_tool_call.custom = OAICustomCall(
+                                #                 name=tool_cm.name,
+                                #                 input=tool_cm.input or "",
+                                #             )
+                                #         if (
+                                #             tool_cm.input is not None
+                                #             and existing_tool_call.custom is not None
+                                #         ):
+                                #             existing_tool_call.custom.input += (
+                                #                 tool_cm.input
+                                #             )
+
                             # We need to wait until all tool calls are complete
                             # because we don't support non-parseable arguments
                             continue
@@ -580,6 +665,7 @@ class OpenAiChatClient(ChatCompletionClient):
                         content=content_buffer,
                         role=role_buffer,
                         function_call=function_call_buffer_trace,
+                        log_probs=log_probs_buffer if log_probs_buffer else None,
                     )
 
                 return stream_response(response)
@@ -594,19 +680,40 @@ class OpenAiChatClient(ChatCompletionClient):
                     if (fn_call := choice.message.function_call)
                     else None
                 )
-                tool_calls = (
+                tool_calls: List[OAIToolCall] = (
                     [
-                        OAIToolCall(
-                            id=tool_call.id,
-                            function=OAIFunctionCall(
-                                name=tool_call.function.name,
-                                arguments=tool_call.function.arguments,
-                            ),
+                        (
+                            OAIFunctionToolCall(
+                                id=tool_call.id,
+                                function=OAIFunctionCall(
+                                    name=tool_call.function.name,
+                                    arguments=tool_call.function.arguments,
+                                ),
+                            )
+                            if tool_call.type == "function"
+                            else OAICustomToolCall(
+                                id=tool_call.id,
+                                custom=OAICustomCall(
+                                    name=tool_call.custom.name,
+                                    input=tool_call.custom.input,
+                                ),
+                            )
                         )
-                        for tool_call in tool_calls
+                        for tool_call in calls
                     ]
-                    if (tool_calls := choice.message.tool_calls)
+                    if (calls := choice.message.tool_calls)
                     else []
+                )
+                log_probs = (
+                    [
+                        OAILogProb(
+                            token=prob.token,
+                            logprob=prob.logprob,
+                        )
+                        for prob in probs
+                    ]
+                    if choice.logprobs and (probs := choice.logprobs.content)
+                    else None
                 )
                 end_span(
                     tool_calls=tool_calls,
@@ -626,6 +733,7 @@ class OpenAiChatClient(ChatCompletionClient):
                     content=choice.message.content,
                     role=choice.message.role,
                     function_call=function_call,
+                    log_probs=log_probs,
                 )
                 chat_message = self.__parse_chat_message(
                     content=choice.message.content,
@@ -869,6 +977,7 @@ class OpenAiChatClient(ChatCompletionClient):
                 ),
             )
         if tool_calls:
+            # TODO: Refactor ToolCallRequest to support custom tool calls
             msg.tool_call_requests = [
                 ToolCallRequest(
                     id=tool_call.id,
@@ -882,7 +991,10 @@ class OpenAiChatClient(ChatCompletionClient):
                     ),
                 )
                 for tool_call in tool_calls
-                if tool_call.id and tool_call.function and tool_call.function.name
+                if isinstance(tool_call, OAIFunctionToolCall)
+                and tool_call.id
+                and tool_call.function
+                and tool_call.function.name
             ]
         return msg
 

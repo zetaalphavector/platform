@@ -2,7 +2,9 @@ from enum import Enum
 from typing import Optional
 
 from zav.encryption.pydantic import EncryptedStr
-from zav.pydantic_compat import BaseModel, Field
+from zav.pydantic_compat import BaseModel, Field, PrivateAttr
+
+from zav.llm_tracing.local_trace_store import LocalTraceStore
 
 
 class LangfuseConfiguration(BaseModel):
@@ -43,12 +45,30 @@ class LangfuseConfiguration(BaseModel):
     sample_rate: Optional[float] = None
 
 
+class CaptureConfiguration(BaseModel):
+    _store: LocalTraceStore = PrivateAttr(default_factory=LocalTraceStore)
+
+    @property
+    def store(self) -> LocalTraceStore:
+        return self._store
+
+    def __init__(self, **data):
+        # Extract _store or store if provided, otherwise use default
+        _store = data.pop("_store", None)
+        store = data.pop("store", None)
+        super().__init__(**data)
+        # Use _store first, then store, then default
+        self._store = _store or store or LocalTraceStore()
+
+
 class TracingVendorConfiguration(BaseModel):
     langfuse: Optional[LangfuseConfiguration] = None
+    capture: Optional[CaptureConfiguration] = None
 
 
 class TracingVendorName(str, Enum):
     LANGFUSE = "langfuse"
+    CAPTURE = "capture"
 
 
 class TracingConfiguration(BaseModel):

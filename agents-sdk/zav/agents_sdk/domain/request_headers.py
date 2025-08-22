@@ -17,3 +17,7 @@ class RequestHeaders(BaseModel):
         class Config:
             orm_mode = True
             allow_population_by_field_name = True
+
+    def __bool__(self) -> bool:
+        # check if the user has set any of the fields to consider the object truthy
+        return bool(self.dict(exclude_unset=True))

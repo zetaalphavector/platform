@@ -140,3 +140,11 @@ class ChatMessage(BaseModel):
 
     class Config:
         orm_mode = True
+
+    @classmethod
+    def as_user(cls, content: str) -> "ChatMessage":
+        return cls(sender=ChatMessageSender.USER, content=content)
+
+    @classmethod
+    def as_bot(cls, content: str) -> "ChatMessage":
+        return cls(sender=ChatMessageSender.BOT, content=content)

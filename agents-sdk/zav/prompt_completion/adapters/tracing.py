@@ -47,6 +47,7 @@ def end_span(
     content: Optional[str] = None,
     role: Optional[str] = None,
     function_call: Optional[Any] = None,
+    log_probs: Optional[List[Any]] = None,
 ):
     if span:
         span.end(
@@ -64,6 +65,7 @@ def end_span(
                         if tool_calls
                         else {}
                     ),
+                    **({"log_probs": log_probs} if log_probs else {}),
                 },
                 **usage,
             }

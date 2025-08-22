@@ -31,12 +31,14 @@ from zav.search_api.exceptions import ApiAttributeError
 
 def lazy_import():
     from zav.search_api.model.display_settings import DisplaySettings
+    from zav.search_api.model.document_editable_field import DocumentEditableField
     from zav.search_api.model.retrieval_method_configuration import RetrievalMethodConfiguration
     from zav.search_api.model.retrieval_unit_configuration import RetrievalUnitConfiguration
     from zav.search_api.model.search_filter_settings import SearchFilterSettings
     from zav.search_api.model.search_relevance_configuration import SearchRelevanceConfiguration
     from zav.search_api.model.search_sorting_settings import SearchSortingSettings
     globals()['DisplaySettings'] = DisplaySettings
+    globals()['DocumentEditableField'] = DocumentEditableField
     globals()['RetrievalMethodConfiguration'] = RetrievalMethodConfiguration
     globals()['RetrievalUnitConfiguration'] = RetrievalUnitConfiguration
     globals()['SearchFilterSettings'] = SearchFilterSettings
@@ -106,6 +108,7 @@ class ClientIndexSettings(ModelNormal):
             'title': (str,),  # noqa: E501
             'search_engine_identifier': (str,),  # noqa: E501
             'display_configuration': (DisplaySettings,),  # noqa: E501
+            'editable_fields': ([DocumentEditableField],),  # noqa: E501
             'retrieval_unit_config': (RetrievalUnitConfiguration,),  # noqa: E501
             'retrieval_method_config': (RetrievalMethodConfiguration,),  # noqa: E501
             'search_filters_config': ([SearchFilterSettings],),  # noqa: E501
@@ -124,6 +127,7 @@ class ClientIndexSettings(ModelNormal):
         'title': 'title',  # noqa: E501
         'search_engine_identifier': 'search_engine_identifier',  # noqa: E501
         'display_configuration': 'display_configuration',  # noqa: E501
+        'editable_fields': 'editable_fields',  # noqa: E501
         'retrieval_unit_config': 'retrieval_unit_config',  # noqa: E501
         'retrieval_method_config': 'retrieval_method_config',  # noqa: E501
         'search_filters_config': 'search_filters_config',  # noqa: E501
@@ -177,6 +181,7 @@ class ClientIndexSettings(ModelNormal):
             title (str): [optional]  # noqa: E501
             search_engine_identifier (str): [optional]  # noqa: E501
             display_configuration (DisplaySettings): [optional]  # noqa: E501
+            editable_fields ([DocumentEditableField]): [optional]  # noqa: E501
             retrieval_unit_config (RetrievalUnitConfiguration): [optional]  # noqa: E501
             retrieval_method_config (RetrievalMethodConfiguration): [optional]  # noqa: E501
             search_filters_config ([SearchFilterSettings]): [optional]  # noqa: E501
@@ -268,6 +273,7 @@ class ClientIndexSettings(ModelNormal):
             title (str): [optional]  # noqa: E501
             search_engine_identifier (str): [optional]  # noqa: E501
             display_configuration (DisplaySettings): [optional]  # noqa: E501
+            editable_fields ([DocumentEditableField]): [optional]  # noqa: E501
             retrieval_unit_config (RetrievalUnitConfiguration): [optional]  # noqa: E501
             retrieval_method_config (RetrievalMethodConfiguration): [optional]  # noqa: E501
             search_filters_config ([SearchFilterSettings]): [optional]  # noqa: E501

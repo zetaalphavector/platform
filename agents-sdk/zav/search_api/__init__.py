@@ -10,7 +10,7 @@
 """
 
 
-__version__ = "2.8.20"
+__version__ = "2.8.27"
 
 # import ApiClient
 from zav.search_api.api_client import ApiClient

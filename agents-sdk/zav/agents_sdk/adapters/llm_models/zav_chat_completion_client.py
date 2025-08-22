@@ -228,7 +228,7 @@ class ZAVChatCompletionClient:
         self,
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         functions: Optional[List[Dict]] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
@@ -238,6 +238,11 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> ChatResponse: ...
 
     @overload
@@ -245,7 +250,7 @@ class ZAVChatCompletionClient:
         self,
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         functions: Optional[List[Dict]] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
@@ -255,6 +260,11 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> AsyncIterator[ChatResponse]: ...
 
     @overload
@@ -262,7 +272,7 @@ class ZAVChatCompletionClient:
         self,
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         functions: Optional[List[Dict]] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
@@ -272,13 +282,18 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]: ...
 
     async def complete(
         self,
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         functions: Optional[List[Dict]] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
@@ -288,6 +303,11 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 20,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
         if max_nesting_level == 0:
             error_response = ChatResponse(
@@ -334,6 +354,19 @@ class ZAVChatCompletionClient:
             **({"functions": functions} if functions is not None else {}),
             **({"tools": tools_dict} if tools_dict is not None else {}),
             **({"tool_choice": tool_choice} if tool_choice is not None else {}),
+            **({"logprobs": logprobs} if logprobs is not None else {}),
+            **({"seed": seed} if seed is not None else {}),
+            **(
+                {"parallel_tool_calls": parallel_tool_calls}
+                if parallel_tool_calls is not None
+                else {}
+            ),
+            **(
+                {"reasoning_effort": reasoning_effort}
+                if reasoning_effort is not None
+                else {}
+            ),
+            **({"verbosity": verbosity} if verbosity is not None else {}),
         )
 
         chat_response = await self.__chat_completion_client.complete(
@@ -383,6 +416,11 @@ class ZAVChatCompletionClient:
                         stream_tool_calls=stream_tool_calls,
                         log_fn=log_fn,
                         max_nesting_level=max_nesting_level,
+                        reasoning_effort=reasoning_effort,
+                        logprobs=logprobs,
+                        parallel_tool_calls=parallel_tool_calls,
+                        seed=seed,
+                        verbosity=verbosity,
                     )
                     if inner_response_iterator:
                         async for inner_response in inner_response_iterator:
@@ -426,6 +464,11 @@ class ZAVChatCompletionClient:
                 stream_tool_calls=stream_tool_calls,
                 log_fn=log_fn,
                 max_nesting_level=max_nesting_level,
+                reasoning_effort=reasoning_effort,
+                logprobs=logprobs,
+                parallel_tool_calls=parallel_tool_calls,
+                seed=seed,
+                verbosity=verbosity,
             )
             if inner_response:
                 return inner_response
@@ -506,7 +549,7 @@ class ZAVChatCompletionClient:
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
         tool_completion: Optional[ChatCompletion] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
         tool_choice: Optional[str] = None,
@@ -515,6 +558,11 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Optional[ChatResponse]: ...
 
     @overload
@@ -524,7 +572,7 @@ class ZAVChatCompletionClient:
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
         tool_completion: Optional[ChatCompletion] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
         tool_choice: Optional[str] = None,
@@ -533,6 +581,11 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Optional[AsyncIterator[ChatResponse]]: ...
 
     @overload
@@ -542,7 +595,7 @@ class ZAVChatCompletionClient:
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
         tool_completion: Optional[ChatCompletion] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
         tool_choice: Optional[str] = None,
@@ -551,6 +604,11 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]: ...
 
     async def __parse_inner_response(
@@ -559,7 +617,7 @@ class ZAVChatCompletionClient:
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
         tool_completion: Optional[ChatCompletion] = None,
-        max_tokens: int = 2048,
+        max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
         tool_choice: Optional[str] = None,
@@ -568,6 +626,11 @@ class ZAVChatCompletionClient:
         stream_tool_calls: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]:
 
         if tool_completion and response.chat_completion:
@@ -587,6 +650,11 @@ class ZAVChatCompletionClient:
                 stream_tool_calls=stream_tool_calls,
                 log_fn=log_fn,
                 max_nesting_level=max_nesting_level - 1,
+                reasoning_effort=reasoning_effort,
+                logprobs=logprobs,
+                parallel_tool_calls=parallel_tool_calls,
+                seed=seed,
+                verbosity=verbosity,
             )
             return inner_response
         else:

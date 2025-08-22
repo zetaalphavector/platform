@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import date, datetime
 from functools import wraps
 from typing import Dict, List, Literal, Optional
@@ -172,6 +173,7 @@ class ZAVRetriever:
         include_doc_in_similar_to: Optional[bool] = None,
         year: Optional[Dict] = None,
     ) -> Dict:
+        start_time = time.perf_counter_ns()
         date = _parse_dates_to_str(date) if date else None
 
         sel_index_id = index_id or self.__index_id
@@ -356,6 +358,8 @@ class ZAVRetriever:
                 retrieved_hits=response_dict.get("hits", []),
             )
         )
+        end_time = time.perf_counter_ns()
+        response_dict["latency_ms"] = round((end_time - start_time) / 1_000_000, 2)
         return response_dict
 
     @_handle_pipeline_service_errors

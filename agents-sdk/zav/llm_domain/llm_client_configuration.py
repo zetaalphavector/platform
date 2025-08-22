@@ -59,6 +59,25 @@ class LLMModelConfiguration(BaseModel):
     json_output: bool = False
     max_tokens: Optional[int] = None
     interleave_system_message: Optional[str] = None
+    reasoning_effort: Optional[str] = Field(
+        None, description="Constrains effort on reasoning for reasoning models."
+    )
+    logprobs: Optional[bool] = Field(
+        None,
+        description="Whether to return log probabilities of the output tokens or not.",
+    )
+    parallel_tool_calls: Optional[bool] = Field(
+        None, description="Whether to enable parallel function calling during tool use."
+    )
+    seed: Optional[int] = Field(
+        None,
+        description="If specified, the system will make a best effort to sample "
+        "deterministically, such that repeated requests with the same seed and "
+        "parameters should return the same result. Determinism is not guaranteed.",
+    )
+    verbosity: Optional[str] = Field(
+        None, description="Constrains the verbosity of the model's response."
+    )
 
 
 class PromptModelParams(TypedDict):
