@@ -58,6 +58,7 @@ from zav.search_api.model.document_content import DocumentContent
 from zav.search_api.model.document_content_list import DocumentContentList
 from zav.search_api.model.document_content_path import DocumentContentPath
 from zav.search_api.model.document_content_path_url_content import DocumentContentPathUrlContent
+from zav.search_api.model.document_editable_field import DocumentEditableField
 from zav.search_api.model.document_id_string import DocumentIdString
 from zav.search_api.model.document_list_hit import DocumentListHit
 from zav.search_api.model.document_metadata_field import DocumentMetadataField

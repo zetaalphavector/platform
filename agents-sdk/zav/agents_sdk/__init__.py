@@ -16,6 +16,7 @@ from zav.agents_sdk.domain.chat_agent import (
     ProcessorAgent,
     StreamableChatAgent,
 )
+from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
 from zav.agents_sdk.domain.chat_agent_registry import (
     ChatAgentClassRegistry,
     ChatAgentClassRegistryProtocol,
@@ -51,6 +52,7 @@ __all__ = [
     "AgentSetup",
     "AgentSetupRetriever",
     "ChatAgent",
+    "ChatAgentFactory",
     "ProcessorAgent",
     "StreamableChatAgent",
     "ChatAgentClassRegistry",

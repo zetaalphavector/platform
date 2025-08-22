@@ -1,3 +1,4 @@
+import copy
 import inspect
 from typing import (
     Any,
@@ -19,7 +20,11 @@ from zav.pydantic_compat import BaseModel
 from zav.agents_sdk.domain.agent_creator import AgentCreator
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistryProtocol
 from zav.agents_sdk.domain.agent_event import AgentEvent
-from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
+from zav.agents_sdk.domain.agent_setup_retriever import (
+    AgentSetup,
+    AgentSetupRetriever,
+    merge_dicts,
+)
 from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistryProtocol
 from zav.agents_sdk.domain.chat_request import ConversationContext
@@ -141,12 +146,28 @@ class ChatAgentFactory:
         param_value = agent_configuration.get(param_name, None)
 
         if is_param_missing:
-            if handler_params and param_name in handler_params:
+            if param_name in handler_params:
                 param_value = handler_params[param_name]
             elif has_default:
                 return param_default
             else:
                 raise ValueError(f"Missing value for required parameter: {param_name}")
+        else:
+            # Agent configuration found in the AgentSetup should take precedence over
+            # any runtime overrides (handler_params) to avoid accidental or malicious
+            # configuration tampering. Runtime-provided values are only used to fill
+            # in missing fields.
+            config_value = agent_configuration[param_name]
+            if (
+                param_name in handler_params
+                and isinstance(handler_params[param_name], dict)
+                and isinstance(config_value, dict)
+            ):
+                # Perform a deep merge so nested dictionaries are combined while
+                # ensuring agent configuration values take precedence.
+                merged = copy.deepcopy(handler_params[param_name])
+                merge_dicts(merged, config_value)
+                param_value = merged
         if param_value is None:
             if is_optional:
                 # The arg is optional and the value is None so we return None

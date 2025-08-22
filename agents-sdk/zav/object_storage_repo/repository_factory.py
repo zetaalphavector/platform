@@ -8,6 +8,10 @@ from zav.object_storage_repo.repository import ObjectRepository
 class ObjectRepositoryConfig(TypedDict, total=False):
 
     azure_credential: Optional[str]
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    aws_region: Optional[str]
+    aws_endpoint_url: Optional[str]
 
 
 class ObjectRepositoryFactory:

@@ -1,19 +1,31 @@
+import asyncio
 import base64
 import io
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 import typer
 import uvicorn
+from rich.console import Console
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
 from streamlit.web import cli as stcli
 from typing_extensions import Annotated
 from zav.chat_service import ApiClient, Configuration
 from zav.chat_service.apis import AgentBundlesApi
 from zav.chat_service.exceptions import NotFoundException
 from zav.chat_service.models import AgentBundleForm, AgentBundlePatch
+from zav.llm_tracing import LocalTraceStore, TracingBackendFactory
 
+from zav.agents_sdk import AgentDependencyRegistry, AgentSetupRetrieverFromFile
+from zav.agents_sdk.behavior import TestHarness
+from zav.agents_sdk.cli.load_chat_agent_factory import (
+    from_string as import_chat_agent_class_registry_from_string,
+)
 from zav.agents_sdk.cli.utils import (
     create_agent_files,
     create_dependency_files,
@@ -22,6 +34,7 @@ from zav.agents_sdk.cli.utils import (
     is_valid_project_directory,
 )
 from zav.agents_sdk.domain.agent_code_bundle import AgentCodeBundle
+from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
 from zav.agents_sdk.version import __version__
 
@@ -848,6 +861,194 @@ def config_reset(
             f"Configuration reset to default at {config_path}", fg=typer.colors.GREEN
         )
     )
+
+
+@app.command()
+def test(  # noqa: C901
+    specs_path: Annotated[
+        str,
+        typer.Argument(
+            help="Path to a spec file or directory containing YAML spec files.",
+        ),
+    ],
+    pattern: Annotated[
+        str,
+        typer.Option(
+            help="Glob pattern to match spec files inside the directory.",
+            show_default=True,
+        ),
+    ] = "*.yaml",
+    project_dir: Annotated[
+        Optional[str],
+        typer.Option(
+            callback=get_project_directory,
+            help="The project directory where the agents are located.",
+        ),
+    ] = None,
+    setup_src: Annotated[
+        Optional[str],
+        typer.Option(help="Path of the agent setup configuration file."),
+    ] = None,
+    secret_setup_src: Annotated[
+        Optional[str],
+        typer.Option(help="Path of the secret agent setup configuration file."),
+    ] = None,
+):
+    """
+    Runs behavior-spec tests for the agents in the project.
+    """
+    assert project_dir is not None
+    if setup_src is None:
+        setup_src = os.path.join(project_dir, "agent_setups.json")
+    if secret_setup_src is None:
+        secret_setup_src = os.path.join(project_dir, "env", "agent_setups.json")
+
+    # Ensure the project directory is on PYTHONPATH so agent modules can be imported
+    existing_pythonpath = os.getenv("PYTHONPATH") or ""
+    if project_dir not in existing_pythonpath.split(os.pathsep):
+        os.environ["PYTHONPATH"] = os.pathsep.join(
+            filter(None, [project_dir, existing_pythonpath])
+        )
+    if project_dir not in sys.path:
+        sys.path.insert(0, project_dir)
+    import_chat_agent_class_registry_from_string(project_dir)
+    local_trace_store = LocalTraceStore()
+    harness = TestHarness(local_trace_store)
+    specs_root = Path(specs_path)
+    if specs_root.is_dir():
+        harness.discover(specs_root, pattern=pattern)
+    else:
+        harness.add_spec(specs_root)
+    harness.load()
+
+    # Load agent setups and ensure capture tracing is enabled by default for tests
+    agent_setup_retriever = AgentSetupRetrieverFromFile(
+        file_path=setup_src, secret_file_path=secret_setup_src
+    )
+    try:
+        # Inject capture tracing config if missing
+        setups = asyncio.run(agent_setup_retriever.list())
+        for s in setups:
+            if s.tracing_configuration is None:
+                agent_setup_retriever.update_agent_setup(
+                    s.agent_identifier,
+                    {
+                        "tracing_configuration": {
+                            "vendor": "capture",
+                            "vendor_configuration": {
+                                "capture": {"_store": local_trace_store}
+                            },
+                        }
+                    },
+                )
+    except Exception:
+        # Non-fatal: if event loop or retriever errors occur, continue without injection
+        typer.echo(
+            typer.style(
+                "Failed to inject capture tracing config, continuing without it",
+                fg=typer.colors.RED,
+            )
+        )
+
+    chat_agent_factory = ChatAgentFactory(
+        agent_setup_retriever=agent_setup_retriever,
+        chat_agent_class_registry=ChatAgentClassRegistry,
+        tracing_backend_factory=TracingBackendFactory,
+        trace_state_params={},
+        agent_dependency_registry=AgentDependencyRegistry,
+    )
+
+    def _run_test():
+
+        console = Console()
+        failures = []
+        results = []
+        passed = 0
+        total_time = 0.0
+        idx = 0
+        last_running = None
+        test_paths = [str(p) for p in harness._TestHarness__spec_paths]
+        n_items = len(test_paths)
+
+        console.print(Rule("[bold cyan]Agent Spec Test Run[/]", style="cyan"))
+
+        # Collected info panel
+        info_table = Table.grid(padding=(0, 1))
+        info_table.add_row("[bold]collected[/]", f"[cyan]{n_items} items[/]")
+        info_table.add_row("[bold]specs path[/]", f"[magenta]{specs_path}[/]")
+        info_table.add_row("[bold]pattern[/]", f"[blue]{pattern}[/]")
+        info_table.add_row("[bold]project dir[/]", f"[magenta]{project_dir}[/]")
+        info_table.add_row("[bold]setup src[/]", f"[magenta]{setup_src}[/]")
+        info_table.add_row(
+            "[bold]secret setup src[/]", f"[magenta]{secret_setup_src}[/]"
+        )
+        info_table.add_row("[bold]SDK version[/]", f"[green]{__version__}[/]")
+        console.print(Panel(info_table, border_style="cyan"))
+
+        async def _inner():
+            nonlocal idx, passed, total_time, last_running
+            first = True
+            async for case_result in harness.run_iter(chat_agent_factory):
+                if case_result.status == "running":
+                    if not first:
+                        console.print()
+                    first = False
+                    last_running = case_result
+                    # Minimal modern test header
+                    header = f"[{idx + 1:02d}] {case_result.spec_id}"
+                    console.print(f"[bold bright_blue]{header}[/]")
+                    if case_result.description:
+                        console.print(f"   [dim italic]{case_result.description}[/]")
+                    if getattr(case_result, "path", None):
+                        console.print(f"   [dim]Spec: {case_result.path}[/]")
+                else:
+                    idx += 1
+                    results.append(case_result)
+                    total_time += case_result.duration or 0.0
+                    duration_str = (
+                        f"[bright_magenta]{case_result.duration:.2f}s[/]"
+                        if case_result.duration is not None
+                        else ""
+                    )
+                    if case_result.status == "passed":
+                        passed += 1
+                        console.print(f"[bold green]PASSED[/] {duration_str}")
+                    else:
+                        failures.append((idx, case_result))
+                        console.print(f"[bold bright_red]FAILED[/] {duration_str}")
+            console.print()  # newline after progress line
+
+        asyncio.run(_inner())
+
+        if failures:
+            console.print()
+            console.print(Rule("[bold bright_red]FAILURES[/]", style="bright_red"))
+            for ordinal, r in failures:
+                header = f"[{ordinal:02d}] {r.spec_id}"
+                console.print(f"[bold bright_red]{header}[/]")
+                if r.description:
+                    console.print(f"   [dim italic]{r.description}[/]")
+                if getattr(r, "path", None):
+                    console.print(f"   [dim]Spec: {r.path}[/]")
+                if r.error:
+                    console.print(f"   [bright_yellow]Error: {r.error}[/]")
+                console.print()
+
+        failed = len(failures)
+        total = len(results)
+        summary_line = (
+            f"[green]{passed} passed[/]"
+            + (f", [bright_red]{failed} failed[/]" if failed else "")
+            + f", [cyan]{total} total[/]"
+        )
+        console.print(
+            Rule("[bold]SUMMARY[/]", style="green" if failed == 0 else "bright_red")
+        )
+        console.print(f"{summary_line} in [bold]{total_time:.2f}s[/]")
+        if failed:
+            raise typer.Exit(code=1)
+
+    _run_test()
 
 
 @app.command()

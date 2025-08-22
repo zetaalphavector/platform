@@ -35,7 +35,15 @@ from zav.chat_service.model.function_call_response import FunctionCallResponse
 from zav.chat_service.model.function_spec import FunctionSpec
 from zav.chat_service.model.generate_recommendations_form import GenerateRecommendationsForm
 from zav.chat_service.model.http_validation_error import HTTPValidationError
+from zav.chat_service.model.org_sharing_policy import OrgSharingPolicy
 from zav.chat_service.model.page_params import PageParams
 from zav.chat_service.model.paginated_response_agent_bundle_item import PaginatedResponseAgentBundleItem
 from zav.chat_service.model.paginated_response_agent_task_item import PaginatedResponseAgentTaskItem
+from zav.chat_service.model.paginated_response_user_agent_item import PaginatedResponseUserAgentItem
+from zav.chat_service.model.permission import Permission
+from zav.chat_service.model.sharing_policy import SharingPolicy
+from zav.chat_service.model.user_agent_form import UserAgentForm
+from zav.chat_service.model.user_agent_item import UserAgentItem
+from zav.chat_service.model.user_agent_patch import UserAgentPatch
+from zav.chat_service.model.user_sharing_policy import UserSharingPolicy
 from zav.chat_service.model.validation_error import ValidationError

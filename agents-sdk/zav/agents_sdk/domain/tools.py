@@ -1,3 +1,4 @@
+import copy
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union, get_args, get_origin
 
@@ -9,9 +10,33 @@ def _issubclass_safe(cls, classinfo):
     return isinstance(cls, type) and issubclass(cls, classinfo)
 
 
+def _inline_refs(schema: Dict) -> Dict:
+    """Replace $ref in the schema with inline definitions."""
+    defs = schema.get("$defs", {})
+
+    def _resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref_path = node["$ref"]
+                if ref_path.startswith("#/$defs/"):
+                    def_key = ref_path.split("/")[-1]
+                    resolved = copy.deepcopy(defs[def_key])
+                    return _resolve(resolved)
+            return {k: _resolve(v) for k, v in node.items()}
+        elif isinstance(node, list):
+            return [_resolve(item) for item in node]
+        return node
+
+    resolved_schema = _resolve(schema)
+    resolved_schema.pop("$defs", None)
+    return resolved_schema
+
+
 def _get_pydantic_model_schema(model: BaseModel):
-    """Convert a Pydantic model to JSON Schema."""
-    return model.schema()
+    """Convert a Pydantic model to a fully inlined JSON Schema."""
+    schema = model.schema()
+    # definitions are ignored by LLM providers, so we need to inline them
+    return _inline_refs(schema)
 
 
 def _get_json_type(typ):

@@ -32,9 +32,22 @@ def force_async(fn):
 class S3ObjectRepository(ObjectRepository):
     def __init__(
         self,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_region: Optional[str] = None,
+        aws_endpoint_url: Optional[str] = None,
         **kwargs,
     ):
-        self.__s3_client = boto3.client("s3")
+        client_kwargs = {}
+        if aws_access_key_id and aws_secret_access_key:
+            client_kwargs["aws_access_key_id"] = aws_access_key_id
+            client_kwargs["aws_secret_access_key"] = aws_secret_access_key
+        if aws_region:
+            client_kwargs["region_name"] = aws_region
+        if aws_endpoint_url:
+            client_kwargs["endpoint_url"] = aws_endpoint_url
+
+        self.__s3_client = boto3.client("s3", **client_kwargs)
 
     @classmethod
     def _parse_url(cls, url) -> Tuple[str, str]:
