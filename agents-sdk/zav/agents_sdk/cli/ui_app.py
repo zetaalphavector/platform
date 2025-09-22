@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 from datetime import datetime
@@ -207,7 +208,21 @@ def render_chat_message_item_content(st_elem, content: ChatMessage):
                     evidence.anchor_text,
                     f"[{evidence.anchor_text}]({zav_fe_url}/documents/{doc_id})",
                 )
-    return st_elem.markdown(parsed_content)
+    markdown_result = st_elem.markdown(parsed_content)
+    if hasattr(content, "image_uri") and content.image_uri:
+        try:
+            if content.image_uri.startswith("data:image/"):
+                _, encoded = content.image_uri.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                st_elem.image(
+                    image_data, caption="Generated plot", use_column_width=True
+                )
+            else:
+                st_elem.image(content.image_uri, caption="Image", use_column_width=True)
+        except Exception as e:
+            st_elem.error(f"Failed to display image: {str(e)}")
+
+    return markdown_result
 
 
 def render_agent_debug_logs(
@@ -657,7 +672,7 @@ with st.sidebar:
 
     with st.expander("UI configuration"):
         sel_print_debug_logs = st.toggle("Show debug logs", value=True)
-        sel_streaming_mode = st.toggle("Streaming mode", value=False)
+        sel_streaming_mode = st.toggle("Streaming mode", value=True)
 
     if agent_setup:
         if sel_agent_configuration:
