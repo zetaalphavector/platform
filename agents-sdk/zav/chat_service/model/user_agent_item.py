@@ -87,17 +87,17 @@ class UserAgentItem(ModelNormal):
         """
         lazy_import()
         return {
-            'id': (str,),  # noqa: E501
-            'tenant': (str,),  # noqa: E501
-            'user_uuid': (str,),  # noqa: E501
             'agent_identifier': (str,),  # noqa: E501
             'bot_params': ({str: (bool, date, datetime, dict, float, int, list, str, none_type)},),  # noqa: E501
-            'display_name': (str,),  # noqa: E501
-            'enabled': (bool,),  # noqa: E501
             'created_at': (datetime,),  # noqa: E501
+            'display_name': (str,),  # noqa: E501
+            'id': (str,),  # noqa: E501
             'last_updated_at': (datetime,),  # noqa: E501
-            'sharing': (SharingPolicy,),  # noqa: E501
+            'sharing': (bool, date, datetime, dict, float, int, list, str, none_type,),  # noqa: E501
+            'tenant': (str,),  # noqa: E501
+            'user_uuid': (str,),  # noqa: E501
             'description': (str,),  # noqa: E501
+            'enabled': (bool,),  # noqa: E501
             'instructions': (str,),  # noqa: E501
         }
 
@@ -107,17 +107,17 @@ class UserAgentItem(ModelNormal):
 
 
     attribute_map = {
-        'id': 'id',  # noqa: E501
-        'tenant': 'tenant',  # noqa: E501
-        'user_uuid': 'user_uuid',  # noqa: E501
         'agent_identifier': 'agent_identifier',  # noqa: E501
         'bot_params': 'bot_params',  # noqa: E501
-        'display_name': 'display_name',  # noqa: E501
-        'enabled': 'enabled',  # noqa: E501
         'created_at': 'created_at',  # noqa: E501
+        'display_name': 'display_name',  # noqa: E501
+        'id': 'id',  # noqa: E501
         'last_updated_at': 'last_updated_at',  # noqa: E501
         'sharing': 'sharing',  # noqa: E501
+        'tenant': 'tenant',  # noqa: E501
+        'user_uuid': 'user_uuid',  # noqa: E501
         'description': 'description',  # noqa: E501
+        'enabled': 'enabled',  # noqa: E501
         'instructions': 'instructions',  # noqa: E501
     }
 
@@ -128,20 +128,19 @@ class UserAgentItem(ModelNormal):
 
     @classmethod
     @convert_js_args_to_python_args
-    def _from_openapi_data(cls, id, tenant, user_uuid, agent_identifier, bot_params, display_name, enabled, created_at, last_updated_at, sharing, *args, **kwargs):  # noqa: E501
+    def _from_openapi_data(cls, agent_identifier, bot_params, created_at, display_name, id, last_updated_at, sharing, tenant, user_uuid, *args, **kwargs):  # noqa: E501
         """UserAgentItem - a model defined in OpenAPI
 
         Args:
-            id (str):
-            tenant (str):
-            user_uuid (str):
             agent_identifier (str):
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}):
-            display_name (str):
-            enabled (bool):
             created_at (datetime):
+            display_name (str):
+            id (str):
             last_updated_at (datetime):
-            sharing (SharingPolicy):
+            sharing (bool, date, datetime, dict, float, int, list, str, none_type):
+            tenant (str):
+            user_uuid (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -175,6 +174,7 @@ class UserAgentItem(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             description (str): [optional]  # noqa: E501
+            enabled (bool): [optional] if omitted the server will use the default value of True  # noqa: E501
             instructions (str): [optional]  # noqa: E501
         """
 
@@ -203,16 +203,15 @@ class UserAgentItem(ModelNormal):
         self._configuration = _configuration
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
-        self.id = id
-        self.tenant = tenant
-        self.user_uuid = user_uuid
         self.agent_identifier = agent_identifier
         self.bot_params = bot_params
-        self.display_name = display_name
-        self.enabled = enabled
         self.created_at = created_at
+        self.display_name = display_name
+        self.id = id
         self.last_updated_at = last_updated_at
         self.sharing = sharing
+        self.tenant = tenant
+        self.user_uuid = user_uuid
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \
@@ -233,20 +232,19 @@ class UserAgentItem(ModelNormal):
     ])
 
     @convert_js_args_to_python_args
-    def __init__(self, id, tenant, user_uuid, agent_identifier, bot_params, display_name, enabled, created_at, last_updated_at, sharing, *args, **kwargs):  # noqa: E501
+    def __init__(self, agent_identifier, bot_params, created_at, display_name, id, last_updated_at, sharing, tenant, user_uuid, *args, **kwargs):  # noqa: E501
         """UserAgentItem - a model defined in OpenAPI
 
         Args:
-            id (str):
-            tenant (str):
-            user_uuid (str):
             agent_identifier (str):
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}):
-            display_name (str):
-            enabled (bool):
             created_at (datetime):
+            display_name (str):
+            id (str):
             last_updated_at (datetime):
-            sharing (SharingPolicy):
+            sharing (bool, date, datetime, dict, float, int, list, str, none_type):
+            tenant (str):
+            user_uuid (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -280,6 +278,7 @@ class UserAgentItem(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             description (str): [optional]  # noqa: E501
+            enabled (bool): [optional] if omitted the server will use the default value of True  # noqa: E501
             instructions (str): [optional]  # noqa: E501
         """
 
@@ -306,16 +305,15 @@ class UserAgentItem(ModelNormal):
         self._configuration = _configuration
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
-        self.id = id
-        self.tenant = tenant
-        self.user_uuid = user_uuid
         self.agent_identifier = agent_identifier
         self.bot_params = bot_params
-        self.display_name = display_name
-        self.enabled = enabled
         self.created_at = created_at
+        self.display_name = display_name
+        self.id = id
         self.last_updated_at = last_updated_at
         self.sharing = sharing
+        self.tenant = tenant
+        self.user_uuid = user_uuid
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \

@@ -87,8 +87,8 @@ class UserSharingPolicy(ModelNormal):
         """
         lazy_import()
         return {
-            'user_uuid': (str,),  # noqa: E501
             'permission': (Permission,),  # noqa: E501
+            'user_uuid': (str,),  # noqa: E501
         }
 
     @cached_property
@@ -97,8 +97,8 @@ class UserSharingPolicy(ModelNormal):
 
 
     attribute_map = {
-        'user_uuid': 'user_uuid',  # noqa: E501
         'permission': 'permission',  # noqa: E501
+        'user_uuid': 'user_uuid',  # noqa: E501
     }
 
     read_only_vars = {
@@ -108,12 +108,12 @@ class UserSharingPolicy(ModelNormal):
 
     @classmethod
     @convert_js_args_to_python_args
-    def _from_openapi_data(cls, user_uuid, permission, *args, **kwargs):  # noqa: E501
+    def _from_openapi_data(cls, permission, user_uuid, *args, **kwargs):  # noqa: E501
         """UserSharingPolicy - a model defined in OpenAPI
 
         Args:
-            user_uuid (str):
             permission (Permission):
+            user_uuid (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -173,8 +173,8 @@ class UserSharingPolicy(ModelNormal):
         self._configuration = _configuration
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
-        self.user_uuid = user_uuid
         self.permission = permission
+        self.user_uuid = user_uuid
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \
@@ -195,12 +195,12 @@ class UserSharingPolicy(ModelNormal):
     ])
 
     @convert_js_args_to_python_args
-    def __init__(self, user_uuid, permission, *args, **kwargs):  # noqa: E501
+    def __init__(self, permission, user_uuid, *args, **kwargs):  # noqa: E501
         """UserSharingPolicy - a model defined in OpenAPI
 
         Args:
-            user_uuid (str):
             permission (Permission):
+            user_uuid (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -258,8 +258,8 @@ class UserSharingPolicy(ModelNormal):
         self._configuration = _configuration
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
-        self.user_uuid = user_uuid
         self.permission = permission
+        self.user_uuid = user_uuid
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \
