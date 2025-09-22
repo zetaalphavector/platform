@@ -556,7 +556,7 @@ class OpenAiChatClient(ChatCompletionClient):
                                     name=fn_call.name,
                                     arguments=fn_call.arguments or "",
                                 )
-                            if fn_call.arguments is not None and function_call_buffer:
+                            elif fn_call.arguments is not None and function_call_buffer:
                                 function_call_buffer.arguments += fn_call.arguments
                             # We need to wait until the function call is complete
                             # because we don't support non-parseable arguments
@@ -596,7 +596,7 @@ class OpenAiChatClient(ChatCompletionClient):
                                                     arguments=tool_fn.arguments or "",
                                                 )
                                             )
-                                        if (
+                                        elif (
                                             tool_fn.arguments is not None
                                             and existing_tool_call.function is not None
                                         ):
