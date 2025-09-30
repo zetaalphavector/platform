@@ -559,8 +559,10 @@ class OpenAiChatClient(ChatCompletionClient):
                             elif fn_call.arguments is not None and function_call_buffer:
                                 function_call_buffer.arguments += fn_call.arguments
                             # We need to wait until the function call is complete
+                            # (unless we got a finish reason from the API)
                             # because we don't support non-parseable arguments
-                            continue
+                            if choice_chunk.finish_reason is None:
+                                continue
                         if function_call_buffer:
                             yield ChatResponse(
                                 error=None,
@@ -627,8 +629,10 @@ class OpenAiChatClient(ChatCompletionClient):
                                 #             )
 
                             # We need to wait until all tool calls are complete
+                            # (unless we got a finish reason from the API)
                             # because we don't support non-parseable arguments
-                            continue
+                            if choice_chunk.finish_reason is None:
+                                continue
 
                         if tool_calls_buffer:
                             yield ChatResponse(
