@@ -87,12 +87,10 @@ class UserAgentPatch(ModelNormal):
         """
         lazy_import()
         return {
-            'id': (str,),  # noqa: E501
             'bot_params': ({str: (bool, date, datetime, dict, float, int, list, str, none_type)},),  # noqa: E501
-            'display_name': (str,),  # noqa: E501
             'description': (str,),  # noqa: E501
+            'display_name': (str,),  # noqa: E501
             'instructions': (str,),  # noqa: E501
-            'enabled': (bool,),  # noqa: E501
             'sharing': (SharingPolicy,),  # noqa: E501
         }
 
@@ -102,12 +100,10 @@ class UserAgentPatch(ModelNormal):
 
 
     attribute_map = {
-        'id': 'id',  # noqa: E501
         'bot_params': 'bot_params',  # noqa: E501
-        'display_name': 'display_name',  # noqa: E501
         'description': 'description',  # noqa: E501
+        'display_name': 'display_name',  # noqa: E501
         'instructions': 'instructions',  # noqa: E501
-        'enabled': 'enabled',  # noqa: E501
         'sharing': 'sharing',  # noqa: E501
     }
 
@@ -118,11 +114,8 @@ class UserAgentPatch(ModelNormal):
 
     @classmethod
     @convert_js_args_to_python_args
-    def _from_openapi_data(cls, id, *args, **kwargs):  # noqa: E501
+    def _from_openapi_data(cls, *args, **kwargs):  # noqa: E501
         """UserAgentPatch - a model defined in OpenAPI
-
-        Args:
-            id (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -156,10 +149,9 @@ class UserAgentPatch(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
-            display_name (str): [optional]  # noqa: E501
             description (str): [optional]  # noqa: E501
+            display_name (str): [optional]  # noqa: E501
             instructions (str): [optional]  # noqa: E501
-            enabled (bool): [optional]  # noqa: E501
             sharing (SharingPolicy): [optional]  # noqa: E501
         """
 
@@ -188,7 +180,6 @@ class UserAgentPatch(ModelNormal):
         self._configuration = _configuration
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
-        self.id = id
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \
@@ -209,11 +200,8 @@ class UserAgentPatch(ModelNormal):
     ])
 
     @convert_js_args_to_python_args
-    def __init__(self, id, *args, **kwargs):  # noqa: E501
+    def __init__(self, *args, **kwargs):  # noqa: E501
         """UserAgentPatch - a model defined in OpenAPI
-
-        Args:
-            id (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -247,10 +235,9 @@ class UserAgentPatch(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
-            display_name (str): [optional]  # noqa: E501
             description (str): [optional]  # noqa: E501
+            display_name (str): [optional]  # noqa: E501
             instructions (str): [optional]  # noqa: E501
-            enabled (bool): [optional]  # noqa: E501
             sharing (SharingPolicy): [optional]  # noqa: E501
         """
 
@@ -277,7 +264,6 @@ class UserAgentPatch(ModelNormal):
         self._configuration = _configuration
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
-        self.id = id
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \
