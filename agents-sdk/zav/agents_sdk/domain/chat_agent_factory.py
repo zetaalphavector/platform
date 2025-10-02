@@ -100,7 +100,6 @@ class ChatAgentFactory:
         self,
         has_default: bool,
         is_optional: bool,
-        sub_agent_name: str,
         sub_agent_identifier: str,
         param_default: Any,
         handler_params: Dict[str, Any],
@@ -111,7 +110,6 @@ class ChatAgentFactory:
             return await self.create(
                 agent_identifier=sub_agent_identifier,
                 handler_params=handler_params,
-                agent_name=sub_agent_name,
                 conversation_context=conversation_context,
                 span=init_sub_agent_span(
                     span=span, agent_identifier=sub_agent_identifier
@@ -279,7 +277,6 @@ class ChatAgentFactory:
             return await self.__parse_sub_agent(
                 has_default=has_default,
                 is_optional=is_optional,
-                sub_agent_name=sub_agent_name,
                 sub_agent_identifier=sub_agent_identifier,
                 param_default=param.default,
                 handler_params=handler_params,
@@ -324,7 +321,6 @@ class ChatAgentFactory:
         self,
         agent_identifier: str,
         handler_params: Dict[str, Any],
-        agent_name: Optional[str] = None,
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
         extra_agent_kwargs: Optional[Dict[str, Any]] = None,
@@ -345,7 +341,7 @@ class ChatAgentFactory:
                 trace_state=self.__trace_state_params,
             )
         agent_cls = await self.__chat_agent_class_registry.get(
-            agent_name=agent_name or agent_setup.agent_name
+            agent_name=agent_setup.agent_name
         )
         agent_cls_params = inspect.signature(agent_cls).parameters
         agent_cls_param_values = {
@@ -408,20 +404,18 @@ class ChatAgentFactory:
         self,
         agent_identifier: str,
         handler_params: Dict[str, Any],
-        agent_name: Optional[str] = None,
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
         extra_agent_kwargs: Optional[Dict[str, Any]] = None,
     ) -> StreamableChatAgent:
         agent_instance = await self.create(
             agent_identifier=agent_identifier,
-            agent_name=agent_name,
             handler_params=handler_params,
             conversation_context=conversation_context,
             span=span,
             extra_agent_kwargs=extra_agent_kwargs,
         )
         if not isinstance(agent_instance, StreamableChatAgent):
-            raise ValueError(f"Agent {agent_name} is not streamable")
+            raise ValueError(f"Agent {agent_identifier} is not streamable")
 
         return agent_instance

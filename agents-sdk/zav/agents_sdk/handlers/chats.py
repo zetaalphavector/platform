@@ -21,6 +21,9 @@ from zav.agents_sdk.domain.chat_message import (
     FunctionCallRequest as DomainFunctionCallRequest,
 )
 from zav.agents_sdk.domain.chat_message import (
+    FunctionCallResponse as DomainFunctionCallResponse,
+)
+from zav.agents_sdk.domain.chat_message import (
     FunctionSpec,
 )
 from zav.agents_sdk.domain.chat_request import ChatRequest
@@ -113,6 +116,13 @@ async def handle_create(
                         chat_agent_response.function_call_request
                     )
                     if chat_agent_response.function_call_request
+                    else None
+                ),
+                function_call_response=(
+                    DomainFunctionCallResponse.from_orm(
+                        chat_agent_response.function_call_response
+                    )
+                    if chat_agent_response.function_call_response
                     else None
                 ),
                 function_specs=(
