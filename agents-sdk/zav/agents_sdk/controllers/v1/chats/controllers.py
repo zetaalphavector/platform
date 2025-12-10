@@ -6,6 +6,7 @@ from zav.api.dependencies import get_message_bus
 from zav.api.errors import UnknownException
 from zav.logging import logger
 from zav.message_bus import MessageBus
+from zav.pydantic_compat import PYDANTIC_V2
 
 from zav.agents_sdk.controllers.v1.chats.types import (
     ChatResponseForm,
@@ -82,8 +83,12 @@ async def stream_response(chat_message_stream: AsyncGenerator[ChatMessage, None]
         raise UnknownException("Could not create chat response.")
     try:
         async for message in chat_message_stream:
+            if PYDANTIC_V2:
+                data = message.model_dump_json()
+            else:
+                data = message.json()
             yield ServerSentEvent(
-                data=message.json(), event="new_message", id="message_id", retry=15000
+                data=data, event="new_message", id="message_id", retry=15000
             )
     except Exception as e:
         logger.error(f"Error in streaming chat messages: {e}", exc_info=True)

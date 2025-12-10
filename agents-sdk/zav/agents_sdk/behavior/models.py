@@ -4,18 +4,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import yaml
-from zav.pydantic_compat import BaseModel, Field, validator
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, Field, validator
 
-from zav.agents_sdk.domain.chat_message import CustomContext, DocumentContext
+from zav.agents_sdk.domain.chat_message import ContentPart, ConversationContext
 
 
 class BaseExpectation(BaseModel):
     """Common base class so we can Union multiple expectations."""
 
     type: str
+    if PYDANTIC_V2:
+        model_config = ConfigDict(extra="allow")
+    else:
 
-    class Config:
-        extra = "allow"
+        class Config:
+            extra = "allow"
 
 
 class TextIncludesExpectation(BaseExpectation):
@@ -53,13 +56,7 @@ class MessageSpec(BaseModel):
 
     role: Literal["user", "bot"]
     content: str = Field(..., description="Raw message content")
-
-
-class ConversationContextSpec(BaseModel):
-    """A conversation context provided in the YAML spec."""
-
-    document_context: Optional[DocumentContext] = None
-    custom_context: Optional[CustomContext] = None
+    content_parts: Optional[List[ContentPart]] = None
 
 
 class TestSpecification(BaseModel):
@@ -69,12 +66,16 @@ class TestSpecification(BaseModel):
     description: Optional[str] = None
     agent_identifier: str
     messages: List[MessageSpec]
-    conversation_context: Optional[ConversationContextSpec] = None
+    conversation_context: Optional[ConversationContext] = None
     expectations: List[Expectation] = Field(default_factory=list)
     bot_params: Optional[Dict[str, Any]] = None
 
-    class Config:
-        extra = "allow"
+    if PYDANTIC_V2:
+        model_config = ConfigDict(extra="allow")
+    else:
+
+        class Config:
+            extra = "allow"
 
     @validator("messages", pre=True)
     @classmethod

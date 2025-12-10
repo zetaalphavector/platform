@@ -32,8 +32,10 @@ from zav.chat_service.exceptions import ApiAttributeError
 def lazy_import():
     from zav.chat_service.model.custom_context import CustomContext
     from zav.chat_service.model.document_context import DocumentContext
+    from zav.chat_service.model.tag_context import TagContext
     globals()['CustomContext'] = CustomContext
     globals()['DocumentContext'] = DocumentContext
+    globals()['TagContext'] = TagContext
 
 
 class ConversationContext(ModelNormal):
@@ -91,6 +93,7 @@ class ConversationContext(ModelNormal):
         return {
             'custom_context': (CustomContext,),  # noqa: E501
             'document_context': (DocumentContext,),  # noqa: E501
+            'tag_context': (TagContext,),  # noqa: E501
         }
 
     @cached_property
@@ -101,6 +104,7 @@ class ConversationContext(ModelNormal):
     attribute_map = {
         'custom_context': 'custom_context',  # noqa: E501
         'document_context': 'document_context',  # noqa: E501
+        'tag_context': 'tag_context',  # noqa: E501
     }
 
     read_only_vars = {
@@ -146,6 +150,7 @@ class ConversationContext(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             custom_context (CustomContext): [optional]  # noqa: E501
             document_context (DocumentContext): [optional]  # noqa: E501
+            tag_context (TagContext): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -229,6 +234,7 @@ class ConversationContext(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             custom_context (CustomContext): [optional]  # noqa: E501
             document_context (DocumentContext): [optional]  # noqa: E501
+            tag_context (TagContext): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

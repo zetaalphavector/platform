@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from zav.pydantic_compat import BaseModel
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
 from zav.agents_sdk.domain import ChatMessage, ConversationContext, FunctionSpec
 
@@ -15,8 +15,12 @@ class ChatResponseForm(BaseModel):
 class ChatResponseItem(ChatResponseForm):
     function_specs: Optional[List[FunctionSpec]] = None
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+
+        class Config:
+            orm_mode = True
 
 
 class ChatStreamItem(BaseModel):

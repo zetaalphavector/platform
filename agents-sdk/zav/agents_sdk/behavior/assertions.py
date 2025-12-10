@@ -13,6 +13,7 @@ from zav.agents_sdk.behavior.models import (
     TextIncludesExpectation,
     ToolCallExpectation,
 )
+from zav.agents_sdk.behavior.utils import parse_tool_calls
 from zav.agents_sdk.domain.chat_message import (
     ChatMessage,
     ChatMessageEvidence,
@@ -112,23 +113,7 @@ def _assert_tool_call(
 
     # Derive tool calls from the in-memory capture tracing backend
     try:
-        traces = trace_store.get_traces()
-        if traces:
-            latest_trace_span = max(
-                traces.values(), key=lambda t: t.get("start_time") or 0
-            )
-            trace_id = latest_trace_span["context"]["trace_id"]
-            span_dicts = trace_store.get_trace_spans(trace_id)
-            for sp in span_dicts:
-                attrs: Dict[str, Any] = sp.get("attributes", {}) or {}
-                metadata = attrs.get("metadata") or {}
-                if isinstance(metadata, dict) and "tool_call_id" in metadata:
-                    calls.append(
-                        FunctionCallRequest(
-                            name=str(sp.get("name")),
-                            params=attrs.get("input"),
-                        )
-                    )
+        calls.extend(parse_tool_calls(trace_store))
     except Exception:
         logger.warning(
             "Failed to derive tool calls from tracing backend", exc_info=True

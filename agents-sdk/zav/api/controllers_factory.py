@@ -121,6 +121,7 @@ class ControllersFactory:
             crud_mixin.path_url,
             **responses,
             status_code=201,
+            response_model_exclude_none=True,
             name=_create_operation_name(crud_mixin.crud_type, self.resource_name),
             operation_id=_create_operation_name(
                 crud_mixin.crud_type, self.resource_name
@@ -173,6 +174,7 @@ class ControllersFactory:
         @self.domain_router.get(
             crud_mixin.path_url,
             **responses,
+            response_model_exclude_none=True,
             name=_create_operation_name(crud_mixin.crud_type, self.resource_name),
             operation_id=_create_operation_name(
                 crud_mixin.crud_type, self.resource_name
@@ -229,6 +231,7 @@ class ControllersFactory:
         @self.domain_router.get(
             crud_mixin.path_url,
             **responses,
+            response_model_exclude_none=True,
             name=_create_operation_name(crud_mixin.crud_type, self.resource_name),
             operation_id=_create_operation_name(
                 crud_mixin.crud_type, self.resource_name
@@ -249,7 +252,7 @@ class ControllersFactory:
                 pagination=pagination,
             )
             if "response_model" in responses:
-                return responses["response_model"](
+                var = responses["response_model"](
                     count=total, results=results, page=page, page_size=page_size
                 )
             return None

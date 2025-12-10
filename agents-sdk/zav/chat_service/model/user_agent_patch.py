@@ -30,7 +30,9 @@ from zav.chat_service.exceptions import ApiAttributeError
 
 
 def lazy_import():
+    from zav.chat_service.model.conversation_context import ConversationContext
     from zav.chat_service.model.sharing_policy import SharingPolicy
+    globals()['ConversationContext'] = ConversationContext
     globals()['SharingPolicy'] = SharingPolicy
 
 
@@ -88,6 +90,7 @@ class UserAgentPatch(ModelNormal):
         lazy_import()
         return {
             'bot_params': ({str: (bool, date, datetime, dict, float, int, list, str, none_type)},),  # noqa: E501
+            'conversation_context': (ConversationContext,),  # noqa: E501
             'description': (str,),  # noqa: E501
             'display_name': (str,),  # noqa: E501
             'instructions': (str,),  # noqa: E501
@@ -101,6 +104,7 @@ class UserAgentPatch(ModelNormal):
 
     attribute_map = {
         'bot_params': 'bot_params',  # noqa: E501
+        'conversation_context': 'conversation_context',  # noqa: E501
         'description': 'description',  # noqa: E501
         'display_name': 'display_name',  # noqa: E501
         'instructions': 'instructions',  # noqa: E501
@@ -149,6 +153,7 @@ class UserAgentPatch(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
+            conversation_context (ConversationContext): [optional]  # noqa: E501
             description (str): [optional]  # noqa: E501
             display_name (str): [optional]  # noqa: E501
             instructions (str): [optional]  # noqa: E501
@@ -235,6 +240,7 @@ class UserAgentPatch(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
+            conversation_context (ConversationContext): [optional]  # noqa: E501
             description (str): [optional]  # noqa: E501
             display_name (str): [optional]  # noqa: E501
             instructions (str): [optional]  # noqa: E501

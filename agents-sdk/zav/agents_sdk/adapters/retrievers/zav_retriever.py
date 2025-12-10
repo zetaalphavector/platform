@@ -333,13 +333,15 @@ class ZAVRetriever:
                 )
                 chunk_id = hit["id"]
                 doc_id = chunk_id.split("_")[0] + "_0"
-                uri_hash = hit["uri_hash"]
                 if any(
                     resource.get("resource_type") == "pdf_url"
                     for resource in hit.get("custom_metadata", {}).get("resources", [])
                 ):
                     hit["document_url"] = f"/pdf/{doc_id}?chunkId={chunk_id}"
                 else:
+                    uri_hash = (
+                        hit["uri_hash"] if "uri_hash" in hit else hit["organize_doc_id"]
+                    )
                     hit["document_url"] = f"/documents/{uri_hash}"
 
                 if "document_content" in hit:
@@ -427,6 +429,24 @@ class ZAVRetriever:
                     ],
                     index_cluster=index_cluster,
                 )
+                chunk_id = hit["id"]
+                doc_id = chunk_id.split("_")[0] + "_0"
+                if any(
+                    resource.get("resource_type") == "pdf_url"
+                    for resource in hit.get("custom_metadata", {}).get("resources", [])
+                ):
+                    hit["document_url"] = f"/pdf/{doc_id}?chunkId={chunk_id}"
+                else:
+                    uri_hash = (
+                        hit["uri_hash"] if "uri_hash" in hit else hit["organize_doc_id"]
+                    )
+                    hit["document_url"] = f"/documents/{uri_hash}"
+
+                if "document_content" in hit:
+                    hit["document_content"] = [
+                        document_content.to_dict()
+                        for document_content in hit["document_content"]
+                    ]
         return response_dict
 
     @_handle_pipeline_service_errors

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Union, overload
 from typing_extensions import AsyncIterator, Literal, NotRequired, TypedDict
 from zav.llm_domain import LLMModelConfiguration
 from zav.llm_tracing import Span
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel, root_validator
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, root_validator
 
 TokenScore = Dict[str, float]
 
@@ -24,8 +24,12 @@ class PromptResponse(BaseModel):
     error: Optional[Exception] = None
     prompt_answer: Optional[Union[PromptAnswer, PromptAnswerWithLogits]] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+    else:
+
+        class Config:
+            arbitrary_types_allowed = True
 
 
 class ChatMessageSender(str, enum.Enum):

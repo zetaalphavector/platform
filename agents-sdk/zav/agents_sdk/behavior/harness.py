@@ -11,12 +11,9 @@ from zav.logging import logger
 
 from zav.agents_sdk.behavior.assertions import AssertionRegistry
 from zav.agents_sdk.behavior.models import TestSpecification, load_spec
+from zav.agents_sdk.behavior.utils import parse_tool_calls
 from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
-from zav.agents_sdk.domain.chat_message import (
-    ChatMessage,
-    ChatMessageSender,
-    ConversationContext,
-)
+from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
 
 
 @dataclass
@@ -29,6 +26,7 @@ class TestCaseResult:
     error: Optional[str] = None
     path: Path | None = None
     duration: float | None = None  # seconds
+    run_details: dict | None = None
 
 
 class TestHarness:
@@ -92,6 +90,7 @@ class TestHarness:
                 ChatMessage(
                     sender=ChatMessageSender(message.role),
                     content=message.content,
+                    content_parts=message.content_parts,
                 )
                 for message in spec.messages
             ]
@@ -102,14 +101,7 @@ class TestHarness:
                     "request_headers": {},
                     **handler_params,
                 },
-                conversation_context=(
-                    ConversationContext(
-                        document_context=spec.conversation_context.document_context,
-                        custom_context=spec.conversation_context.custom_context,
-                    )
-                    if spec.conversation_context
-                    else None
-                ),
+                conversation_context=spec.conversation_context,
             )
 
             start_time = time.perf_counter()
@@ -124,6 +116,12 @@ class TestHarness:
                     error="No response returned by agent.",
                     path=spec_path,
                     duration=duration,
+                    run_details={
+                        "function_calls": [
+                            call.model_dump()
+                            for call in parse_tool_calls(self.__trace_store)
+                        ]
+                    },
                 )
                 continue
 
@@ -139,6 +137,12 @@ class TestHarness:
                     error=str(exc),
                     path=spec_path,
                     duration=duration,
+                    run_details={
+                        "function_calls": [
+                            call.model_dump()
+                            for call in parse_tool_calls(self.__trace_store)
+                        ]
+                    },
                 )
                 continue
 
@@ -157,6 +161,9 @@ class TestHarness:
     def run(self, agent_factory: ChatAgentFactory) -> List[TestCaseResult]:
         """Execute all loaded specs synchronously via asyncio.run."""
         return asyncio.run(self.run_async(agent_factory))
+
+    def get_spec_paths(self) -> List[Path]:
+        return self.__spec_paths
 
 
 __all__ = ["TestHarness", "TestCaseResult"]

@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from zav.pydantic_compat import BaseModel, Field
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, Field
 
 
 def now():
@@ -58,8 +58,12 @@ class Span(BaseModel):
     events: List[SpanEvent] = Field(default_factory=list)
     tracing_backend: TracingBackend = Field(..., exclude=True)
 
-    class Config:
-        arbitrary_types_allowed = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+    else:
+
+        class Config:
+            arbitrary_types_allowed = True
 
     def new(
         self,

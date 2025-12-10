@@ -128,7 +128,7 @@ class ContentPart(ModelNormal):
         """ContentPart - a model defined in OpenAPI
 
         Args:
-            type (str):
+            type (str): An enumeration.
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -217,7 +217,7 @@ class ContentPart(ModelNormal):
         """ContentPart - a model defined in OpenAPI
 
         Args:
-            type (str):
+            type (str): An enumeration.
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types

@@ -153,9 +153,8 @@ from zav.search_api.model.search_results_configuration import SearchResultsConfi
 from zav.search_api.model.search_sorting_settings import SearchSortingSettings
 from zav.search_api.model.single_doc_summary_form import SingleDocSummaryForm
 from zav.search_api.model.single_doc_summary_item import SingleDocSummaryItem
-from zav.search_api.model.sort import Sort
-from zav.search_api.model.sort1 import Sort1
 from zav.search_api.model.sort_order_schema import SortOrderSchema
+from zav.search_api.model.sort_params import SortParams
 from zav.search_api.model.sort_schema import SortSchema
 from zav.search_api.model.sorting_configuration import SortingConfiguration
 from zav.search_api.model.sorting_configuration_list import SortingConfigurationList

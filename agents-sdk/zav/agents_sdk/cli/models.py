@@ -9,7 +9,7 @@ from ragelo.types.configurations import (
     ReasonerEvaluatorConfig,
 )
 from zav.message_bus import MessageBus
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
 from zav.agents_sdk import AgentSetup, ChatMessage, ConversationContext
 
@@ -64,9 +64,12 @@ class ChatEntry(BaseModel):
 class ComputeChatMessageItem(BaseModel):
     message_bus: MessageBus
     chat_configuration_item: ChatConfigurationItem
+    if PYDANTIC_V2:
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+    else:
 
-    class Config:
-        arbitrary_types_allowed = True
+        class Config:
+            arbitrary_types_allowed = True
 
 
 class TraceFileContent(BaseModel):

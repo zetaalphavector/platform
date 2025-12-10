@@ -1,7 +1,7 @@
 import enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel, root_validator
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, root_validator
 
 
 class ChatMessageSender(str, enum.Enum):
@@ -19,16 +19,24 @@ class FunctionCallRequest(BaseModel):
     name: str
     params: Optional[Dict[str, Any]] = None
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+
+        class Config:
+            orm_mode = True
 
 
 class FunctionCallResponse(BaseModel):
     name: str
     result: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+
+        class Config:
+            orm_mode = True
 
 
 class FunctionSpec(BaseModel):
@@ -54,33 +62,42 @@ class CustomContext(BaseModel):
     items: List[CustomContextItem]
 
 
+class TagContext(BaseModel):
+    tag_ids: List[str]
+
+    def is_empty(self) -> bool:
+        return not self.tag_ids
+
+
 class ConversationContext(BaseModel):
     document_context: Optional[DocumentContext] = None
     custom_context: Optional[CustomContext] = None
+    tag_context: Optional[TagContext] = None
 
     @root_validator()
     @classmethod
-    def at_most_one(cls, values):
-        # ensure only one of document_context and custom_context
+    def validate_context_combination(cls, values):
+        # tag_context can be combined with document_context OR custom_context
+        # BUT document_context and custom_context remain mutually exclusive
         if PYDANTIC_V2:
             doc = values.document_context
             custom = values.custom_context
         else:
             doc = values.get("document_context")
             custom = values.get("custom_context")
-        if doc and custom:
+
+        # Enforce mutual exclusivity between document and custom
+        if doc is not None and custom is not None:
             raise ValueError(
-                "At most one of document_context and custom_context can be set"
+                "document_context and custom_context are mutually exclusive"
             )
         return values
 
     def is_empty(self):
         return (
-            not self.document_context
-            or (self.document_context and not self.document_context.document_ids)
-        ) and (
-            not self.custom_context
-            or (self.custom_context and not self.custom_context.items)
+            (not self.document_context or not self.document_context.document_ids)
+            and (not self.custom_context or not self.custom_context.items)
+            and (not self.tag_context or self.tag_context.is_empty())
         )
 
 
@@ -138,8 +155,12 @@ class ChatMessage(BaseModel):
     evidences: Optional[List[ChatMessageEvidence]] = None
     function_specs: Optional[FunctionSpec] = None
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+
+        class Config:
+            orm_mode = True
 
     @classmethod
     def as_user(cls, content: str) -> "ChatMessage":

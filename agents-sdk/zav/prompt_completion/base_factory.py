@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Generic, Optional, Tuple, Type, TypeVar
+from typing import Callable, Dict, Generic, Optional, Tuple, Type, TypeVar, cast
 
 from zav.llm_domain import LLMClientConfiguration, LLMModelType, LLMProviderName
 from zav.llm_tracing import Span
@@ -44,10 +44,16 @@ class BaseClientFactory(Generic[PROMPT_COMPLETION_CLIENT]):
         )
         if not vendor_configuration:
             raise ValueError(f"Vendor configuration not found for: {config.vendor}")
-        return cls.registry[
-            (config.vendor, config.model_configuration.type)
-        ].from_configuration(
-            vendor_configuration=vendor_configuration,
-            model_configuration=config.model_configuration,
-            span=span,
+
+        client = cls.registry[(config.vendor, config.model_configuration.type)]
+
+        # Casting because the type checker is unable to recognize that
+        # `BaseCompletionClient` is the same as `PROMPT_COMPLETION_CLIENT`.
+        return cast(
+            PROMPT_COMPLETION_CLIENT,
+            client.from_configuration(
+                vendor_configuration=vendor_configuration,
+                model_configuration=config.model_configuration,
+                span=span,
+            ),
         )

@@ -18,7 +18,7 @@ from zav.prompt_completion import FunctionCallRequest as PcFunctionCallRequest
 from zav.prompt_completion import FunctionCallResponse as PcFunctionCallResponse
 from zav.prompt_completion import ToolCallRequest as PcToolCallRequest
 from zav.prompt_completion import ToolCallResponse as PcToolCallResponse
-from zav.pydantic_compat import BaseModel
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.chat_message import ChatMessage, FunctionCallRequest
@@ -79,16 +79,24 @@ class ChatCompletion(BaseModel):
             ),
         )
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+
+        class Config:
+            orm_mode = True
 
 
 class ChatResponse(BaseModel):
-    error: Optional[Exception]
-    chat_completion: Optional[ChatCompletion]
+    error: Optional[Exception] = None
+    chat_completion: Optional[ChatCompletion] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+    else:
+
+        class Config:
+            arbitrary_types_allowed = True
 
 
 def parse_chat_message(message: Union[ChatMessage, ChatCompletion]) -> PcChatMessage:
