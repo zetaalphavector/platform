@@ -18,4 +18,5 @@ from zav.chat_service.api.agent_bundles_api import AgentBundlesApi
 from zav.chat_service.api.agent_tasks_api import AgentTasksApi
 from zav.chat_service.api.chat_api import ChatApi
 from zav.chat_service.api.recommendations_api import RecommendationsApi
+from zav.chat_service.api.scheduled_agent_tasks_api import ScheduledAgentTasksApi
 from zav.chat_service.api.user_agents_api import UserAgentsApi

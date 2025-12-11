@@ -34,6 +34,7 @@ from zav.agents_sdk.domain.chat_message import (
     DocumentContext,
     FunctionCallRequest,
     FunctionSpec,
+    TagContext,
 )
 from zav.agents_sdk.domain.chat_request import ConversationContext
 from zav.agents_sdk.domain.request_headers import RequestHeaders

@@ -967,7 +967,7 @@ def test(  # noqa: C901
         total_time = 0.0
         idx = 0
         last_running = None
-        test_paths = [str(p) for p in harness._TestHarness__spec_paths]
+        test_paths = [str(p) for p in harness.get_spec_paths()]
         n_items = len(test_paths)
 
         console.print(Rule("[bold cyan]Agent Spec Test Run[/]", style="cyan"))
@@ -1032,6 +1032,11 @@ def test(  # noqa: C901
                     console.print(f"   [dim]Spec: {r.path}[/]")
                 if r.error:
                     console.print(f"   [bright_yellow]Error: {r.error}[/]")
+                if hasattr(r, "run_details") and r.run_details:
+                    console.print("   [dark_green]Run Details:[/]")
+                    formatted_json = json.dumps(r.run_details, indent=2)
+                    for line in formatted_json.split("\n"):
+                        console.print(f"   {line}")
                 console.print()
 
         failed = len(failures)

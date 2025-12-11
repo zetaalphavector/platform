@@ -30,7 +30,9 @@ from zav.chat_service.exceptions import ApiAttributeError
 
 
 def lazy_import():
+    from zav.chat_service.model.conversation_context import ConversationContext
     from zav.chat_service.model.sharing_policy import SharingPolicy
+    globals()['ConversationContext'] = ConversationContext
     globals()['SharingPolicy'] = SharingPolicy
 
 
@@ -93,9 +95,10 @@ class UserAgentItem(ModelNormal):
             'display_name': (str,),  # noqa: E501
             'id': (str,),  # noqa: E501
             'last_updated_at': (datetime,),  # noqa: E501
-            'sharing': (bool, date, datetime, dict, float, int, list, str, none_type,),  # noqa: E501
+            'sharing': (SharingPolicy,),  # noqa: E501
             'tenant': (str,),  # noqa: E501
             'user_uuid': (str,),  # noqa: E501
+            'conversation_context': (ConversationContext,),  # noqa: E501
             'description': (str,),  # noqa: E501
             'enabled': (bool,),  # noqa: E501
             'instructions': (str,),  # noqa: E501
@@ -116,6 +119,7 @@ class UserAgentItem(ModelNormal):
         'sharing': 'sharing',  # noqa: E501
         'tenant': 'tenant',  # noqa: E501
         'user_uuid': 'user_uuid',  # noqa: E501
+        'conversation_context': 'conversation_context',  # noqa: E501
         'description': 'description',  # noqa: E501
         'enabled': 'enabled',  # noqa: E501
         'instructions': 'instructions',  # noqa: E501
@@ -138,7 +142,7 @@ class UserAgentItem(ModelNormal):
             display_name (str):
             id (str):
             last_updated_at (datetime):
-            sharing (bool, date, datetime, dict, float, int, list, str, none_type):
+            sharing (SharingPolicy):
             tenant (str):
             user_uuid (str):
 
@@ -173,6 +177,7 @@ class UserAgentItem(ModelNormal):
                                 Animal class but this time we won't travel
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
+            conversation_context (ConversationContext): [optional]  # noqa: E501
             description (str): [optional]  # noqa: E501
             enabled (bool): [optional] if omitted the server will use the default value of True  # noqa: E501
             instructions (str): [optional]  # noqa: E501
@@ -242,7 +247,7 @@ class UserAgentItem(ModelNormal):
             display_name (str):
             id (str):
             last_updated_at (datetime):
-            sharing (bool, date, datetime, dict, float, int, list, str, none_type):
+            sharing (SharingPolicy):
             tenant (str):
             user_uuid (str):
 
@@ -277,6 +282,7 @@ class UserAgentItem(ModelNormal):
                                 Animal class but this time we won't travel
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
+            conversation_context (ConversationContext): [optional]  # noqa: E501
             description (str): [optional]  # noqa: E501
             enabled (bool): [optional] if omitted the server will use the default value of True  # noqa: E501
             instructions (str): [optional]  # noqa: E501

@@ -34,7 +34,19 @@ def instrument_execute(
             self.span.update(
                 attributes={"input": conversation[-1].content if conversation else ""}
             )
-        response = await execute(conversation)
+        try:
+            response = await execute(conversation)
+        except Exception as e:
+            if self.span:
+                self.span.add_event(
+                    "error",
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": str(e),
+                    },
+                )
+                self.span.end()
+            raise
         if self.span:
             if response:
                 self.span.end(
@@ -75,9 +87,21 @@ def instrument_execute_streaming(
                 attributes={"input": conversation[-1].content if conversation else ""}
             )
         response: Optional[ChatMessage] = None
-        async for message in execute_streaming(conversation):
-            response = message
-            yield message
+        try:
+            async for message in execute_streaming(conversation):
+                response = message
+                yield message
+        except Exception as e:
+            if self.span:
+                self.span.add_event(
+                    "error",
+                    attributes={
+                        "level": "ERROR",
+                        "status_message": str(e),
+                    },
+                )
+                self.span.end()
+            raise
         if self.span:
             if response:
                 self.span.end(
@@ -107,6 +131,7 @@ def instrument_execute_streaming(
 
 class ChatAgent(ABC):
     agent_name: ClassVar[str]
+    no_cleanup: ClassVar[bool] = False
     span: Optional[Span] = None
     debug_backend: Optional[Callable[[Any], Any]] = None
     publish_event: Optional[Callable[[AgentEvent], Coroutine[None, None, None]]] = None
@@ -189,7 +214,9 @@ class ChatAgent(ABC):
     async def cleanup(self):
         """Async cleanup for agent attributes. Calls async cleanup methods if present,
         then deletes attributes. Triggers a garbage collection to also cleanup
-        circular references."""
+        circular references. This is skipped if no_cleanup is set to True."""
+        if self.no_cleanup:
+            return
 
         for attr_name in list(set(self.__dict__.keys())):
             attr = getattr(self, attr_name, None)

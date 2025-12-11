@@ -15,7 +15,7 @@ from typing import (
 
 from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span, Trace, TracingBackendFactory
-from zav.pydantic_compat import BaseModel
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, _BaseModel
 
 from zav.agents_sdk.domain.agent_creator import AgentCreator
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistryProtocol
@@ -38,6 +38,10 @@ def check_is_optional(field):
 
 def check_is_class(annotation):
     return inspect.isclass(annotation)
+
+
+def check_is_base_model(annotation):
+    return issubclass(annotation, BaseModel) or issubclass(annotation, _BaseModel)
 
 
 def init_span(
@@ -179,11 +183,20 @@ class ChatAgentFactory:
         elif is_base_model:
             # Try to parse the value as a Pydantic model
             if isinstance(param_value, dict):
-                return param_annotation.parse_obj(param_value)
+                if PYDANTIC_V2:
+                    return param_annotation.model_validate(param_value)
+                else:
+                    return param_annotation.parse_obj(param_value)
             elif isinstance(param_value, str):
-                return param_annotation.parse_raw(param_value)
-            elif isinstance(param_value, BaseModel):
-                return param_annotation.from_orm(param_value)
+                if PYDANTIC_V2:
+                    return param_annotation.model_validate_json(param_value)
+                else:
+                    return param_annotation.parse_raw(param_value)
+            elif isinstance(param_value, _BaseModel):
+                if PYDANTIC_V2:
+                    return param_annotation.model_validate(param_value)
+                else:
+                    return param_annotation.from_orm(param_value)
             else:
                 raise ValueError(
                     f"Unsupported type for {param_name}: {type(param_value)}"
@@ -304,7 +317,7 @@ class ChatAgentFactory:
 
         # Parse agent configuration
         is_not_annotated = param_annotation == inspect.Parameter.empty
-        is_base_model = is_class and issubclass(param_annotation, BaseModel)
+        is_base_model = is_class and check_is_base_model(param_annotation)
         return self.__parse_agent_configuration(
             param_name=param_name,
             has_default=has_default,
@@ -380,7 +393,7 @@ class ChatAgentFactory:
                     ),
                 )
                 or (
-                    isinstance(param_value, BaseModel)
+                    isinstance(param_value, _BaseModel)
                     and not isinstance(param_value, LLMClientConfiguration)
                 )
             }

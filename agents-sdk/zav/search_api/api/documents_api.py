@@ -29,7 +29,7 @@ from zav.search_api.model.query_string import QueryString
 from zav.search_api.model.search_post_request import SearchPostRequest
 from zav.search_api.model.search_post_response import SearchPostResponse
 from zav.search_api.model.search_response import SearchResponse
-from zav.search_api.model.sort1 import Sort1
+from zav.search_api.model.sort_params import SortParams
 from zav.search_api.model.uid_string import UIDString
 from zav.search_api.model.uuid_string import UUIDString
 from zav.search_api.model.year_range_schema import YearRangeSchema
@@ -555,7 +555,7 @@ class DocumentsApi(object):
                     'page_size':
                         (int,),
                     'sort':
-                        (Sort1,),
+                        (SortParams,),
                     'sort_order':
                         ([str],),
                     'similar_to':
@@ -662,7 +662,7 @@ class DocumentsApi(object):
                     'doc_ids': 'csv',
                     'tag_ids': 'csv',
                     'document_types': 'csv',
-                    'sort_order': 'csv',
+                    'sort_order': 'multi',
                     'similar_to': 'csv',
                     'visibility': 'csv',
                     'location_cities': 'csv',
@@ -872,7 +872,7 @@ class DocumentsApi(object):
                     'document_types':
                         ([str],),
                     'sort':
-                        (Sort1,),
+                        (SortParams,),
                     'sort_order':
                         ([str],),
                     'similar_to':
@@ -971,7 +971,7 @@ class DocumentsApi(object):
                     'doc_ids': 'csv',
                     'tag_ids': 'csv',
                     'document_types': 'csv',
-                    'sort_order': 'csv',
+                    'sort_order': 'multi',
                     'similar_to': 'csv',
                     'visibility': 'csv',
                     'location_cities': 'csv',
@@ -1277,7 +1277,7 @@ class DocumentsApi(object):
             document_types ([str]): Limit results to documents with the given type. [optional] if omitted the server will use the default value of ["document"]
             page (int): Page. [optional] if omitted the server will use the default value of 1
             page_size (int): Page size. [optional] if omitted the server will use the default value of 10
-            sort (Sort1): Sorting parameters.. [optional]
+            sort (SortParams): Sorting parameters.. [optional]
             sort_order ([str]): Order in which to apply sorting parameters. All values from sort should be listed here.. [optional]
             similar_to ([UIDString]): Find documents similar to the list of input documents. [optional]
             collapse (str, none_type): Field on which to collapse results. [optional] if omitted the server will use the default value of "uid"
@@ -1458,7 +1458,7 @@ class DocumentsApi(object):
             with_content (bool): Limit results to only papers that have content (text representation). Note. This doesn't apply to private documents.. [optional] if omitted the server will use the default value of False
             include_default_filters (bool): Filter results based on the default filters configuration of the index.. [optional] if omitted the server will use the default value of True
             document_types ([str]): Limit results to documents with the given type. [optional] if omitted the server will use the default value of ["document"]
-            sort (Sort1): Sorting parameters.. [optional]
+            sort (SortParams): Sorting parameters.. [optional]
             sort_order ([str]): Order in which to apply sorting parameters. All values from sort should be listed here.. [optional]
             similar_to ([UIDString]): Find documents similar to the list of input documents. [optional]
             collapse (str, none_type): Field on which to collapse results. [optional] if omitted the server will use the default value of "uid"

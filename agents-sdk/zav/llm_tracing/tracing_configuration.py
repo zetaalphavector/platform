@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Optional
 
 from zav.encryption.pydantic import EncryptedStr
-from zav.pydantic_compat import BaseModel, Field, PrivateAttr
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, Field, PrivateAttr
 
 from zav.llm_tracing.local_trace_store import LocalTraceStore
 
@@ -77,5 +77,9 @@ class TracingConfiguration(BaseModel):
         default_factory=TracingVendorConfiguration
     )
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+
+        class Config:
+            orm_mode = True

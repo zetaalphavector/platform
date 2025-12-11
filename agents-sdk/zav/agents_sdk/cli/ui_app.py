@@ -15,11 +15,13 @@ from zav.agents_sdk import (
     AgentSetupRetrieverFromFile,
     ChatMessage,
     ChatMessageSender,
+    ContentPart,
     ContentPartTool,
     ConversationContext,
     CustomContext,
     CustomContextItem,
     DocumentContext,
+    TagContext,
 )
 from zav.agents_sdk.adapters import AgentDependencyRegistry
 from zav.agents_sdk.adapters.local_agent_registries_factory import (
@@ -409,30 +411,21 @@ def render_chat_configuration_item(
 
             st.subheader("Conversation context")
             cc = chat_configuration_item.conversation_context
-            if cc and cc.document_context:
-                st.caption("Document IDs")
-                st.json(
-                    json.dumps(
-                        (
-                            cc.document_context.document_ids
-                            if cc and cc.document_context
-                            else []
-                        ),
-                        indent=2,
-                    )
-                )
-                st.caption("Retrieval unit")
-                st.text(
-                    cc.document_context.retrieval_unit
-                    if cc and cc.document_context
-                    else None
-                )
-            elif cc and cc.custom_context:
-                st.caption("Custom context items")
-                if PYDANTIC_V2:
-                    st.json(cc.custom_context.model_dump_json(indent=2))
-                else:
-                    st.json(cc.custom_context.json(indent=2))
+            if cc:
+                if cc.tag_context:
+                    st.caption("Tag IDs")
+                    st.json(json.dumps(cc.tag_context.tag_ids, indent=2))
+                if cc.document_context:
+                    st.caption("Document IDs")
+                    st.json(json.dumps(cc.document_context.document_ids, indent=2))
+                    st.caption("Retrieval unit")
+                    st.text(cc.document_context.retrieval_unit)
+                if cc.custom_context:
+                    st.caption("Custom context items")
+                    if PYDANTIC_V2:
+                        st.json(cc.custom_context.model_dump_json(indent=2))
+                    else:
+                        st.json(cc.custom_context.json(indent=2))
 
 
 def render_chat_message_item(
@@ -645,34 +638,98 @@ with st.sidebar:
 
     conversation_context: Optional[ConversationContext] = None
     with st.expander("Conversation context"):
+        st.caption("Tag context")
+        sel_tag_ids = st.text_area(
+            "Tag IDs",
+            json.dumps([], indent=2),
+            help="List of tag IDs to use as context",
+        )
+
         st.caption("Document context")
-        sel_document_ids = st.text_area("Document IDs", json.dumps([], indent=2))
+        sel_document_ids = st.text_area(
+            "Document IDs",
+            json.dumps([], indent=2),
+            help="Can be combined with tag context",
+        )
         sel_retrieval_unit = st.text_input("Retrieval unit")
 
         st.caption("Custom context")
-        sel_custom_context_items = st.text_area("Items", json.dumps([], indent=2))
+        sel_custom_context_items = st.text_area(
+            "Items",
+            json.dumps([], indent=2),
+            help="Can be combined with tag context (mutually exclusive with document context)",  # noqa: E501
+        )
 
-    if sel_document_ids and sel_retrieval_unit:
-        conversation_context = ConversationContext(
-            document_context=DocumentContext(
-                document_ids=json.loads(sel_document_ids),
+    # Build conversation context based on selections
+    tag_context = None
+    document_context = None
+    custom_context = None
+
+    try:
+        tag_ids_list = json.loads(sel_tag_ids) if sel_tag_ids else []
+        if tag_ids_list:
+            tag_context = TagContext(tag_ids=tag_ids_list)
+    except json.JSONDecodeError:
+        st.error("Invalid JSON in Tag IDs")
+
+    try:
+        doc_ids_list = json.loads(sel_document_ids) if sel_document_ids else []
+        if doc_ids_list and sel_retrieval_unit:
+            document_context = DocumentContext(
+                document_ids=doc_ids_list,
                 retrieval_unit=sel_retrieval_unit,
             )
+    except json.JSONDecodeError:
+        st.error("Invalid JSON in Document IDs")
+
+    try:
+        custom_items_list = (
+            json.loads(sel_custom_context_items) if sel_custom_context_items else []
         )
-    elif sel_custom_context_items:
-        conversation_context = ConversationContext(
-            custom_context=CustomContext(
-                items=[
-                    CustomContextItem(**item)
-                    for item in json.loads(sel_custom_context_items)
-                ]
+        if custom_items_list:
+            custom_context = CustomContext(
+                items=[CustomContextItem(**item) for item in custom_items_list]
             )
+    except (json.JSONDecodeError, TypeError) as e:
+        st.error(f"Invalid JSON in Custom Context Items: {e}")
+
+    if tag_context or document_context or custom_context:
+        conversation_context = ConversationContext(
+            tag_context=tag_context,
+            document_context=document_context,
+            custom_context=custom_context,
         )
+    else:
+        conversation_context = None
+
     st.session_state.conversation_context = conversation_context
 
     with st.expander("UI configuration"):
         sel_print_debug_logs = st.toggle("Show debug logs", value=True)
         sel_streaming_mode = st.toggle("Streaming mode", value=True)
+
+    with st.expander("Conversation context for next message", expanded=False):
+        st.caption("Leave empty to use Agent Instance level context")
+
+        st.text_area(
+            "Tag IDs (per message)",
+            help="Add tag context for this message only",
+            key="msg_tag_ids",
+        )
+        st.text_area(
+            "Document IDs (per message)",
+            help="Add document context for this message only",
+            key="msg_document_ids",
+        )
+        st.text_input(
+            "Retrieval unit (per message)",
+            key="msg_retrieval_unit",
+        )
+        st.text_area(
+            "Custom context items (per message)",
+            help="Add custom context for this message only",
+            key="msg_custom_context_items",
+        )
 
     if agent_setup:
         if sel_agent_configuration:
@@ -712,7 +769,9 @@ with st.sidebar:
         )
 
 
-if "agent_identifier" not in st.session_state or "agent_setup" not in st.session_state:
+if (  # noqa: C901
+    "agent_identifier" not in st.session_state or "agent_setup" not in st.session_state
+):
     st.toast("Please select an agent")
 else:
     if "entries" not in st.session_state:
@@ -726,7 +785,66 @@ else:
             streaming_mode=sel_streaming_mode,
         )
 
-    if content := st.chat_input("What is up?"):
+    def clear_per_message_context():
+        """Callback to clear per-message context after sending."""
+        # Per-message context
+        msg_tag_ids = st.session_state.get("msg_tag_ids", "")
+        msg_document_ids = st.session_state.get("msg_document_ids", "")
+        msg_retrieval_unit = st.session_state.get("msg_retrieval_unit", "")
+        msg_custom_context_items = st.session_state.get("msg_custom_context_items", "")
+        # Build per-message context if provided
+        st.session_state.message_context = None
+        if any([msg_tag_ids, msg_document_ids, msg_custom_context_items]):
+            msg_tag_ctx = None
+            msg_doc_ctx = None
+            msg_custom_ctx = None
+
+            try:
+                if msg_tag_ids:
+                    msg_tag_list = json.loads(msg_tag_ids)
+                    if msg_tag_list:
+                        msg_tag_ctx = TagContext(tag_ids=msg_tag_list)
+            except json.JSONDecodeError:
+                st.error("Invalid JSON in per-message Tag IDs")
+
+            try:
+                if msg_document_ids:
+                    msg_doc_list = json.loads(msg_document_ids)
+                    if msg_doc_list and msg_retrieval_unit:
+                        msg_doc_ctx = DocumentContext(
+                            document_ids=msg_doc_list,
+                            retrieval_unit=msg_retrieval_unit,
+                        )
+            except json.JSONDecodeError:
+                st.error("Invalid JSON in per-message Document IDs")
+
+            try:
+                if msg_custom_context_items:
+                    msg_custom_list = json.loads(msg_custom_context_items)
+                    if msg_custom_list:
+                        msg_custom_ctx = CustomContext(
+                            items=[
+                                CustomContextItem(**item) for item in msg_custom_list
+                            ]
+                        )
+            except (json.JSONDecodeError, TypeError) as e:
+                st.error(f"Invalid JSON in per-message Custom Context: {e}")
+
+            if msg_tag_ctx or msg_doc_ctx or msg_custom_ctx:
+                st.session_state.message_context = ConversationContext(
+                    tag_context=msg_tag_ctx,
+                    document_context=msg_doc_ctx,
+                    custom_context=msg_custom_ctx,
+                )
+
+        st.session_state.msg_tag_ids = ""
+        st.session_state.msg_document_ids = ""
+        st.session_state.msg_retrieval_unit = ""
+        st.session_state.msg_custom_context_items = ""
+
+    if content := st.chat_input(
+        "What is up?", accept_file="multiple", on_submit=clear_per_message_context
+    ):
         chat_configuration_item = ChatConfigurationItem(
             agent_identifier=st.session_state.agent_identifier,
             agent_setup=st.session_state.agent_setup,
@@ -747,13 +865,40 @@ else:
                 print_debug_logs=sel_print_debug_logs,
                 streaming_mode=sel_streaming_mode,
             )
+
+        # Build content_parts for the user message
+        content_parts = []
+
+        if st.session_state.message_context:
+            content_parts.append(
+                ContentPart(type="context", context=st.session_state.message_context)
+            )
+
+        # Always add text content
+        content_parts.append(ContentPart(type="text", text=content.text))
+
+        # Handle file attachments (only images for now)
+        image_uri: Optional[str] = None
+        if content.files:
+            for file in content.files:
+                # Check if file is an image
+                if file.type and file.type.startswith("image/"):
+                    # Read file bytes and convert to base64 data URL
+                    file_bytes = file.read()
+                    encoded = base64.b64encode(file_bytes).decode("utf-8")
+                    image_uri = f"data:{file.type};base64,{encoded}"
+                else:
+                    # TODO
+                    pass
         render_entry(
             entries=st.session_state.entries,
             entry=ChatEntry.from_message(
                 ChatMessageItem(
                     message=ChatMessage(
                         sender=ChatMessageSender.USER,
-                        content=content,
+                        content=content.text,
+                        content_parts=content_parts,
+                        image_uri=image_uri,
                     )
                 )
             ),
@@ -767,7 +912,7 @@ else:
                 message_bus=message_bus,
                 chat_configuration_item=chat_configuration_item,
             ),
-            conversation_context=conversation_context,
+            conversation_context=st.session_state.conversation_context,
             print_debug_logs=sel_print_debug_logs,
             streaming_mode=sel_streaming_mode,
         )

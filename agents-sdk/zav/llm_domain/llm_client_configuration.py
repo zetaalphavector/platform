@@ -3,7 +3,13 @@ from typing import Literal, Optional, Union
 
 from typing_extensions import TypedDict
 from zav.encryption.pydantic import EncryptedStr
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel, Field, root_validator
+from zav.pydantic_compat import (
+    PYDANTIC_V2,
+    BaseModel,
+    ConfigDict,
+    Field,
+    root_validator,
+)
 
 
 class LLMModelType(str, Enum):
@@ -142,5 +148,9 @@ class LLMClientConfiguration(BaseModel):
             ),
         )
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+
+        class Config:
+            orm_mode = True
