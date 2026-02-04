@@ -71,6 +71,7 @@ class ChatCompletionSender(str, enum.Enum):
     FUNCTION = "function"
     TOOL = "tool"
     DEVELOPER = "developer"
+    SYSTEM = "system"
 
 
 class ChatCompletion(BaseModel):

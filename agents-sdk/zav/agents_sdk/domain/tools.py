@@ -1,6 +1,16 @@
 import copy
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
@@ -126,6 +136,27 @@ def _get_pydantic_model_schema(model: BaseModel):
 def _get_json_type(typ):
     """Translate Python types to JSON Schema types"""
     origin = get_origin(typ)
+
+    # Handle Annotated types
+    if origin is Annotated:
+        args = get_args(typ)
+        if args:
+            # First arg is the actual type
+            actual_type = args[0]
+            # Extract metadata (like FieldInfo)
+            metadata = args[1:] if len(args) > 1 else []
+
+            # Get the base schema from the actual type
+            schema = _get_json_type(actual_type)
+
+            # Extract description from FieldInfo if present
+            for meta in metadata:
+                if hasattr(meta, "description") and meta.description:
+                    schema["description"] = meta.description
+                    break
+
+            return schema
+
     # Handle Pydantic models (any class with __fields__ and schema())
     if isinstance(typ, type) and hasattr(typ, "__fields__") and hasattr(typ, "schema"):
         return _get_pydantic_model_schema(typ)

@@ -38,6 +38,7 @@ class ChatMessageSender(str, enum.Enum):
     FUNCTION = "function"
     TOOL = "tool"
     DEVELOPER = "developer"
+    SYSTEM = "system"
 
 
 class FunctionCallRequest(BaseModel):

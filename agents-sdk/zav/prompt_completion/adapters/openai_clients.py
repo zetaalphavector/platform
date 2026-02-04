@@ -370,6 +370,7 @@ class OpenAiChatClient(ChatCompletionClient):
         ChatMessageSender.FUNCTION: "function",
         ChatMessageSender.TOOL: "tool",
         ChatMessageSender.DEVELOPER: "developer",
+        ChatMessageSender.SYSTEM: "system",
     }
     __ROLE_TO_SENDER = {
         "assistant": ChatMessageSender.BOT,
@@ -837,6 +838,7 @@ class OpenAiChatClient(ChatCompletionClient):
                 if message.sender in [
                     ChatMessageSender.BOT,
                     ChatMessageSender.DEVELOPER,
+                    ChatMessageSender.SYSTEM,
                 ]:
                     messages.append(
                         {

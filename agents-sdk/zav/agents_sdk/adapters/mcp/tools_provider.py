@@ -154,7 +154,7 @@ class MCPConfiguration(BaseModel):
     convert_schemas_to_strict: bool = Field(
         False, description="Convert input schemas to strict JSON Schema."
     )
-    servers: List[MCPServerConfig]
+    servers: List[MCPServerConfig] = Field(default_factory=list)
     tool_streaming: Optional[Dict[str, ToolStreamingConfig]] = Field(
         default=None,
         description="Optional mapping of tool names to streaming configurations. "
@@ -294,7 +294,9 @@ class MCPToolsProvider:
                         items = result.content or []
                         if len(items) == 1:
                             return items[0].model_dump_json()
-                        return json.dumps([item.model_dump() for item in items])
+                        return json.dumps(
+                            {"parts": [item.model_dump(mode="json") for item in items]}
+                        )
 
                     return invoke
 
