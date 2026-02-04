@@ -39,7 +39,15 @@ from zav.agents_sdk.domain.chat_message import (
 from zav.agents_sdk.domain.chat_request import ConversationContext
 from zav.agents_sdk.domain.request_headers import RequestHeaders
 from zav.agents_sdk.domain.table import Table
-from zav.agents_sdk.domain.tools import Tool, ToolsRegistry
+from zav.agents_sdk.domain.tools import (
+    Tool,
+    ToolsRegistry,
+    ToolStreamingConfig,
+    exclude_fields,
+    hide_response,
+    include_fields,
+    streamable,
+)
 from zav.agents_sdk.setup_app import setup_app
 
 __all__ = [
@@ -78,4 +86,9 @@ __all__ = [
     "ContentPartTool",
     "Tool",
     "ToolsRegistry",
+    "ToolStreamingConfig",
+    "exclude_fields",
+    "hide_response",
+    "include_fields",
+    "streamable",
 ]

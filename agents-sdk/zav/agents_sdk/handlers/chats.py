@@ -83,6 +83,7 @@ async def handle_create(
         publish_event=lambda agent_event: push_event_to_queue(
             cmd, agent_event, event_publisher
         ),
+        message_id=cmd.message_id,
     )
     chat_agent = await chat_agent_factory.create(
         agent_identifier=cmd.chat_request.agent_identifier,
@@ -183,6 +184,7 @@ async def handle_create_stream(
         publish_event=lambda agent_event: push_event_to_queue(
             cmd, agent_event, event_publisher
         ),
+        message_id=cmd.message_id,
     )
 
     chat_agent = await chat_agent_factory.create_streamable(

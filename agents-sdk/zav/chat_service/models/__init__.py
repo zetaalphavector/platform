@@ -37,7 +37,8 @@ from zav.chat_service.model.function_spec import FunctionSpec
 from zav.chat_service.model.generate_recommendations_form import GenerateRecommendationsForm
 from zav.chat_service.model.http_validation_error import HTTPValidationError
 from zav.chat_service.model.hour_frequency import HourFrequency
-from zav.chat_service.model.minute_frequency import MinuteFrequency
+from zav.chat_service.model.judgement import Judgement
+from zav.chat_service.model.message_feedback_form import MessageFeedbackForm
 from zav.chat_service.model.monthly_frequency import MonthlyFrequency
 from zav.chat_service.model.one_time_schedule_config import OneTimeScheduleConfig
 from zav.chat_service.model.org_sharing_policy import OrgSharingPolicy
@@ -52,11 +53,13 @@ from zav.chat_service.model.scheduled_agent_task_form import ScheduledAgentTaskF
 from zav.chat_service.model.scheduled_agent_task_item import ScheduledAgentTaskItem
 from zav.chat_service.model.scheduled_agent_task_patch import ScheduledAgentTaskPatch
 from zav.chat_service.model.sharing_policy import SharingPolicy
+from zav.chat_service.model.sharing_policy_with_notify import SharingPolicyWithNotify
 from zav.chat_service.model.tag_context import TagContext
 from zav.chat_service.model.user_agent_form import UserAgentForm
 from zav.chat_service.model.user_agent_item import UserAgentItem
 from zav.chat_service.model.user_agent_landing_page_patch import UserAgentLandingPagePatch
 from zav.chat_service.model.user_agent_patch import UserAgentPatch
 from zav.chat_service.model.user_sharing_policy import UserSharingPolicy
+from zav.chat_service.model.user_sharing_policy_with_notify import UserSharingPolicyWithNotify
 from zav.chat_service.model.validation_error import ValidationError
 from zav.chat_service.model.weekly_frequency import WeeklyFrequency

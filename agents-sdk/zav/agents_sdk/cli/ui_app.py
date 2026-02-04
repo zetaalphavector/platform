@@ -184,21 +184,31 @@ def render_tool_content(tool: ContentPartTool):
                 f" Found - {tool.response.get('number_of_relevant_hits_found', 0)}"
                 " relevant docs"
             )
+    else:
+        msg = f"Running {tool.name}..."
+        if tool.status == "completed":
+            msg = f"Completed {tool.name}"
+        elif tool.status == "error":
+            msg = f"Error in {tool.name}"
     return msg
 
 
 def render_chat_message_item_content(st_elem, content: ChatMessage):
-    parsed_content = ""
+    parsed_parts = []
+    has_text_content_part = False
     if content.content_parts is not None:
         for content_part in content.content_parts:
             if content_part.type == "tool" and content_part.tool:
-                parsed_content = render_tool_content(content_part.tool)
+                parsed_parts.append(render_tool_content(content_part.tool))
             elif content_part.type == "text" and content_part.text:
-                parsed_content = content_part.text
+                parsed_parts.append(content_part.text)
+                has_text_content_part = True
             elif content_part.type == "table":
-                parsed_content = content.content
-    else:
-        parsed_content = content.content
+                parsed_parts.append(content.content)
+                has_text_content_part = True
+    if content.content and not has_text_content_part:
+        parsed_parts.append(content.content)
+    parsed_content = "\n\n".join(parsed_parts) if parsed_parts else ""
     if content.evidences:
         seen_evidences = set()
         for evidence in content.evidences:

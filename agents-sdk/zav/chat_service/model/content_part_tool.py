@@ -55,6 +55,11 @@ class ContentPartTool(ModelNormal):
     """
 
     allowed_values = {
+        ('status',): {
+            'RUNNING': "running",
+            'COMPLETED': "completed",
+            'ERROR': "error",
+        },
     }
 
     validations = {
@@ -82,8 +87,11 @@ class ContentPartTool(ModelNormal):
         """
         return {
             'name': (str,),  # noqa: E501
+            'tool_call_id': (str,),  # noqa: E501
+            'display_text': (str,),  # noqa: E501
             'params': ({str: (bool, date, datetime, dict, float, int, list, str, none_type)},),  # noqa: E501
             'response': ({str: (bool, date, datetime, dict, float, int, list, str, none_type)},),  # noqa: E501
+            'status': (str,),  # noqa: E501
         }
 
     @cached_property
@@ -93,8 +101,11 @@ class ContentPartTool(ModelNormal):
 
     attribute_map = {
         'name': 'name',  # noqa: E501
+        'tool_call_id': 'tool_call_id',  # noqa: E501
+        'display_text': 'display_text',  # noqa: E501
         'params': 'params',  # noqa: E501
         'response': 'response',  # noqa: E501
+        'status': 'status',  # noqa: E501
     }
 
     read_only_vars = {
@@ -104,11 +115,12 @@ class ContentPartTool(ModelNormal):
 
     @classmethod
     @convert_js_args_to_python_args
-    def _from_openapi_data(cls, name, *args, **kwargs):  # noqa: E501
+    def _from_openapi_data(cls, name, tool_call_id, *args, **kwargs):  # noqa: E501
         """ContentPartTool - a model defined in OpenAPI
 
         Args:
             name (str):
+            tool_call_id (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -141,8 +153,10 @@ class ContentPartTool(ModelNormal):
                                 Animal class but this time we won't travel
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
+            display_text (str): [optional]  # noqa: E501
             params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
             response ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
+            status (str): An enumeration.. [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -171,6 +185,7 @@ class ContentPartTool(ModelNormal):
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
         self.name = name
+        self.tool_call_id = tool_call_id
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \
@@ -191,11 +206,12 @@ class ContentPartTool(ModelNormal):
     ])
 
     @convert_js_args_to_python_args
-    def __init__(self, name, *args, **kwargs):  # noqa: E501
+    def __init__(self, name, tool_call_id, *args, **kwargs):  # noqa: E501
         """ContentPartTool - a model defined in OpenAPI
 
         Args:
             name (str):
+            tool_call_id (str):
 
         Keyword Args:
             _check_type (bool): if True, values for parameters in openapi_types
@@ -228,8 +244,10 @@ class ContentPartTool(ModelNormal):
                                 Animal class but this time we won't travel
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
+            display_text (str): [optional]  # noqa: E501
             params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
             response ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
+            status (str): An enumeration.. [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -256,6 +274,7 @@ class ContentPartTool(ModelNormal):
         self._visited_composed_classes = _visited_composed_classes + (self.__class__,)
 
         self.name = name
+        self.tool_call_id = tool_call_id
         for var_name, var_value in kwargs.items():
             if var_name not in self.attribute_map and \
                         self._configuration is not None and \

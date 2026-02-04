@@ -255,6 +255,7 @@ class ControllersFactory:
                 var = responses["response_model"](
                     count=total, results=results, page=page, page_size=page_size
                 )
+                return var
             return None
 
     def __update_mixin(self, crud_mixin: CrudMixin, command_cls: Type[Command]):

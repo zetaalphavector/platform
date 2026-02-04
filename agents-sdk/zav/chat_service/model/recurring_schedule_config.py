@@ -32,12 +32,10 @@ from zav.chat_service.exceptions import ApiAttributeError
 def lazy_import():
     from zav.chat_service.model.daily_frequency import DailyFrequency
     from zav.chat_service.model.hour_frequency import HourFrequency
-    from zav.chat_service.model.minute_frequency import MinuteFrequency
     from zav.chat_service.model.monthly_frequency import MonthlyFrequency
     from zav.chat_service.model.weekly_frequency import WeeklyFrequency
     globals()['DailyFrequency'] = DailyFrequency
     globals()['HourFrequency'] = HourFrequency
-    globals()['MinuteFrequency'] = MinuteFrequency
     globals()['MonthlyFrequency'] = MonthlyFrequency
     globals()['WeeklyFrequency'] = WeeklyFrequency
 
@@ -108,7 +106,6 @@ class RecurringScheduleConfig(ModelNormal):
             'start_date': (str,),  # noqa: E501
             'daily': (DailyFrequency,),  # noqa: E501
             'end_date': (str,),  # noqa: E501
-            'every_minute': (MinuteFrequency,),  # noqa: E501
             'hourly': (HourFrequency,),  # noqa: E501
             'monthly': (MonthlyFrequency,),  # noqa: E501
             'weekly': (WeeklyFrequency,),  # noqa: E501
@@ -123,7 +120,6 @@ class RecurringScheduleConfig(ModelNormal):
         'start_date': 'start_date',  # noqa: E501
         'daily': 'daily',  # noqa: E501
         'end_date': 'end_date',  # noqa: E501
-        'every_minute': 'every_minute',  # noqa: E501
         'hourly': 'hourly',  # noqa: E501
         'monthly': 'monthly',  # noqa: E501
         'weekly': 'weekly',  # noqa: E501
@@ -175,7 +171,6 @@ class RecurringScheduleConfig(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             daily (DailyFrequency): [optional]  # noqa: E501
             end_date (str): Optional ISO date (YYYY-MM-DD) in user's timezone. [optional]  # noqa: E501
-            every_minute (MinuteFrequency): [optional]  # noqa: E501
             hourly (HourFrequency): [optional]  # noqa: E501
             monthly (MonthlyFrequency): [optional]  # noqa: E501
             weekly (WeeklyFrequency): [optional]  # noqa: E501
@@ -266,7 +261,6 @@ class RecurringScheduleConfig(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             daily (DailyFrequency): [optional]  # noqa: E501
             end_date (str): Optional ISO date (YYYY-MM-DD) in user's timezone. [optional]  # noqa: E501
-            every_minute (MinuteFrequency): [optional]  # noqa: E501
             hourly (HourFrequency): [optional]  # noqa: E501
             monthly (MonthlyFrequency): [optional]  # noqa: E501
             weekly (WeeklyFrequency): [optional]  # noqa: E501

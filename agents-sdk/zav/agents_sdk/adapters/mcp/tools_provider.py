@@ -16,7 +16,7 @@ from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.adapters.mcp.strict_schema import ensure_strict_json_schema
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.tools import Tool
+from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
 
 
 class InMemoryTokenStorage(TokenStorage):
@@ -155,6 +155,12 @@ class MCPConfiguration(BaseModel):
         False, description="Convert input schemas to strict JSON Schema."
     )
     servers: List[MCPServerConfig]
+    tool_streaming: Optional[Dict[str, ToolStreamingConfig]] = Field(
+        default=None,
+        description="Optional mapping of tool names to streaming configurations. "
+        "If not provided, tools not in this mapping get auto-generated streaming text. "
+        "If provided, only tools in this mapping get streamed.",
+    )
 
 
 class MCPToolsProvider:
@@ -294,12 +300,22 @@ class MCPToolsProvider:
 
                 invoke_fn = make_invoke(self.__session_map[server_name], mcp_tool)
 
+                streaming_config: ToolStreamingConfig | None = None
+                if self.__config.tool_streaming is None:
+                    streaming_config = ToolStreamingConfig(
+                        running_text=f"Running {mcp_tool.name}...",
+                        completed_text=f"Completed {mcp_tool.name}",
+                    )
+                else:
+                    streaming_config = self.__config.tool_streaming.get(mcp_tool.name)
+
                 tools.append(
                     Tool(
                         name=mcp_tool.name,
                         description=mcp_tool.description or "",
                         executable=invoke_fn,
                         parameters_spec=schema,
+                        streaming_config=streaming_config,
                     )
                 )
         return tools
