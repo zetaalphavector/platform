@@ -1,5 +1,16 @@
 import enum
-from typing import AsyncIterator, Callable, Dict, List, Optional, Tuple, Union, overload
+import json
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    overload,
+)
 
 from typing_extensions import Literal
 from zav.llm_domain import LLMClientConfiguration
@@ -21,8 +32,22 @@ from zav.prompt_completion import ToolCallResponse as PcToolCallResponse
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.chat_message import ChatMessage, FunctionCallRequest
-from zav.agents_sdk.domain.tools import ToolsRegistry
+from zav.agents_sdk.domain.chat_message import (
+    ChatMessage,
+)
+from zav.agents_sdk.domain.chat_message import (
+    ChatMessageSender as AgentChatMessageSender,
+)
+from zav.agents_sdk.domain.chat_message import (
+    ContentPart,
+    ContentPartTool,
+    FunctionCallRequest,
+)
+from zav.agents_sdk.domain.tools import (
+    ToolsRegistry,
+    apply_transform,
+    format_display_text,
+)
 
 
 class ToolCallRequest(BaseModel):
@@ -46,6 +71,7 @@ class ChatCompletionSender(str, enum.Enum):
     FUNCTION = "function"
     TOOL = "tool"
     DEVELOPER = "developer"
+    SYSTEM = "system"
 
 
 class ChatCompletion(BaseModel):
@@ -90,6 +116,7 @@ class ChatCompletion(BaseModel):
 class ChatResponse(BaseModel):
     error: Optional[Exception] = None
     chat_completion: Optional[ChatCompletion] = None
+    tool_events: List[ContentPartTool] = []
 
     if PYDANTIC_V2:
         model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -97,6 +124,34 @@ class ChatResponse(BaseModel):
 
         class Config:
             arbitrary_types_allowed = True
+
+    def to_chat_message(self) -> Optional[ChatMessage]:
+        tool_content_parts = [
+            ContentPart(type="tool", tool=event) for event in self.tool_events
+        ]
+
+        if self.chat_completion is None:
+            if not tool_content_parts:
+                return None
+            return ChatMessage(
+                sender=AgentChatMessageSender.BOT,
+                content="",
+                content_parts=tool_content_parts,
+            )
+
+        if self.chat_completion.sender == ChatCompletionSender.TOOL:
+            if not tool_content_parts:
+                return None
+            return ChatMessage(
+                sender=AgentChatMessageSender.BOT,
+                content="",
+                content_parts=tool_content_parts,
+            )
+
+        message = ChatMessage.model_validate(self.chat_completion)
+        if tool_content_parts:
+            message.content_parts = tool_content_parts
+        return message
 
 
 def parse_chat_message(message: Union[ChatMessage, ChatCompletion]) -> PcChatMessage:
@@ -155,14 +210,81 @@ def parse_chat_message(message: Union[ChatMessage, ChatCompletion]) -> PcChatMes
 ShouldReturnToUser = bool
 
 
+def _parse_result_dict(exec_response: Any) -> Optional[dict]:
+    if isinstance(exec_response, dict):
+        return exec_response
+    if isinstance(exec_response, str):
+        try:
+            return json.loads(exec_response)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return None
+
+
 async def execute_tool_call_request(
     tools_registry: ToolsRegistry,
     tool_call_requests: Optional[List[ToolCallRequest]] = None,
+    tool_choice: Optional[str] = None,
     log_fn: Optional[Callable] = None,
     span: Optional[Span] = None,
 ) -> Tuple[Optional[ChatCompletion], ShouldReturnToUser]:
+
+    tool_completion = None
+    should_return_to_user = False
+
+    async for event in execute_tool_call_request_streaming(
+        tools_registry=tools_registry,
+        tool_call_requests=tool_call_requests,
+        tool_choice=tool_choice,
+        log_fn=log_fn,
+        span=span,
+    ):
+        # Ignore ContentPartTool events in non-streaming mode
+        if isinstance(event, tuple):
+            tool_completion, should_return_to_user = event
+            return tool_completion, should_return_to_user
+
+    return tool_completion, should_return_to_user
+
+
+async def execute_tool_call_request_streaming(
+    tools_registry: ToolsRegistry,
+    tool_call_requests: Optional[List[ToolCallRequest]] = None,
+    tool_choice: Optional[str] = None,
+    log_fn: Optional[Callable] = None,
+    span: Optional[Span] = None,
+) -> AsyncIterator[Union[ContentPartTool, Tuple[Optional[ChatCompletion], bool]]]:
+    if tool_choice and tool_choice not in ("auto", "none") and not tool_call_requests:
+        if log_fn:
+            log_fn(
+                {f"Error: tool_choice set to {tool_choice} but no tools were called"}
+            )
+        if tool_choice == "required":
+            available_tools = ", ".join(tools_registry.tools_index.keys())
+            yield (
+                ChatCompletion(
+                    sender=ChatCompletionSender.DEVELOPER,
+                    content="You must use a tool in your response. "
+                    f"The available tools are: {available_tools}",
+                ),
+                False,
+            )
+            return
+
+        yield (
+            ChatCompletion(
+                sender=ChatCompletionSender.DEVELOPER,
+                content=f"You must use the '{tool_choice}' tool to respond. "
+                f"Please call '{tool_choice}'.",
+            ),
+            False,
+        )
+        return
+
     if not tool_call_requests:
-        return None, False
+        yield (None, False)
+        return
+
     if log_fn:
         log_fn({"Tool Call Requests": tool_call_requests})
 
@@ -170,34 +292,102 @@ async def execute_tool_call_request(
     for tool_call_request in tool_call_requests:
         tool_call_id = tool_call_request.id
         function_call_request = tool_call_request.function_call_request
+        tool_name = function_call_request.name
+        tool_params = function_call_request.params
+
+        tool = tools_registry.tools_index.get(tool_name)
+        streaming_config = tool.streaming_config if tool else None
+
+        visible_params = (
+            apply_transform(tool_params, streaming_config.params_transform)
+            if streaming_config
+            else tool_params
+        )
+
+        if streaming_config is not None:
+            yield ContentPartTool(
+                tool_call_id=tool_call_id,
+                name=tool_name,
+                params=visible_params,
+                display_text=format_display_text(
+                    streaming_config.running_text, tool_params
+                ),
+                status="running",
+            )
+
         new_span = (
             span.new(
-                name=function_call_request.name,
+                name=tool_name,
                 attributes={
                     "metadata": {"tool_call_id": tool_call_id},
-                    "input": function_call_request.params or {},
+                    "input": tool_params or {},
                 },
             )
             if span
             else None
         )
+
         try:
+            if (
+                tool_choice
+                and tool_choice not in ("auto", "none", "required")
+                and tool_name != tool_choice
+            ):
+                raise Exception(
+                    f"Error: tool_choice set to {tool_choice} "
+                    f"but {tool_name} was called. "
+                    f"{tool_choice} must be used."
+                )
+
             exec_response = await tools_registry.execute(
-                name=function_call_request.name, params=function_call_request.params
+                name=tool_name, params=tool_params
             )
             tool_response = str(exec_response)
+
             if new_span:
                 new_span.end(attributes={"output": tool_response})
+
+            if streaming_config is not None:
+                completed_text = streaming_config.completed_text or (
+                    streaming_config.running_text
+                )
+                result_dict = _parse_result_dict(exec_response)
+                visible_response = apply_transform(
+                    result_dict, streaming_config.response_transform
+                )
+                yield ContentPartTool(
+                    tool_call_id=tool_call_id,
+                    name=tool_name,
+                    params=visible_params,
+                    response=visible_response,
+                    display_text=format_display_text(
+                        completed_text, tool_params, result_dict
+                    ),
+                    status="completed",
+                )
+
             if isinstance(exec_response, ChatCompletion):
-                return exec_response, True
+                yield (exec_response, True)
+                return
 
             tool_outputs.append({"id": tool_call_id, "response": tool_response})
+
         except ValueError as ve:
             str_value_err = str(ve)
             tool_outputs.append({"id": tool_call_id, "response": str_value_err})
             if new_span:
                 new_span.end(attributes={"output": str_value_err})
+
+            if streaming_config is not None:
+                yield ContentPartTool(
+                    tool_call_id=tool_call_id,
+                    name=tool_name,
+                    params=visible_params,
+                    display_text=None,
+                    status="error",
+                )
             continue
+
         except Exception as e:
             str_err = str(e)
             if log_fn:
@@ -206,7 +396,16 @@ async def execute_tool_call_request(
                 new_span.end(attributes={"output": str_err})
             tool_outputs.append({"id": tool_call_id, "response": str_err})
 
-    return (
+            if streaming_config is not None:
+                yield ContentPartTool(
+                    tool_call_id=tool_call_id,
+                    name=tool_name,
+                    params=visible_params,
+                    display_text=None,
+                    status="error",
+                )
+
+    yield (
         ChatCompletion(
             sender=ChatCompletionSender.TOOL,
             content="",
@@ -244,6 +443,7 @@ class ZAVChatCompletionClient:
         stream: Literal[False] = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
         reasoning_effort: Optional[str] = None,
@@ -266,6 +466,7 @@ class ZAVChatCompletionClient:
         stream: Literal[True] = True,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
         reasoning_effort: Optional[str] = None,
@@ -288,6 +489,7 @@ class ZAVChatCompletionClient:
         stream: bool = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
         reasoning_effort: Optional[str] = None,
@@ -309,6 +511,7 @@ class ZAVChatCompletionClient:
         stream: Union[Literal[True, False], bool] = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 20,
         reasoning_effort: Optional[str] = None,
@@ -381,30 +584,62 @@ class ZAVChatCompletionClient:
             request=req, stream=stream
         )
         if isinstance(chat_response, AsyncIterator):
+            tool_events_by_id: Dict[str, ContentPartTool] = {}
 
             async def stream_response_chunks(chat_response):
                 async for chat_response_chunk in chat_response:
                     response = self.__convert(chat_response_chunk)
                     if stream_tool_calls:
-                        yield response
-                    tool_completion, should_return_to_user = (
-                        await execute_tool_call_request(
-                            tools_registry=tools,
-                            tool_call_requests=response.chat_completion.tool_call_requests,  # noqa: E501
-                            log_fn=log_fn,
-                            span=self.__span,
+                        yield ChatResponse(
+                            error=response.error,
+                            chat_completion=response.chat_completion,
+                            tool_events=list(tool_events_by_id.values()),
                         )
-                        if (
-                            response.chat_completion
-                            and execute_tools
-                            and isinstance(tools, ToolsRegistry)
-                        )
-                        else (None, False)
-                    )
+
+                    tool_completion: Optional[ChatCompletion] = None
+                    should_return_to_user = False
+
+                    if (
+                        response.chat_completion
+                        and execute_tools
+                        and isinstance(tools, ToolsRegistry)
+                        and response.chat_completion.tool_call_requests
+                    ):
+                        if stream_tool_events:
+                            async for event in execute_tool_call_request_streaming(
+                                tools_registry=tools,
+                                tool_call_requests=(
+                                    response.chat_completion.tool_call_requests
+                                ),
+                                tool_choice=tool_choice,
+                                log_fn=log_fn,
+                                span=self.__span,
+                            ):
+                                if isinstance(event, ContentPartTool):
+                                    tool_events_by_id[event.tool_call_id] = event
+                                    yield ChatResponse(
+                                        tool_events=list(tool_events_by_id.values())
+                                    )
+                                else:
+                                    tool_completion, should_return_to_user = event
+                        else:
+                            tool_completion, should_return_to_user = (
+                                await execute_tool_call_request(
+                                    tools_registry=tools,
+                                    tool_call_requests=(
+                                        response.chat_completion.tool_call_requests
+                                    ),
+                                    tool_choice=tool_choice,
+                                    log_fn=log_fn,
+                                    span=self.__span,
+                                )
+                            )
+
                     if tool_completion and stream_tool_calls:
                         yield ChatResponse(
                             error=None,
                             chat_completion=tool_completion,
+                            tool_events=list(tool_events_by_id.values()),
                         )
 
                     if should_return_to_user:
@@ -422,6 +657,7 @@ class ZAVChatCompletionClient:
                         stream=True,
                         execute_tools=execute_tools,
                         stream_tool_calls=stream_tool_calls,
+                        stream_tool_events=stream_tool_events,
                         log_fn=log_fn,
                         max_nesting_level=max_nesting_level,
                         reasoning_effort=reasoning_effort,
@@ -432,9 +668,21 @@ class ZAVChatCompletionClient:
                     )
                     if inner_response_iterator:
                         async for inner_response in inner_response_iterator:
-                            yield inner_response
+                            # Merge tool events from inner responses
+                            if inner_response.tool_events:
+                                for te in inner_response.tool_events:
+                                    tool_events_by_id[te.tool_call_id] = te
+                            yield ChatResponse(
+                                error=inner_response.error,
+                                chat_completion=inner_response.chat_completion,
+                                tool_events=list(tool_events_by_id.values()),
+                            )
                     else:
-                        yield response
+                        yield ChatResponse(
+                            error=response.error,
+                            chat_completion=response.chat_completion,
+                            tool_events=list(tool_events_by_id.values()),
+                        )
 
             return stream_response_chunks(chat_response)
         else:
@@ -442,7 +690,8 @@ class ZAVChatCompletionClient:
             tool_completion, should_return_to_user = (
                 await execute_tool_call_request(
                     tools_registry=tools,
-                    tool_call_requests=response.chat_completion.tool_call_requests,
+                    tool_call_requests=(response.chat_completion.tool_call_requests),
+                    tool_choice=tool_choice,
                     log_fn=log_fn,
                     span=self.__span,
                 )
@@ -470,6 +719,7 @@ class ZAVChatCompletionClient:
                 stream=False,
                 execute_tools=execute_tools,
                 stream_tool_calls=stream_tool_calls,
+                stream_tool_events=stream_tool_events,
                 log_fn=log_fn,
                 max_nesting_level=max_nesting_level,
                 reasoning_effort=reasoning_effort,
@@ -564,6 +814,7 @@ class ZAVChatCompletionClient:
         stream: Literal[False] = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
         reasoning_effort: Optional[str] = None,
@@ -587,6 +838,7 @@ class ZAVChatCompletionClient:
         stream: Literal[True] = True,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
         reasoning_effort: Optional[str] = None,
@@ -610,6 +862,7 @@ class ZAVChatCompletionClient:
         stream: bool = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
         reasoning_effort: Optional[str] = None,
@@ -632,6 +885,7 @@ class ZAVChatCompletionClient:
         stream: Union[Literal[True, False], bool] = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
+        stream_tool_events: bool = False,
         log_fn: Optional[Callable] = None,
         max_nesting_level: int = 10,
         reasoning_effort: Optional[str] = None,
@@ -656,6 +910,7 @@ class ZAVChatCompletionClient:
                 stream=stream,
                 execute_tools=execute_tools,
                 stream_tool_calls=stream_tool_calls,
+                stream_tool_events=stream_tool_events,
                 log_fn=log_fn,
                 max_nesting_level=max_nesting_level - 1,
                 reasoning_effort=reasoning_effort,

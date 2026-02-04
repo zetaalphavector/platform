@@ -31,9 +31,9 @@ from zav.chat_service.exceptions import ApiAttributeError
 
 def lazy_import():
     from zav.chat_service.model.conversation_context import ConversationContext
-    from zav.chat_service.model.sharing_policy import SharingPolicy
+    from zav.chat_service.model.sharing_policy_with_notify import SharingPolicyWithNotify
     globals()['ConversationContext'] = ConversationContext
-    globals()['SharingPolicy'] = SharingPolicy
+    globals()['SharingPolicyWithNotify'] = SharingPolicyWithNotify
 
 
 class UserAgentPatch(ModelNormal):
@@ -94,7 +94,7 @@ class UserAgentPatch(ModelNormal):
             'description': (str,),  # noqa: E501
             'display_name': (str,),  # noqa: E501
             'instructions': (str,),  # noqa: E501
-            'sharing': (SharingPolicy,),  # noqa: E501
+            'sharing': (SharingPolicyWithNotify,),  # noqa: E501
         }
 
     @cached_property
@@ -157,7 +157,7 @@ class UserAgentPatch(ModelNormal):
             description (str): [optional]  # noqa: E501
             display_name (str): [optional]  # noqa: E501
             instructions (str): [optional]  # noqa: E501
-            sharing (SharingPolicy): [optional]  # noqa: E501
+            sharing (SharingPolicyWithNotify): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -244,7 +244,7 @@ class UserAgentPatch(ModelNormal):
             description (str): [optional]  # noqa: E501
             display_name (str): [optional]  # noqa: E501
             instructions (str): [optional]  # noqa: E501
-            sharing (SharingPolicy): [optional]  # noqa: E501
+            sharing (SharingPolicyWithNotify): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

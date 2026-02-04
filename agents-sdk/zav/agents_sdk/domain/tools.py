@@ -1,8 +1,102 @@
 import copy
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+    get_args,
+    get_origin,
+)
 
-from zav.pydantic_compat import BaseModel
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
+
+
+class ToolStreamingConfig(BaseModel):
+    running_text: str
+    completed_text: Optional[str] = None
+    params_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None
+    response_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None
+
+    if PYDANTIC_V2:
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+    else:
+
+        class Config:
+            arbitrary_types_allowed = True
+
+
+def streamable(
+    running_text: str,
+    completed_text: Optional[str] = None,
+    params_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None,
+    response_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None,
+):
+    def decorator(func: Callable) -> Callable:
+        setattr(
+            func,
+            "_streaming_config",
+            ToolStreamingConfig(
+                running_text=running_text,
+                completed_text=completed_text,
+                params_transform=params_transform,
+                response_transform=response_transform,
+            ),
+        )
+        return func
+
+    return decorator
+
+
+def apply_transform(
+    data: Optional[Dict],
+    transform_fn: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None,
+) -> Optional[Dict]:
+    if transform_fn is not None:
+        return transform_fn(data)
+    return data
+
+
+def hide_response(response: Optional[Dict]) -> Optional[Dict]:
+    return None
+
+
+def include_fields(*fields: str) -> Callable[[Optional[Dict]], Optional[Dict]]:
+    def transform(data: Optional[Dict]) -> Optional[Dict]:
+        if data is None:
+            return None
+        return {k: v for k, v in data.items() if k in fields}
+
+    return transform
+
+
+def exclude_fields(*fields: str) -> Callable[[Optional[Dict]], Optional[Dict]]:
+    def transform(data: Optional[Dict]) -> Optional[Dict]:
+        if data is None:
+            return None
+        return {k: v for k, v in data.items() if k not in fields}
+
+    return transform
+
+
+def format_display_text(
+    template: str,
+    tool_params: Optional[Dict[str, Any]] = None,
+    tool_result: Optional[Any] = None,
+) -> str:
+    context: Dict[str, Any] = {**(tool_params or {})}
+    if tool_result is not None and isinstance(tool_result, dict):
+        context.update(tool_result)
+
+    formatted = template
+    for key, value in context.items():
+        placeholder = f"{{{key}}}"
+        if placeholder in formatted:
+            formatted = formatted.replace(placeholder, str(value))
+    return formatted
 
 
 def _issubclass_safe(cls, classinfo):
@@ -42,6 +136,27 @@ def _get_pydantic_model_schema(model: BaseModel):
 def _get_json_type(typ):
     """Translate Python types to JSON Schema types"""
     origin = get_origin(typ)
+
+    # Handle Annotated types
+    if origin is Annotated:
+        args = get_args(typ)
+        if args:
+            # First arg is the actual type
+            actual_type = args[0]
+            # Extract metadata (like FieldInfo)
+            metadata = args[1:] if len(args) > 1 else []
+
+            # Get the base schema from the actual type
+            schema = _get_json_type(actual_type)
+
+            # Extract description from FieldInfo if present
+            for meta in metadata:
+                if hasattr(meta, "description") and meta.description:
+                    schema["description"] = meta.description
+                    break
+
+            return schema
+
     # Handle Pydantic models (any class with __fields__ and schema())
     if isinstance(typ, type) and hasattr(typ, "__fields__") and hasattr(typ, "schema"):
         return _get_pydantic_model_schema(typ)
@@ -87,6 +202,7 @@ class Tool(BaseModel):
     description: str
     executable: Callable
     parameters_spec: Optional[Dict[str, Any]] = None
+    streaming_config: Optional[ToolStreamingConfig] = None
 
     def get_parameters_spec(self) -> Dict[str, Any]:
         """Returns a JSON schema of the parameters of the tool."""
@@ -198,15 +314,21 @@ class ToolsRegistry:
         executable: Callable,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        streaming_config: Optional[ToolStreamingConfig] = None,
     ):
         qualified_name = (name or executable.__qualname__).replace(".", "_")
         description = description or inspect.getdoc(executable) or ""
+        detected_streaming_config = getattr(executable, "_streaming_config", None)
+        if not isinstance(detected_streaming_config, ToolStreamingConfig):
+            detected_streaming_config = None
+
         self.tools_index.update(
             {
                 qualified_name: Tool(
                     name=qualified_name,
                     description=description,
                     executable=executable,
+                    streaming_config=streaming_config or detected_streaming_config,
                 )
             }
         )

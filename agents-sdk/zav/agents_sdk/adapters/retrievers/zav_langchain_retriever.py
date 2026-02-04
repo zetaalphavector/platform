@@ -95,7 +95,7 @@ class ZAVLangchainStore:
         doc_ids: Optional[List[str]] = None,
         visibility: Optional[List[str]] = None,
         document_types: Optional[List[str]] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> ZAVLangchainRetriever:
         return ZAVLangchainRetriever(
             document_retriever=self.__document_retriever,
@@ -116,7 +116,7 @@ class ZAVLangchainStore:
             doc_ids=doc_ids,
             visibility=visibility,
             document_types=document_types,
-            **kwargs
+            **kwargs,
         )
 
 

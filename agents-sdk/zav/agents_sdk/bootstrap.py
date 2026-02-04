@@ -42,18 +42,10 @@ def setup_bootstrap(
     ]
     if extra_bootstrap_deps is not None:
         bootstrap_deps.extend(extra_bootstrap_deps)
-    if command_handler_registry is not None:
-        for command, handler in command_handler_registry.registry.items():
-            CommandHandlerRegistry.register(command)(handler)
-    if event_handler_registry is not None:
-        for event, handlers in event_handler_registry.registry.items():
-            # First check if the event is already registered, if so append the new
-            # handlers
-            if event in EventHandlerRegistry.registry:
-                EventHandlerRegistry.registry[event].extend(handlers)
-            else:
-                EventHandlerRegistry.register(event)(handlers)
-
+        if command_handler_registry is not None:
+            CommandHandlerRegistry.merge(command_handler_registry.registry)
+        if event_handler_registry is not None:
+            EventHandlerRegistry.merge(event_handler_registry.registry)
     return Bootstrap(
         dependencies=bootstrap_deps,
         command_handler_registry=CommandHandlerRegistry,

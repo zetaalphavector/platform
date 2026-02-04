@@ -105,6 +105,7 @@ class ChatMessage(ModelNormal):
             'function_call_response': (FunctionCallResponse,),  # noqa: E501
             'function_specs': (FunctionSpec,),  # noqa: E501
             'image_uri': (str,),  # noqa: E501
+            'message_id': (str,),  # noqa: E501
         }
 
     @cached_property
@@ -121,6 +122,7 @@ class ChatMessage(ModelNormal):
         'function_call_response': 'function_call_response',  # noqa: E501
         'function_specs': 'function_specs',  # noqa: E501
         'image_uri': 'image_uri',  # noqa: E501
+        'message_id': 'message_id',  # noqa: E501
     }
 
     read_only_vars = {
@@ -174,6 +176,7 @@ class ChatMessage(ModelNormal):
             function_call_response (FunctionCallResponse): [optional]  # noqa: E501
             function_specs (FunctionSpec): [optional]  # noqa: E501
             image_uri (str): [optional]  # noqa: E501
+            message_id (str): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -267,6 +270,7 @@ class ChatMessage(ModelNormal):
             function_call_response (FunctionCallResponse): [optional]  # noqa: E501
             function_specs (FunctionSpec): [optional]  # noqa: E501
             image_uri (str): [optional]  # noqa: E501
+            message_id (str): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

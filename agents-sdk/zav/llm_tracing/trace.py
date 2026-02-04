@@ -111,10 +111,14 @@ class Trace:
         name: str,
         attributes: Optional[Dict[str, Any]] = None,
         trace_state: Optional[Dict[str, Any]] = None,
+        trace_id: Optional[str] = None,
     ):
+        context_kwargs: Dict[str, Any] = {"trace_state": trace_state or {}}
+        if trace_id:
+            context_kwargs["trace_id"] = trace_id
         span = Span(
             name=name,
-            context=SpanContext(trace_state=trace_state or {}),
+            context=SpanContext(**context_kwargs),
             attributes=attributes or {},
             events=[],
             tracing_backend=self.tracing_backend,

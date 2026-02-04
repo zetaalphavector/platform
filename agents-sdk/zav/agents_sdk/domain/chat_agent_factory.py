@@ -49,6 +49,7 @@ def init_span(
     agent_setup: AgentSetup,
     agent_identifier: str,
     trace_state: Dict[str, Any],
+    message_id: Optional[str] = None,
 ) -> Optional[Span]:
     span: Optional[Span] = None
     if tracing_config := agent_setup.tracing_configuration:
@@ -59,6 +60,7 @@ def init_span(
                 "metadata": {"agent_identifier": agent_identifier},
             },
             trace_state=trace_state,
+            trace_id=message_id,
         )
 
     return span
@@ -90,6 +92,7 @@ class ChatAgentFactory:
         publish_event: Optional[
             Callable[[AgentEvent], Coroutine[None, None, None]]
         ] = None,
+        message_id: Optional[str] = None,
     ):
         self.__agent_setup_retriever = agent_setup_retriever
         self.__chat_agent_class_registry = chat_agent_class_registry
@@ -98,6 +101,7 @@ class ChatAgentFactory:
         self.__agent_dependency_registry = agent_dependency_registry
         self.__debug_backend = debug_backend
         self.__publish_event = publish_event
+        self.__message_id = message_id
         self.agent_setup: Optional[AgentSetup] = None
 
     async def __parse_sub_agent(
@@ -352,6 +356,7 @@ class ChatAgentFactory:
                 agent_setup=agent_setup,
                 agent_identifier=agent_identifier,
                 trace_state=self.__trace_state_params,
+                message_id=self.__message_id,
             )
         agent_cls = await self.__chat_agent_class_registry.get(
             agent_name=agent_setup.agent_name
@@ -408,6 +413,7 @@ class ChatAgentFactory:
 
         agent_instance.debug_backend = self.__debug_backend
         agent_instance.span = span
+        agent_instance.message_id = self.__message_id
 
         if self.__publish_event:
             agent_instance.publish_event = self.__publish_event

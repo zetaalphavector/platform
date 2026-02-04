@@ -2,12 +2,16 @@ from typing import Dict, Optional, Tuple, Union
 
 import httpx
 from langfuse import Langfuse
+from langfuse.api.resources.commons.types import ScoreDataType
+from langfuse.api.resources.score.types import CreateScoreRequest
 from langfuse.client import (
     StatefulGenerationClient,
     StatefulSpanClient,
     StatefulTraceClient,
 )
 
+from zav.llm_tracing.feedback import FeedbackService
+from zav.llm_tracing.feedback_service_factory import FeedbackServiceFactory
 from zav.llm_tracing.trace import Span, TracingBackend
 from zav.llm_tracing.tracing_backend_factory import TracingBackendFactory
 from zav.llm_tracing.tracing_configuration import LangfuseConfiguration
@@ -277,3 +281,71 @@ class LangfuseTracingBackend(TracingBackend):
                 }
             },
         )
+
+
+@FeedbackServiceFactory.register("langfuse")
+class LangfuseFeedbackService(FeedbackService):
+    def __init__(
+        self,
+        vendor_configuration: LangfuseConfiguration,
+        httpx_client: Optional[httpx.Client] = None,
+    ):
+        self.langfuse = LangfuseClientCache.get_client(
+            vendor_configuration, httpx_client
+        )
+
+    async def add_score(
+        self,
+        trace_id: str,
+        name: str,
+        value: Union[str, float],
+        comment: Optional[str] = None,
+    ) -> None:
+        """Add a score to a trace for user feedback.
+
+        Args:
+            trace_id: The ID of the trace to score (message_id).
+            name: Name of the score (e.g., "user_feedback").
+            value: The score value - string for CATEGORICAL, numeric for NUMERIC.
+            comment: Optional comment/feedback text.
+        """
+        if isinstance(value, str):
+            data_type = "CATEGORICAL"
+        elif isinstance(value, float):
+            data_type = "NUMERIC"
+        else:
+            raise ValueError(f"Invalid value type: {type(value)}")
+
+        # Use trace_id as score_id to ensure one score per message
+        score_id = trace_id
+
+        request = CreateScoreRequest(
+            traceId=trace_id,
+            id=score_id,
+            name=name,
+            value=value,
+            comment=comment,
+            dataType=ScoreDataType(data_type),
+        )
+
+        await self.langfuse.async_api.score.create(request=request)
+
+    async def validate_trace_ownership(
+        self,
+        trace_id: str,
+        user_id: str,
+    ) -> bool:
+        """Validate that a trace belongs to the specified user.
+
+        Args:
+            trace_id: The ID of the trace to validate.
+            user_id: The user ID to check ownership against.
+        """
+        try:
+            trace = await self.langfuse.async_api.trace.get(trace_id)
+            if not trace:
+                return False
+
+            return trace.user_id == user_id
+        except Exception:
+            return False

@@ -102,9 +102,12 @@ class ConversationContext(BaseModel):
 
 
 class ContentPartTool(BaseModel):
+    tool_call_id: str
     name: str
     params: Optional[Dict] = None
     response: Optional[Dict] = None
+    display_text: Optional[str] = None
+    status: Optional[Literal["running", "completed", "error"]] = None
 
 
 class ContentPartTable(BaseModel):
@@ -148,6 +151,7 @@ class ContentPart(BaseModel):
 class ChatMessage(BaseModel):
     sender: ChatMessageSender
     content: str
+    message_id: Optional[str] = None
     content_parts: Optional[List[ContentPart]] = None
     image_uri: Optional[str] = None
     function_call_request: Optional[FunctionCallRequest] = None

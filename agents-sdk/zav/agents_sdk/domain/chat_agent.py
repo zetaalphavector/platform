@@ -47,6 +47,8 @@ def instrument_execute(
                 )
                 self.span.end()
             raise
+        if response:
+            response.message_id = self.message_id
         if self.span:
             if response:
                 self.span.end(
@@ -89,6 +91,7 @@ def instrument_execute_streaming(
         response: Optional[ChatMessage] = None
         try:
             async for message in execute_streaming(conversation):
+                message.message_id = self.message_id
                 response = message
                 yield message
         except Exception as e:
@@ -133,6 +136,7 @@ class ChatAgent(ABC):
     agent_name: ClassVar[str]
     no_cleanup: ClassVar[bool] = False
     span: Optional[Span] = None
+    message_id: Optional[str] = None
     debug_backend: Optional[Callable[[Any], Any]] = None
     publish_event: Optional[Callable[[AgentEvent], Coroutine[None, None, None]]] = None
     __agent_identifier: Optional[str] = None
