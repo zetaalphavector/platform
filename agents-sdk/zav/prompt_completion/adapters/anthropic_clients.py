@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, overload
@@ -23,11 +24,17 @@ from zav.prompt_completion.client import (
     ChatMessageSender,
     ChatResponse,
     FunctionCallRequest,
+    PromptAnswer,
+    PromptCompletionClient,
+    PromptResponse,
     PromptTooLargeError,
     ToolCallRequest,
     ToolCallResponse,
 )
-from zav.prompt_completion.client_factories import ChatClientFactory
+from zav.prompt_completion.client_factories import (
+    ChatClientFactory,
+    PromptClientFactory,
+)
 
 
 class AnthropicToolUse(BaseModel):
@@ -100,6 +107,10 @@ def _get_tools_dict(request: ChatClientRequest) -> Dict[str, Any]:
         if isinstance(tool_choice, str):
             if tool_choice == "auto":
                 tools_dict["tool_choice"] = {"type": "auto"}
+            elif tool_choice == "none":
+                tools_dict["tool_choice"] = {"type": "none"}
+            elif tool_choice == "required":
+                tools_dict["tool_choice"] = {"type": "any"}
             else:
                 tools_dict["tool_choice"] = {"type": "tool", "name": tool_choice}
         else:
@@ -477,3 +488,59 @@ class AnthropicChatClient(ChatCompletionClient):
     ) -> "AnthropicChatClient":
         client = build_client(vendor_configuration)
         return cls(client, model_configuration, span=span)
+
+
+@PromptClientFactory.register(LLMProviderName.ANTHROPIC, LLMModelType.CHAT)
+class AnthropicChatClient2PromptClientAdapter(PromptCompletionClient):
+    def __init__(self, chat_client: AnthropicChatClient):
+        self.__chat_client = chat_client
+
+    async def complete(
+        self,
+        prompts: List[str],
+        max_tokens: int,
+    ) -> List[PromptResponse]:
+        bot_conversations = [self.__to_bot_conversation(prompt) for prompt in prompts]
+
+        chat_responses = await asyncio.gather(
+            *[
+                self.__chat_client.complete(
+                    ChatClientRequest(conversation=conversation, max_tokens=max_tokens),
+                )
+                for conversation in bot_conversations
+            ]
+        )
+        return [
+            self.__to_prompt_response(chat_response) for chat_response in chat_responses
+        ]
+
+    def __to_bot_conversation(self, prompt: str):
+        return BotConversation(
+            messages=[
+                ChatMessage(
+                    content=prompt,
+                    sender=ChatMessageSender.USER,
+                )
+            ],
+            bot_setup_description=None,
+        )
+
+    def __to_prompt_response(self, chat_response: ChatResponse) -> PromptResponse:
+        prompt_answer = (
+            PromptAnswer(text=chat.content)
+            if (chat := chat_response.chat_message)
+            else None
+        )
+        return PromptResponse(error=chat_response.error, prompt_answer=prompt_answer)
+
+    @classmethod
+    def from_configuration(
+        cls,
+        vendor_configuration: AnthropicConfiguration,
+        model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
+    ) -> "AnthropicChatClient2PromptClientAdapter":
+        chat_client = AnthropicChatClient.from_configuration(
+            vendor_configuration, model_configuration, span=span
+        )
+        return cls(chat_client=chat_client)

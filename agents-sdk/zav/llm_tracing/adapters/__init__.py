@@ -1,8 +1,8 @@
-import importlib.util
-
 from zav.llm_tracing.adapters.capture import *
 from zav.llm_tracing.feedback_service_factory import FeedbackServiceFactory
 from zav.llm_tracing.tracing_backend_factory import TracingBackendFactory
 
-if importlib.util.find_spec("langfuse") is not None:
+try:
     from zav.llm_tracing.adapters.langfuse import *
+except ImportError:
+    pass
