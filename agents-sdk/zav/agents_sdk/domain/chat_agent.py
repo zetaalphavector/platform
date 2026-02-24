@@ -283,6 +283,8 @@ class ProcessorAgent(ChatAgent):
             reprs = json.loads(conversation[-1].content)
             if "pdf" in reprs and isinstance(reprs["pdf"], str):
                 reprs["pdf"] = base64.b64decode(reprs["pdf"])
+            if "cad_pdf" in reprs and isinstance(reprs["cad_pdf"], str):
+                reprs["cad_pdf"] = base64.b64decode(reprs["cad_pdf"])
             agent_outputs = await self.process_representations(reprs)
 
         return ChatMessage(

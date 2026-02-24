@@ -1,5 +1,3 @@
-import importlib.util
-
 from zav.agents_sdk.adapters.retrievers.zav_retriever import (
     ZAVRetriever,
     ZAVRetrieverFactory,
@@ -15,7 +13,7 @@ __all__ = [
     "ZAVRetrieverFactory",
 ]
 
-if importlib.util.find_spec("langchain_core") is not None:
+try:
     from zav.agents_sdk.adapters.retrievers.zav_langchain_retriever import (
         ZAVLangchainRetriever,
         ZAVLangchainStore,
@@ -28,3 +26,5 @@ if importlib.util.find_spec("langchain_core") is not None:
         "ZAVLangchainStore",
         "ZAVLangchainStoreFactory",
     ]
+except ImportError:
+    pass

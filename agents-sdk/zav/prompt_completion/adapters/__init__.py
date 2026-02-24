@@ -1,13 +1,20 @@
-import importlib.util
-
 from zav.prompt_completion.client_factories import (
     ChatClientFactory,
     PromptClientFactory,
     PromptWithLogitsClientFactory,
 )
 
-if importlib.util.find_spec("anthropic") is not None:
+try:
     from zav.prompt_completion.adapters.anthropic_clients import *
+except ImportError:
+    pass
 
-if importlib.util.find_spec("openai") is not None:
+try:
     from zav.prompt_completion.adapters.openai_clients import *
+except ImportError:
+    pass
+
+try:
+    from zav.prompt_completion.adapters.azure_openai_client import *
+except ImportError:
+    pass

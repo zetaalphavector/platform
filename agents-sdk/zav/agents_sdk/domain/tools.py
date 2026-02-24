@@ -1,18 +1,28 @@
 import copy
 import inspect
-from typing import (
-    Annotated,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
-    get_args,
-    get_origin,
-)
+from typing import Annotated, Any, Callable, Dict, List, Optional, get_args, get_origin
 
+from jinja2 import Environment, Undefined
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
+
+from zav.agents_sdk.domain.utils import is_union
+
+
+class _SilentUndefined(Undefined):
+    def __str__(self) -> str:
+        return ""
+
+    def __html__(self) -> str:
+        return ""
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter(())
+
+    def __getattr__(self, _name: str):  # type: ignore[no-untyped-return]
+        return self
+
+    def __getitem__(self, _key: Any):  # type: ignore[no-untyped-return]
+        return self
 
 
 class ToolStreamingConfig(BaseModel):
@@ -60,7 +70,7 @@ def apply_transform(
     return data
 
 
-def hide_response(response: Optional[Dict]) -> Optional[Dict]:
+def hide(data: Optional[Dict]) -> Optional[Dict]:
     return None
 
 
@@ -91,12 +101,8 @@ def format_display_text(
     if tool_result is not None and isinstance(tool_result, dict):
         context.update(tool_result)
 
-    formatted = template
-    for key, value in context.items():
-        placeholder = f"{{{key}}}"
-        if placeholder in formatted:
-            formatted = formatted.replace(placeholder, str(value))
-    return formatted
+    env = Environment(undefined=_SilentUndefined, autoescape=True)
+    return env.from_string(template).render(**context)
 
 
 def _issubclass_safe(cls, classinfo):
@@ -160,7 +166,7 @@ def _get_json_type(typ):
     # Handle Pydantic models (any class with __fields__ and schema())
     if isinstance(typ, type) and hasattr(typ, "__fields__") and hasattr(typ, "schema"):
         return _get_pydantic_model_schema(typ)
-    elif origin is Union:
+    elif is_union(origin):
         union_args = get_args(typ)
         # Filtering out NoneType and considering it as 'Optional'
         non_none_types = [t for t in union_args if t is not type(None)]  # noqa E721
@@ -224,7 +230,7 @@ class Tool(BaseModel):
 
             # Add to required list if no default value
             if param.default == inspect.Parameter.empty and not (
-                get_origin(param_type) == Union and type(None) in get_args(param_type)
+                is_union(get_origin(param_type)) and type(None) in get_args(param_type)
             ):
                 schema["required"].append(name)
 
@@ -240,7 +246,7 @@ def _parse_params(signature: inspect.Signature, params: Optional[Dict[str, Any]]
             origin_type = get_origin(param_annotation)
 
             # Handle Union (Optional) types
-            if origin_type is Union:
+            if is_union(origin_type):
                 # Get the arguments of the Union type (e.g., for Optional[List[Model]]
                 # -> [List[Model], None])
                 union_args = get_args(param_annotation)

@@ -185,6 +185,8 @@ def render_tool_content(tool: ContentPartTool):
                 " relevant docs"
             )
     else:
+        if tool.display_text:
+            return tool.display_text
         msg = f"Running {tool.name}..."
         if tool.status == "completed":
             msg = f"Completed {tool.name}"

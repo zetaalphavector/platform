@@ -1,17 +1,6 @@
 import copy
 import inspect
-from typing import (
-    Any,
-    Callable,
-    Coroutine,
-    Dict,
-    Optional,
-    Type,
-    Union,
-    cast,
-    get_args,
-    get_origin,
-)
+from typing import Any, Callable, Coroutine, Dict, Optional, Type, cast, get_args
 
 from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span, Trace, TracingBackendFactory
@@ -28,20 +17,12 @@ from zav.agents_sdk.domain.agent_setup_retriever import (
 from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistryProtocol
 from zav.agents_sdk.domain.chat_request import ConversationContext
+from zav.agents_sdk.domain.utils import (
+    check_is_base_model,
+    check_is_class,
+    check_is_optional,
+)
 from zav.agents_sdk.security import sanitize_bot_params
-
-
-def check_is_optional(field):
-    origin = get_origin(field)
-    return origin is Union and type(None) in get_args(field)
-
-
-def check_is_class(annotation):
-    return inspect.isclass(annotation)
-
-
-def check_is_base_model(annotation):
-    return issubclass(annotation, BaseModel) or issubclass(annotation, _BaseModel)
 
 
 def init_span(
@@ -226,7 +207,7 @@ class ChatAgentFactory:
                 for annotation in get_args(param_annotation)
                 if annotation is not type(None)  # noqa: E721
             )
-        is_class = inspect.isclass(param_annotation)
+        is_class = check_is_class(param_annotation)
         # Parse AgentCreator
         if is_class and issubclass(param_annotation, AgentCreator):
 
