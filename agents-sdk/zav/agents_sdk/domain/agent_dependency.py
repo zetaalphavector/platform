@@ -1,8 +1,10 @@
 import inspect
 from abc import ABC, abstractmethod
-from typing import Dict, Generic, Optional, Protocol, Type, TypeVar, Union
+from typing import Dict, Generic, Optional, Protocol, Type, TypeVar, Union, get_args
 
 from typing_extensions import ParamSpec
+
+from zav.agents_sdk.domain.utils import check_is_optional
 
 T = TypeVar("T")
 DEPENDENCY_PARAMS = ParamSpec("DEPENDENCY_PARAMS")
@@ -54,4 +56,11 @@ class AgentDependencyRegistry(AgentDependencyRegistryProtocol):
             raise ValueError(
                 f"Factory method {inst_or_cls.create} should have a return annotation"
             )
+
+        # Unwrap Optional[X] to X
+        if check_is_optional(created_cls):
+            created_cls = next(
+                arg for arg in get_args(created_cls) if arg is not type(None)
+            )
+
         cls.registry[created_cls] = inst_or_cls

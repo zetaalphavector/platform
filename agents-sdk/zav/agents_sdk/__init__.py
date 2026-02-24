@@ -44,7 +44,7 @@ from zav.agents_sdk.domain.tools import (
     ToolsRegistry,
     ToolStreamingConfig,
     exclude_fields,
-    hide_response,
+    hide,
     include_fields,
     streamable,
 )
@@ -88,7 +88,7 @@ __all__ = [
     "ToolsRegistry",
     "ToolStreamingConfig",
     "exclude_fields",
-    "hide_response",
+    "hide",
     "include_fields",
     "streamable",
 ]

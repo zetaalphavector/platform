@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Union, get_args
 
 from typing_extensions import TypedDict
 from zav.encryption.pydantic import EncryptedStr
@@ -22,6 +22,7 @@ class LLMProviderName(str, Enum):
     OPENAI = "openai"
     OLLAMA = "ollama"
     ANTHROPIC = "anthropic"
+    AZURE_OPENAI = "azure_openai"
 
 
 class AnthropicConfiguration(BaseModel):
@@ -41,9 +42,55 @@ class OpenAIConfiguration(BaseModel):
     openai_api_version: Optional[str] = None
 
 
+class AzureOpenAIApiKeyAuth(BaseModel):
+    api_key: EncryptedStr
+
+
+class AzureOpenAIClientSecretAuth(BaseModel):
+    tenant_id: str
+    client_id: str
+    client_secret: EncryptedStr
+
+
+class AzureOpenAIWorkloadIdentityAuth(BaseModel):
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+
+
+class AzureOpenAIConfiguration(BaseModel):
+    endpoint: str
+    api_version: str
+    auth_type: Literal["api_key", "client_secret", "workload_identity"]
+    api_key: Optional[AzureOpenAIApiKeyAuth] = None
+    client_secret: Optional[AzureOpenAIClientSecretAuth] = None
+    workload_identity: Optional[AzureOpenAIWorkloadIdentityAuth] = None
+
+    @root_validator()
+    @classmethod
+    def auth_matches_type(cls, values):
+        if PYDANTIC_V2:
+            vals = values.model_dump()
+        else:
+            vals = values
+        auth_type = vals.get("auth_type")
+        if not auth_type:
+            return values
+        if not vals.get(auth_type):
+            raise ValueError(
+                f"auth_type is '{auth_type}' but '{auth_type}' is not set."
+            )
+        for other in get_args(cls.__annotations__["auth_type"]):
+            if other != auth_type and vals.get(other):
+                raise ValueError(
+                    f"auth_type is '{auth_type}' but '{other}' is also set."
+                )
+        return values
+
+
 class LLMVendorConfiguration(BaseModel):
     openai: Optional[OpenAIConfiguration] = None
     anthropic: Optional[AnthropicConfiguration] = None
+    azure_openai: Optional[AzureOpenAIConfiguration] = None
 
     @root_validator()
     @classmethod

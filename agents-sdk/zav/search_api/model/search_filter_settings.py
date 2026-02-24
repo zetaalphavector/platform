@@ -93,6 +93,7 @@ class SearchFilterSettings(ModelNormal):
             'faceted': (bool,),  # noqa: E501
             'filter_type': (str,),  # noqa: E501
             'filter_type_settings': (SearchFilterSettingsFilterTypeSettings,),  # noqa: E501
+            'default_values': ([str],),  # noqa: E501
         }
 
     @cached_property
@@ -107,6 +108,7 @@ class SearchFilterSettings(ModelNormal):
         'faceted': 'faceted',  # noqa: E501
         'filter_type': 'filter_type',  # noqa: E501
         'filter_type_settings': 'filter_type_settings',  # noqa: E501
+        'default_values': 'default_values',  # noqa: E501
     }
 
     read_only_vars = {
@@ -158,6 +160,7 @@ class SearchFilterSettings(ModelNormal):
             faceted (bool): [optional]  # noqa: E501
             filter_type (str): [optional]  # noqa: E501
             filter_type_settings (SearchFilterSettingsFilterTypeSettings): [optional]  # noqa: E501
+            default_values ([str]): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -249,6 +252,7 @@ class SearchFilterSettings(ModelNormal):
             faceted (bool): [optional]  # noqa: E501
             filter_type (str): [optional]  # noqa: E501
             filter_type_settings (SearchFilterSettingsFilterTypeSettings): [optional]  # noqa: E501
+            default_values ([str]): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

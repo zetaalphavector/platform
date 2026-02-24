@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast, overload
 
 import openai
-from openai import BadRequestError
+from openai import BadRequestError, RateLimitError
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     ChatCompletionNamedToolChoiceParam,
@@ -24,6 +24,7 @@ from zav.llm_domain import (
     OpenAIConfiguration,
 )
 from zav.llm_tracing import Span, now
+from zav.logging import logger
 from zav.pydantic_compat import BaseModel
 
 from zav.prompt_completion.adapters.tracing import create_span, end_span
@@ -761,10 +762,46 @@ class OpenAiChatClient(ChatCompletionClient):
                 error = generate_prompt_too_long_error(e.message)
             else:
                 error = e
+            error_response = ChatResponse(error=error, chat_message=None)
+            return stream_response_item(error_response) if stream else error_response
+        except RateLimitError as e:
+            logger.warning(f"Rate limit reached: {e}")
+            if generation_span:
+                generation_span.end(
+                    attributes={
+                        "level": "WARNING",
+                        "status_message": e.message,
+                    }
+                )
+            retry_after = (
+                e.response.headers.get("retry-after")
+                or e.response.headers.get("x-ratelimit-reset-requests")
+                or e.response.headers.get("x-ratelimit-reset-tokens")
+            )
+            if retry_after is None:
+                retry_after_match = re.search(
+                    r"retry after (\d+\s*\w+)", e.message, re.IGNORECASE
+                )
+                retry_after = (
+                    retry_after_match.group(1) if retry_after_match else "a moment"
+                )
+            else:
+                retry_after = f"{retry_after} seconds"
+            rate_limit_message = ChatMessage(
+                content=(
+                    "You have reached the token rate limit for this model. "
+                    f"Please retry after {retry_after}. If this issue persists, "
+                    "contact support@zeta-alpha.com for assistance."
+                ),
+                sender=ChatMessageSender.BOT,
+            )
+            rate_limit_response = ChatResponse(
+                error=None, chat_message=rate_limit_message
+            )
             return (
-                stream_response_item(ChatResponse(error=error, chat_message=None))
+                stream_response_item(rate_limit_response)
                 if stream
-                else ChatResponse(error=error, chat_message=None)
+                else rate_limit_response
             )
         except Exception as error:
             if generation_span:

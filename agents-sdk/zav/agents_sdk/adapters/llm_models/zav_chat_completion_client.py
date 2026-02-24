@@ -636,11 +636,23 @@ class ZAVChatCompletionClient:
                             )
 
                     if tool_completion and stream_tool_calls:
-                        yield ChatResponse(
-                            error=None,
-                            chat_completion=tool_completion,
-                            tool_events=list(tool_events_by_id.values()),
-                        )
+                        # Only yield the TOOL completion to consumers if there
+                        # are tool_events to display (i.e. the tool was
+                        # @streamable). Non-streamable tool completions are
+                        # internal bookkeeping — they get fed back to the LLM
+                        # via __parse_inner_response but have nothing to show
+                        # the user, so yielding them would produce a None from
+                        # to_chat_message().
+                        # Exception: if should_return_to_user is True, the tool
+                        # returned a ChatCompletion meant as the final response
+                        # (e.g. with a function_call_request for the frontend),
+                        # so it must always be yielded.
+                        if tool_events_by_id or should_return_to_user:
+                            yield ChatResponse(
+                                error=None,
+                                chat_completion=tool_completion,
+                                tool_events=list(tool_events_by_id.values()),
+                            )
 
                     if should_return_to_user:
                         break

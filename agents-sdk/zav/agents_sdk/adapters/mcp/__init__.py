@@ -1,10 +1,8 @@
-import importlib.util
-
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
 
 __all__ = ["AgentDependencyRegistry"]
 
-if importlib.util.find_spec("mcp") is not None:
+try:
     from zav.agents_sdk.adapters.mcp.tools_provider import (
         MCPConfiguration,
         MCPServerConfig,
@@ -25,3 +23,5 @@ if importlib.util.find_spec("mcp") is not None:
         "StdIoTransportConfig",
         "SseTransportConfig",
     ]
+except ImportError:
+    pass
