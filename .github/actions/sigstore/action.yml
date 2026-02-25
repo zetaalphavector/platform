@@ -78,25 +78,22 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Set up sigstore-python
-      id: setup
-      run: |
-        # NOTE: Sourced, not executed as a script.
-        source "${GITHUB_ACTION_PATH}/setup/setup.bash"
-      env:
-        GHA_SIGSTORE_PYTHON_INTERNAL_BE_CAREFUL_DEBUG: "${{ inputs.internal-be-careful-debug }}"
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.x"
+
+    - name: Install sigstore-python
+      run: pip install --requirement "${GITHUB_ACTION_PATH}/requirements/main.txt"
       shell: bash
 
     - name: Run sigstore-python
       id: sigstore-python
       run: |
-        "${VENV_PYTHON_PATH}" \
+        python \
           "${GITHUB_ACTION_PATH}/action.py" \
           "${GHA_SIGSTORE_PYTHON_INPUTS}"
       env:
-        # The year is 2023, and nonsense like this is still necessary on Windows.
-        PYTHONUTF8: "1"
-        VENV_PYTHON_PATH: "${{ steps.setup.outputs.venv-python-path }}"
         GHA_SIGSTORE_PYTHON_IDENTITY_TOKEN: "${{ inputs.identity-token }}"
         GHA_SIGSTORE_PYTHON_OIDC_CLIENT_ID: "${{ inputs.oidc-client-id }}"
         GHA_SIGSTORE_PYTHON_OIDC_CLIENT_SECRET: "${{ inputs.oidc-client-secret }}"
