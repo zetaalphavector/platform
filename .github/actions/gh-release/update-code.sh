@@ -8,7 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 TEMP_DIR=$(mktemp -d)
 
 # Clone the upstream repository into the temporary directory (shallow clone)
-git clone --depth 1 --branch master https://github.com/softprops/action-gh-release.git "$TEMP_DIR"
+git clone --depth 1 --branch v2.5.0 https://github.com/softprops/action-gh-release.git "$TEMP_DIR"
 
 # Sync TypeScript source from upstream
 rsync -av \

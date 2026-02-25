@@ -21,8 +21,7 @@ rsync -av \
 
 # Sync requirements
 rsync -av \
-  --exclude='.*' \
-  "$TEMP_DIR/requirements/" .github/actions/sigstore/requirements/
+  "$TEMP_DIR/requirements.txt" .github/actions/sigstore/requirements.txt
 
 # Remove the temporary directory
 rm -rf "$TEMP_DIR"
