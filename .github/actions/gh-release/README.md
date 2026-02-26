@@ -10,10 +10,9 @@ To update the code follow the steps below:
 2. Create the `dist` directory by running
     ```
     cd .github/actions/gh-release \
-    && nvm use v20 \
+    && nvm install 20.19.0 && nvm use 20.19.0 \
     && yarn \
     && yarn build \
-    && yarn package \
     && rm -fr node_modules \
     && rm -fr lib
     ```
