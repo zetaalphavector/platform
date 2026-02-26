@@ -14,7 +14,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Check if the project path exists
-      run: test -d ${{ inputs.project_path }}
+      env:
+        PROJECT_PATH: ${{ inputs.project_path }}
+      run: test -d "$PROJECT_PATH"
     - name: Extract package details
       id: package-details
       run: |
@@ -31,8 +33,10 @@ jobs:
         grep -q "Private :: Do Not Upload" pyproject.toml && exit 1 || exit 0
       working-directory: ${{ inputs.project_path }}
     - name: Verify that the tag doesn't exist
+      env:
+        GITHUB_TAG: ${{ steps.package-details.outputs.github_tag }}
       run: |
-        git rev-parse ${{ steps.package-details.outputs.github_tag }} && exit 1 || exit 0
+        git rev-parse "$GITHUB_TAG" && exit 1 || exit 0
       working-directory: ${{ inputs.project_path }}
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -81,20 +85,22 @@ jobs:
     - name: Create GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_TAG: ${{ needs.build.outputs.github_tag }}
       run: >-
         gh release create
-        '${{ needs.build.outputs.github_tag }}'
+        "$GITHUB_TAG"
         --repo '${{ github.repository }}'
         --generate-notes
     - name: Upload artifact signatures to GitHub Release
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_TAG: ${{ needs.build.outputs.github_tag }}
       # Upload to GitHub Release using the `gh` CLI.
       # `dist/` contains the built packages, and the
       # sigstore-produced signatures and certificates.
       run: >-
         gh release upload
-        '${{ needs.build.outputs.github_tag }}' dist/**
+        "$GITHUB_TAG" dist/**
         --repo '${{ github.repository }}'
   publish-to-testpypi:
     name: Publish the ${{ needs.build.outputs.package_name }} distribution 📦 to TestPyPI
