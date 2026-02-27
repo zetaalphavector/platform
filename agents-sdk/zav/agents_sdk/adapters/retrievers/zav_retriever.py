@@ -1,15 +1,10 @@
-import json
 import time
 from datetime import date, datetime
-from functools import wraps
 from typing import Dict, List, Literal, Optional
 
-from zav.api.errors import UnknownException
 from zav.pydantic_compat import BaseModel
 from zav.search_api import ApiClient, Configuration
-from zav.search_api.apis import DocumentAssetsApi as DocumentAssetsApiSync
-from zav.search_api.apis import DocumentsApi as DocumentsApiSync
-from zav.search_api.exceptions import ApiException
+from zav.search_api.apis import DocumentAssetsApi, DocumentsApi
 from zav.search_api.models import (
     DateRangeSchema,
     DocumentIdString,
@@ -30,7 +25,8 @@ from zav.search_api.models import (
     YearRangeSchema,
 )
 
-from zav.agents_sdk.adapters.async_wrapper import force_async, is_bound_function
+from zav.agents_sdk.adapters.async_wrapper import asyncify
+from zav.agents_sdk.adapters.error_handling import handle_api_errors
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.request_headers import RequestHeaders
 
@@ -38,46 +34,6 @@ from zav.agents_sdk.domain.request_headers import RequestHeaders
 class RetrievedHistoryItem(BaseModel):
     search_payload: Dict
     retrieved_hits: List[Dict]
-
-
-class DocumentsApi(DocumentsApiSync):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def __getattribute__(self, name):
-        original = object.__getattribute__(self, name)
-        return force_async(original) if is_bound_function(original) else original
-
-
-class DocumentAssetsApi(DocumentAssetsApiSync):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def __getattribute__(self, name):
-        original = object.__getattribute__(self, name)
-        return force_async(original) if is_bound_function(original) else original
-
-
-def _handle_pipeline_service_api_error(e: ApiException):
-    error_message = "Server error"
-    if e.body:
-        body = json.loads(e.body)
-        if "message" in body:
-            error_message = body["message"]
-        elif "detail" in body:
-            error_message = body["detail"]
-    raise UnknownException(error_message)
-
-
-def _handle_pipeline_service_errors(f):
-    @wraps(f)
-    async def decorated(*args, _retries=0, **kwargs):
-        try:
-            return await f(*args, **kwargs)
-        except ApiException as e:
-            return _handle_pipeline_service_api_error(e)
-
-    return decorated
 
 
 def _parse_dates_to_str(obj: Dict) -> Dict:
@@ -142,7 +98,7 @@ class ZAVRetriever:
     def update_retrieved_history(self, retrieved_history_item: RetrievedHistoryItem):
         self.__retrieved_history.append(retrieved_history_item)
 
-    @_handle_pipeline_service_errors
+    @handle_api_errors
     async def search(
         self,
         retrieval_unit: Literal["document", "chunk"] = "document",
@@ -313,11 +269,9 @@ class ZAVRetriever:
                 else {}
             ),
         )
-        search_response: SearchPostResponse = (
-            await self.__documents.document_search_post(
-                search_post_request=search_post_request, **self.__internal_headers
-            )
-        )
+        search_response: SearchPostResponse = await asyncify(
+            self.__documents.document_search_post
+        )(search_post_request=search_post_request, **self.__internal_headers)
         response_dict = search_response.to_dict()
 
         if "hits" in response_dict:
@@ -364,7 +318,7 @@ class ZAVRetriever:
         response_dict["latency_ms"] = round((end_time - start_time) / 1_000_000, 2)
         return response_dict
 
-    @_handle_pipeline_service_errors
+    @handle_api_errors
     async def retrieve(self, document_hit_url: str) -> Optional[Dict]:
         document_hit_url_parts = document_hit_url.split("?")
         if len(document_hit_url_parts) != 2:
@@ -391,7 +345,7 @@ class ZAVRetriever:
             **({"index_id": index_id} if index_id else {}),  # type: ignore
         )
 
-    @_handle_pipeline_service_errors
+    @handle_api_errors
     async def list(
         self,
         retrieval_unit: Literal["document", "chunk"] = "document",
@@ -407,7 +361,7 @@ class ZAVRetriever:
             index_cluster = f"default:{self.__index_id}"
         else:
             index_cluster = None
-        list_response: ListResponse = await self.__documents.document_list(
+        list_response: ListResponse = await asyncify(self.__documents.document_list)(
             retrieval_unit=retrieval_unit,
             property_name=property_name,
             property_values=property_values,
@@ -449,12 +403,14 @@ class ZAVRetriever:
                     ]
         return response_dict
 
-    @_handle_pipeline_service_errors
+    @handle_api_errors
     async def get_full_text(self, document_id: Optional[str]) -> Optional[str]:
         if not document_id:
             return None
         index_cluster = f"default:{self.__index_id}" if self.__index_id else None
-        document_assets_response = await self.__document_assets.retrieve_content(
+        document_assets_response = await asyncify(
+            self.__document_assets.retrieve_content
+        )(
             document_id=document_id,
             asset_type="text_url",
             tenant=self.__tenant,
@@ -464,12 +420,14 @@ class ZAVRetriever:
         doc_content = document_assets_response.read().decode("utf-8")
         return doc_content
 
-    @_handle_pipeline_service_errors
+    @handle_api_errors
     async def get_image_asset(self, document_id: Optional[str]) -> Optional[bytes]:
         if not document_id:
             return None
         index_cluster = f"default:{self.__index_id}" if self.__index_id else None
-        document_assets_response = await self.__document_assets.retrieve_content(
+        document_assets_response = await asyncify(
+            self.__document_assets.retrieve_content
+        )(
             document_id=document_id,
             asset_type="image_url",
             tenant=self.__tenant,
@@ -478,12 +436,14 @@ class ZAVRetriever:
         )
         return document_assets_response.read()
 
-    @_handle_pipeline_service_errors
+    @handle_api_errors
     async def get_pdf_asset(self, document_id: Optional[str]) -> Optional[bytes]:
         if not document_id:
             return None
         index_cluster = f"default:{self.__index_id}" if self.__index_id else None
-        document_assets_response = await self.__document_assets.retrieve_content(
+        document_assets_response = await asyncify(
+            self.__document_assets.retrieve_content
+        )(
             document_id=document_id,
             asset_type="pdf_url",
             tenant=self.__tenant,
@@ -492,12 +452,14 @@ class ZAVRetriever:
         )
         return document_assets_response.read()
 
-    @_handle_pipeline_service_errors
+    @handle_api_errors
     async def get_content_asset(self, document_id: Optional[str]) -> Optional[bytes]:
         if not document_id:
             return None
         index_cluster = f"default:{self.__index_id}" if self.__index_id else None
-        document_assets_response = await self.__document_assets.retrieve_content(
+        document_assets_response = await asyncify(
+            self.__document_assets.retrieve_content
+        )(
             document_id=document_id,
             asset_type="content_url",
             tenant=self.__tenant,

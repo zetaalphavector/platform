@@ -31,6 +31,9 @@ from zav.prompt_completion import ToolCallRequest as PcToolCallRequest
 from zav.prompt_completion import ToolCallResponse as PcToolCallResponse
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
+from zav.agents_sdk.adapters.compaction.context_window_manager import (
+    ContextWindowManager,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.chat_message import (
     ChatMessage,
@@ -144,7 +147,7 @@ class ChatResponse(BaseModel):
                 return None
             return ChatMessage(
                 sender=AgentChatMessageSender.BOT,
-                content="",
+                content=self.chat_completion.content,
                 content_parts=tool_content_parts,
             )
 
@@ -426,9 +429,11 @@ class ZAVChatCompletionClient:
         self,
         chat_completion_client: ChatCompletionClient,
         span: Optional[Span] = None,
+        context_window_manager: Optional[ContextWindowManager] = None,
     ) -> None:
         self.__chat_completion_client = chat_completion_client
         self.__span = span
+        self.__context_window_manager = context_window_manager
 
     @overload
     async def complete(  # type: ignore
@@ -548,18 +553,48 @@ class ZAVChatCompletionClient:
         else:
             tools_dict = tools
 
+        pc_messages = (
+            [parse_chat_message(message) for message in messages]
+            if messages is not None
+            else (
+                [parse_chat_message(completion) for completion in completions]
+                if completions is not None
+                else []
+            )
+        )
+
+        if self.__context_window_manager:
+            if self.__context_window_manager.needs_compaction(
+                pc_messages, bot_setup_description
+            ):
+                pc_messages = await self.__context_window_manager.compact(
+                    pc_messages, bot_setup_description
+                )
+
+            retrieval_tools = self.__context_window_manager.get_tools()
+            if retrieval_tools and isinstance(tools, ToolsRegistry):
+                new_tools = [
+                    t for t in retrieval_tools if t.name not in tools.tools_index
+                ]
+                if new_tools:
+                    tools.extend(new_tools)
+                    if tools_dict is not None:
+                        tools_dict.extend(
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": tool.name,
+                                    "description": tool.description,
+                                    "parameters": tool.get_parameters_spec(),
+                                },
+                            }
+                            for tool in new_tools
+                        )
+
         req = ChatClientRequest(
             conversation=BotConversation(
                 bot_setup_description=bot_setup_description,
-                messages=(
-                    [parse_chat_message(message) for message in messages]
-                    if messages is not None
-                    else (
-                        [parse_chat_message(completion) for completion in completions]
-                        if completions is not None
-                        else []
-                    )
-                ),
+                messages=pc_messages,
             ),
             max_tokens=max_tokens,
             **({"functions": functions} if functions is not None else {}),
@@ -908,13 +943,17 @@ class ZAVChatCompletionClient:
     ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]:
 
         if tool_completion and response.chat_completion:
+            prior_completions = (
+                [ChatCompletion.from_chat_message(message) for message in messages]
+                if messages
+                else completions or []
+            )
+            all_completions = prior_completions + [
+                response.chat_completion,
+                tool_completion,
+            ]
             inner_response = await self.complete(
-                completions=(
-                    [ChatCompletion.from_chat_message(message) for message in messages]
-                    if messages
-                    else completions or []
-                )
-                + [response.chat_completion, tool_completion],
+                completions=all_completions,
                 max_tokens=max_tokens,
                 bot_setup_description=bot_setup_description,
                 tools=tools,
@@ -939,7 +978,14 @@ class ZAVChatCompletionClient:
 class ZAVChatCompletionClientFactory(AgentDependencyFactory):
     @classmethod
     def create(
-        cls, config: LLMClientConfiguration, span: Optional[Span] = None
+        cls,
+        config: LLMClientConfiguration,
+        span: Optional[Span] = None,
+        context_window_manager: Optional[ContextWindowManager] = None,
     ) -> ZAVChatCompletionClient:
         chat_completion_client = ChatClientFactory.create(config, span=span)
-        return ZAVChatCompletionClient(chat_completion_client, span=span)
+        return ZAVChatCompletionClient(
+            chat_completion_client,
+            span=span,
+            context_window_manager=context_window_manager,
+        )

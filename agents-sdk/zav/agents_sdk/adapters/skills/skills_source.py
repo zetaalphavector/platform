@@ -1,11 +1,162 @@
-import re
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, cast
 
-import yaml
+import strictyaml
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
+
+from zav.agents_sdk.domain.agent_dependency import DependencyGroup
+
+
+def _strip_common_indent(lines: List[str]) -> List[str]:
+    indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip()]
+    if not indents:
+        return ["" for _ in lines]
+    min_indent = min(indents)
+    return [line[min_indent:] if len(line) >= min_indent else "" for line in lines]
+
+
+def _is_blank_or_comment(line: str) -> bool:
+    stripped = line.strip()
+    return not stripped or stripped.startswith("#")
+
+
+def _indent_level(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _parse_key_value_line(line: str, *, line_no: int) -> Tuple[str, str]:
+    if line.startswith(" "):
+        raise SkillReadError(
+            f"Invalid frontmatter: unexpected indentation on line {line_no}"
+        )
+
+    if ":" not in line:
+        raise SkillReadError(
+            f"Invalid frontmatter: expected 'key: value' on line {line_no}"
+        )
+
+    key, rest = line.split(":", 1)
+    key = key.strip()
+    if not key:
+        raise SkillReadError(f"Invalid frontmatter: empty key on line {line_no}")
+
+    return key, rest.lstrip(" ")
+
+
+def _collect_block_scalar_lines(
+    lines: List[str], *, start_at: int
+) -> Tuple[List[str], int]:
+    content_lines: List[str] = []
+    index = start_at
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            content_lines.append("")
+            index += 1
+            continue
+        if _indent_level(line) == 0:
+            break
+        content_lines.append(line)
+        index += 1
+    return content_lines, index
+
+
+def _collect_indented_lines(
+    lines: List[str], *, start_at: int
+) -> Tuple[List[str], int]:
+    indented: List[str] = []
+    index = start_at
+    while index < len(lines):
+        line = lines[index]
+        if _is_blank_or_comment(line):
+            index += 1
+            continue
+        if _indent_level(line) == 0:
+            break
+        indented.append(line)
+        index += 1
+    return indented, index
+
+
+def _parse_indented_mapping(entries: List[str], *, parent_key: str) -> Dict[str, str]:
+    nested: Dict[str, str] = {}
+    for entry in entries:
+        stripped = entry.lstrip(" ")
+        if ":" not in stripped:
+            raise SkillReadError(
+                "Invalid frontmatter: expected 'key: value' inside nested mapping "
+                f"for '{parent_key}'"
+            )
+        nested_key, nested_rest = stripped.split(":", 1)
+        nested_key = nested_key.strip()
+        if not nested_key:
+            raise SkillReadError(
+                "Invalid frontmatter: empty key inside nested mapping "
+                f"for '{parent_key}'"
+            )
+        if nested_key in nested:
+            raise SkillReadError(
+                "Invalid frontmatter: duplicate key "
+                f"'{nested_key}' inside nested mapping for '{parent_key}'"
+            )
+        nested[nested_key] = nested_rest.lstrip(" ")
+    return nested
+
+
+def _parse_relaxed_frontmatter(frontmatter: str) -> Dict[str, Any]:
+    """Best-effort parser for SKILL.md frontmatter.
+
+    This intentionally supports only a small, predictable subset:
+    - Top-level `key: value` pairs (values treated as raw strings)
+    - Nested mappings when a top-level key has an empty value (`key:`)
+    - Block scalars using `|` or `>` (top-level only)
+
+    The goal is to be robust to common user mistakes like unquoted values
+    containing `: ` (e.g. `description: foo: bar`).
+    """
+
+    lines = frontmatter.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    result: Dict[str, Any] = {}
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        if _is_blank_or_comment(line):
+            index += 1
+            continue
+
+        key, value = _parse_key_value_line(line, line_no=index + 1)
+        if key in result:
+            raise SkillReadError(
+                f"Invalid frontmatter: duplicate key '{key}' on line {index + 1}"
+            )
+
+        if value in ("|", ">"):
+            content_lines, index = _collect_block_scalar_lines(
+                lines, start_at=index + 1
+            )
+            result[key] = "\n".join(_strip_common_indent(content_lines)).rstrip("\n")
+            continue
+
+        if (
+            value == ""
+            and (index + 1) < len(lines)
+            and _indent_level(lines[index + 1]) > 0
+        ):
+            nested_lines, index = _collect_indented_lines(lines, start_at=index + 1)
+            result[key] = _parse_indented_mapping(nested_lines, parent_key=key)
+            continue
+
+        result[key] = value
+        index += 1
+
+    return result
 
 
 class SkillNotFoundError(Exception):
@@ -64,6 +215,128 @@ class SkillProperties(BaseModel):
 class SkillsSource(ABC):
     """Abstract source for skill discovery. Extend this for custom backends."""
 
+    source_name: ClassVar[str]
+
+    @staticmethod
+    def parse_skill_properties(content: str) -> SkillProperties:
+        """Extract metadata from SKILL.md-formatted content.
+
+        Parses YAML frontmatter using strictyaml (all values treated as
+        strings, avoiding issues with colons or other special characters).
+
+        Returns a ``SkillProperties`` instance with ``location`` set to
+        ``None`` — callers should set it to a source-specific value if
+        needed.
+
+        Raises:
+            SkillReadError: If the content has no valid frontmatter or
+                required fields are missing.
+        """
+        if not content.startswith("---"):
+            raise SkillReadError("SKILL.md must start with YAML frontmatter (---)")
+
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            raise SkillReadError("SKILL.md frontmatter not properly closed with ---")
+
+        frontmatter = parts[1]
+
+        try:
+            parsed = strictyaml.load(frontmatter)
+            metadata = parsed.data
+        except strictyaml.YAMLError as strict_error:
+            try:
+                metadata = _parse_relaxed_frontmatter(frontmatter)
+                logger.warning(
+                    "Invalid YAML in SKILL.md frontmatter; "
+                    "falling back to relaxed parser. "
+                    "Tip: quote values containing ': ' "
+                    '(e.g. description: "foo: bar").'
+                )
+            except SkillReadError as relaxed_error:
+                raise SkillReadError(
+                    "Invalid YAML in frontmatter. "
+                    "Tip: quote values containing ': ' "
+                    '(e.g. description: "foo: bar"). '
+                    f"StrictYAML error: {strict_error}. "
+                    f"Relaxed parse error: {relaxed_error}"
+                ) from strict_error
+
+        if not isinstance(metadata, dict):
+            raise SkillReadError("SKILL.md frontmatter must be a YAML mapping")
+
+        if "name" not in metadata:
+            raise SkillReadError("Missing required field in frontmatter: name")
+        if "description" not in metadata:
+            raise SkillReadError("Missing required field in frontmatter: description")
+
+        name = metadata["name"]
+        description = metadata["description"]
+
+        if not isinstance(name, str) or not name.strip():
+            raise SkillReadError("Field 'name' must be a non-empty string")
+        if not isinstance(description, str) or not description.strip():
+            raise SkillReadError("Field 'description' must be a non-empty string")
+
+        raw_metadata = metadata.get("metadata")
+        if isinstance(raw_metadata, dict):
+            metadata["metadata"] = {str(k): str(v) for k, v in raw_metadata.items()}
+
+        raw_license = metadata.get("license")
+        license_value = (
+            raw_license
+            if raw_license is None or isinstance(raw_license, str)
+            else str(raw_license)
+        )
+
+        raw_compatibility = metadata.get("compatibility")
+        compatibility_value = (
+            raw_compatibility
+            if raw_compatibility is None or isinstance(raw_compatibility, str)
+            else str(raw_compatibility)
+        )
+
+        raw_allowed_tools = metadata.get("allowed-tools")
+        allowed_tools_value = (
+            raw_allowed_tools
+            if raw_allowed_tools is None or isinstance(raw_allowed_tools, str)
+            else str(raw_allowed_tools)
+        )
+
+        metadata_mapping = (
+            cast(Dict[str, str], metadata["metadata"])
+            if isinstance(metadata.get("metadata"), dict)
+            else None
+        )
+
+        return SkillProperties(
+            name=name.strip(),
+            description=description.strip(),
+            license=license_value,
+            compatibility=compatibility_value,
+            allowed_tools=allowed_tools_value,
+            metadata=metadata_mapping,
+        )
+
+    @staticmethod
+    def parse_skill_body(content: str) -> str:
+        """Extract the instruction body from SKILL.md-formatted content.
+
+        Returns the markdown body after the closing ``---`` of the
+        frontmatter block.
+
+        Raises:
+            SkillReadError: If the content has no valid frontmatter.
+        """
+        if not content.startswith("---"):
+            raise SkillReadError("SKILL.md must start with YAML frontmatter (---)")
+
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            raise SkillReadError("SKILL.md frontmatter not properly closed with ---")
+
+        return parts[2].strip()
+
     @abstractmethod
     async def discover(self) -> Dict[str, SkillProperties]:
         """Return all available skills with their metadata."""
@@ -85,140 +358,5 @@ class SkillsSource(ABC):
         raise NotImplementedError
 
 
-class DiskSkillsSource(SkillsSource):
-    """Default implementation: discovers skills from filesystem directories."""
-
-    def __init__(self, directories: List[str]):
-        self.__directories = directories
-        self.__skills: Dict[str, SkillProperties] = {}
-        self.__skill_paths: Dict[str, Path] = {}
-        self.__skill_bodies: Dict[str, str] = {}
-        self.__skill_resources: Dict[str, List[str]] = {}
-        self.__discovered = False
-
-    async def __do_discover(self) -> None:
-        if self.__discovered:
-            return
-        self.__discovered = True
-        for directory in self.__directories:
-            dir_path = Path(directory)
-            if not dir_path.exists():
-                logger.warning(f"Skills directory not found: {directory}")
-                continue
-
-            for skill_path in dir_path.iterdir():
-                if skill_path.is_dir():
-                    skill_md = self.__find_skill_md(skill_path)
-                    if skill_md:
-                        self.__load_skill(skill_path, skill_md)
-
-    def __find_skill_md(self, directory: Path) -> Optional[Path]:
-        for path in directory.iterdir():
-            if path.is_file() and path.name.lower() == "skill.md":
-                return path
-        return None
-
-    def __load_skill(self, skill_dir: Path, skill_md: Path) -> None:
-        try:
-            content = skill_md.read_text()
-        except Exception as e:
-            logger.warning(f"Failed to read skill file {skill_md}: {e}")
-            return
-
-        match = re.match(r"^---\n(.*?)\n---\n(.*)$", content, re.DOTALL)
-        if not match:
-            logger.warning(f"Invalid SKILL.md format (no frontmatter): {skill_md}")
-            return
-
-        try:
-            frontmatter = yaml.safe_load(match.group(1))
-        except yaml.YAMLError as e:
-            logger.warning(f"Invalid YAML frontmatter in {skill_md}: {e}")
-            return
-
-        name = frontmatter.get("name")
-        description = frontmatter.get("description")
-
-        if not name or not description:
-            logger.warning(f"Missing required fields (name, description) in {skill_md}")
-            return
-
-        self.__skills[name] = SkillProperties(
-            name=name,
-            description=description,
-            license=frontmatter.get("license"),
-            compatibility=frontmatter.get("compatibility"),
-            allowed_tools=frontmatter.get("allowed-tools"),
-            metadata=frontmatter.get("metadata"),
-            location=str(skill_md),
-        )
-        self.__skill_paths[name] = skill_dir
-        self.__index_resources(name, skill_dir)
-        logger.info(f"Loaded skill: {name}")
-
-    def __index_resources(self, skill_name: str, skill_dir: Path) -> None:
-        resources: List[str] = []
-
-        for file_path in skill_dir.rglob("*"):
-            if file_path.is_file() and file_path.name.lower() != "skill.md":
-                relative_path = file_path.relative_to(skill_dir)
-                resources.append(str(relative_path))
-
-        self.__skill_resources[skill_name] = sorted(resources)
-        if resources:
-            logger.info(f"Indexed {len(resources)} resources for skill '{skill_name}'")
-
-    async def discover(self) -> Dict[str, SkillProperties]:
-        await self.__do_discover()
-        return dict(self.__skills)
-
-    async def get_skill_body(self, skill_name: str) -> str:
-        await self.__do_discover()
-
-        if skill_name in self.__skill_bodies:
-            return self.__skill_bodies[skill_name]
-
-        if skill_name not in self.__skill_paths:
-            raise SkillNotFoundError(skill_name, list(self.__skills.keys()))
-
-        skill_dir = self.__skill_paths[skill_name]
-        skill_md = self.__find_skill_md(skill_dir)
-        if not skill_md:
-            raise SkillReadError(f"Skill file not found: {skill_name}")
-
-        try:
-            content = skill_md.read_text()
-        except Exception as e:
-            raise SkillReadError(f"Error reading skill file: {e}") from e
-
-        match = re.match(r"^---\n.*?\n---\n(.*)$", content, re.DOTALL)
-        body = match.group(1).strip() if match else content
-
-        self.__skill_bodies[skill_name] = body
-        return body
-
-    async def get_resources(self, skill_name: str) -> List[str]:
-        await self.__do_discover()
-        if skill_name not in self.__skills:
-            raise SkillNotFoundError(skill_name, list(self.__skills.keys()))
-        return self.__skill_resources.get(skill_name, [])
-
-    async def read_resource(self, skill_name: str, path: str) -> str:
-        await self.__do_discover()
-
-        if skill_name not in self.__skill_paths:
-            raise SkillNotFoundError(skill_name, list(self.__skills.keys()))
-
-        allowed_resources = self.__skill_resources.get(skill_name, [])
-        if path not in allowed_resources:
-            raise SkillResourceNotFoundError(skill_name, path, allowed_resources)
-
-        skill_dir = self.__skill_paths[skill_name]
-        resource_file = skill_dir / path
-
-        try:
-            content = resource_file.read_text()
-        except Exception as e:
-            raise SkillReadError(f"Error reading resource: {e}") from e
-
-        return content
+class SkillsSourceGroup(DependencyGroup[SkillsSource]):
+    __collects__ = SkillsSource

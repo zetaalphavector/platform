@@ -7,7 +7,10 @@ from zav.llm_tracing import Span, Trace, TracingBackendFactory
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, _BaseModel
 
 from zav.agents_sdk.domain.agent_creator import AgentCreator
-from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistryProtocol
+from zav.agents_sdk.domain.agent_dependency import (
+    AgentDependencyRegistryProtocol,
+    DependencyGroup,
+)
 from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.agent_setup_retriever import (
     AgentSetup,
@@ -255,6 +258,36 @@ class ChatAgentFactory:
                         if param_name != "self"
                     }
                 )
+        # Parse dependency group
+        if (
+            self.__agent_dependency_registry
+            and is_class
+            and issubclass(param_annotation, DependencyGroup)
+            and hasattr(param_annotation, "__collects__")
+        ):
+            base_type = param_annotation.__collects__
+            factories = self.__agent_dependency_registry.get_subclasses_of(base_type)
+            items = []
+            for factory in factories:
+                factory_params = inspect.signature(factory.create).parameters
+                item = factory.create(
+                    **{
+                        fp_name: (
+                            await self.__parse_value(
+                                param=fp,
+                                param_name=fp_name,
+                                handler_params=handler_params,
+                                conversation_context=conversation_context,
+                                agent_setup=agent_setup,
+                                span=span,
+                            )
+                        )
+                        for fp_name, fp in factory_params.items()
+                        if fp_name != "self"
+                    }
+                )
+                items.append(item)
+            return param_annotation(items=items)
         has_default = param.default != inspect.Parameter.empty
         # parse conversation context
         is_conversation_context = is_class and issubclass(

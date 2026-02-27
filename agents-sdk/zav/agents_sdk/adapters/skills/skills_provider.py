@@ -1,26 +1,24 @@
 import html
 from typing import Dict, List, Literal, Optional
 
+from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.adapters.skills.skills_source import (
-    DiskSkillsSource,
     SkillNotFoundError,
     SkillProperties,
     SkillReadError,
     SkillResourceNotFoundError,
     SkillsSource,
+    SkillsSourceGroup,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.tools import Tool
+from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
 
 
 class SkillsConfiguration(BaseModel):
     """Configuration for skills discovery and presentation."""
 
-    skills_directories: List[str] = Field(
-        default_factory=list, description="List of directories to scan for skills."
-    )
     prompt_format: Literal["xml", "text"] = Field(
         "text", description="Format for skill catalog in system prompt."
     )
@@ -40,26 +38,47 @@ class SkillsProvider:
     """
     Progressive disclosure of agent skills following the Agent Skills protocol.
 
-    Delegates discovery to a SkillsSource and handles tool generation and prompt
-    formatting.
+    Delegates discovery to one or more SkillsSource instances and handles tool
+    generation and prompt formatting.
     """
 
     def __init__(
         self,
-        source: SkillsSource,
+        sources: List[SkillsSource],
         prompt_format: Literal["xml", "text"],
         include_location_in_prompt: bool,
         injection_mode: Literal["prompt", "tools", "both"],
     ):
-        self.__source = source
+        self.__sources = sources
         self.__prompt_format = prompt_format
         self.__include_location = include_location_in_prompt
         self.__injection_mode = injection_mode
         self.__skills: Optional[Dict[str, SkillProperties]] = None
+        self.__skill_sources: Dict[str, SkillsSource] = {}
 
     async def __ensure_discovered(self) -> Dict[str, SkillProperties]:
-        if self.__skills is None:
-            self.__skills = await self.__source.discover()
+        if self.__skills is not None:
+            return self.__skills
+        self.__skills = {}
+        for source in self.__sources:
+            try:
+                skills = await source.discover()
+            except Exception as e:
+                logger.error(
+                    f"Failed to discover skills from '{source.source_name}': {e}"
+                )
+                continue
+            for name, props in skills.items():
+                if name in self.__skills:
+                    logger.warning(
+                        f"Skill '{name}' already registered"
+                        f" by '{self.__skill_sources[name].source_name}',"
+                        f" ignoring duplicate from"
+                        f" '{source.source_name}'"
+                    )
+                    continue
+                self.__skills[name] = props
+                self.__skill_sources[name] = source
         return self.__skills
 
     async def to_prompt(self, format: Optional[Literal["xml", "text"]] = None) -> str:
@@ -154,6 +173,10 @@ class SkillsProvider:
                 },
                 "required": ["skill_name"],
             },
+            streaming_config=ToolStreamingConfig(
+                running_text="Reading skill {{ skill_name }}...",
+                completed_text="Read skill {{ skill_name }}",
+            ),
         )
 
     async def __invoke_skill(self, skill_name: str) -> str:
@@ -163,8 +186,9 @@ class SkillsProvider:
             if not skill:
                 raise SkillNotFoundError(skill_name, list(skills.keys()))
 
-            body = await self.__source.get_skill_body(skill_name)
-            resources = await self.__source.get_resources(skill_name)
+            source = self.__skill_sources[skill_name]
+            body = await source.get_skill_body(skill_name)
+            resources = await source.get_resources(skill_name)
 
             result = f"# Skill: {skill.name}\n\n"
             result += f"**Description**: {skill.description}\n\n"
@@ -190,7 +214,8 @@ class SkillsProvider:
     ) -> Optional[Tool]:
         all_resources: Dict[str, List[str]] = {}
         for skill_name in skills:
-            resources = await self.__source.get_resources(skill_name)
+            source = self.__skill_sources[skill_name]
+            resources = await source.get_resources(skill_name)
             if resources:
                 all_resources[skill_name] = resources
 
@@ -230,7 +255,11 @@ class SkillsProvider:
 
     async def __read_resource(self, skill_name: str, resource_path: str) -> str:
         try:
-            content = await self.__source.read_resource(skill_name, resource_path)
+            source = self.__skill_sources.get(skill_name)
+            if source is None:
+                skills = await self.__ensure_discovered()
+                raise SkillNotFoundError(skill_name, list(skills.keys()))
+            content = await source.read_resource(skill_name, resource_path)
             return f"# Resource: {skill_name}/{resource_path}\n\n{content}"
         except (SkillNotFoundError, SkillResourceNotFoundError, SkillReadError) as e:
             return f"Error: {e}"
@@ -239,10 +268,13 @@ class SkillsProvider:
 class SkillsProviderFactory(AgentDependencyFactory):
 
     @classmethod
-    def create(cls, skills_configuration: SkillsConfiguration) -> SkillsProvider:
-        source = DiskSkillsSource(skills_configuration.skills_directories)
+    def create(
+        cls,
+        skills_source_group: SkillsSourceGroup = SkillsSourceGroup(items=[]),
+        skills_configuration: SkillsConfiguration = SkillsConfiguration(),
+    ) -> SkillsProvider:
         return SkillsProvider(
-            source=source,
+            sources=skills_source_group.items,
             prompt_format=skills_configuration.prompt_format,
             include_location_in_prompt=skills_configuration.include_location_in_prompt,
             injection_mode=skills_configuration.injection_mode,
