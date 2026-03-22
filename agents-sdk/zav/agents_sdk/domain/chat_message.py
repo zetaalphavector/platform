@@ -69,10 +69,15 @@ class TagContext(BaseModel):
         return not self.tag_ids
 
 
+class FilterContext(BaseModel):
+    filters: Dict  # Boolean tree format (FiltersConfiguration-compatible)
+
+
 class ConversationContext(BaseModel):
     document_context: Optional[DocumentContext] = None
     custom_context: Optional[CustomContext] = None
     tag_context: Optional[TagContext] = None
+    filter_context: Optional[FilterContext] = None
 
     @root_validator()
     @classmethod
@@ -98,6 +103,7 @@ class ConversationContext(BaseModel):
             (not self.document_context or not self.document_context.document_ids)
             and (not self.custom_context or not self.custom_context.items)
             and (not self.tag_context or self.tag_context.is_empty())
+            and not self.filter_context
         )
 
 

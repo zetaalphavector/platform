@@ -11,7 +11,6 @@ from ragelo import (
     Query,
     get_agent_ranker,
     get_answer_evaluator,
-    get_llm_provider,
     get_retrieval_evaluator,
 )
 from ragelo.types.configurations import (
@@ -20,13 +19,17 @@ from ragelo.types.configurations import (
     PairwiseEvaluatorConfig,
     ReasonerEvaluatorConfig,
 )
+from zav.llm_domain import LLMClientConfiguration
 from zav.logging import logger
+from zav.prompt_completion import ChatClientFactory
 from zav.pydantic_compat import PYDANTIC_V2
 
+from zav.agents_sdk.adapters.llm_models.ragelo_llm_provider import (
+    ZAVRageloLLMProvider,
+)
 from zav.agents_sdk.cli.models import (
     EvaluationFileContent,
     RageloEvaluation,
-    RageloLLMConfig,
 )
 from zav.agents_sdk.cli.pages.ui_collect import (
     get_eval_file_names,
@@ -244,7 +247,7 @@ else:
 
 
 if ragelo:
-    llm_config = RageloLLMConfig.parse_obj(
+    llm_config = LLMClientConfiguration.parse_obj(
         json.loads(
             st.sidebar.text_area(
                 "LLM Configuration",
@@ -291,21 +294,28 @@ if ragelo:
     )
 
 else:
-    llm_config = RageloLLMConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "LLM Configuration",
-                value=json.dumps(
-                    {
-                        "llm_provider": "openai",
-                        "model_name": "gpt-4o",
-                        "max_tokens": "4096",
-                    },
-                    indent=2,
-                ),
-            )
-        )
+    default_llm_config: Optional[LLMClientConfiguration] = None
+    if sel_existing_eval:
+        eval_file_content = retrieve_eval_file_content(sel_existing_eval)
+        for agent_conf in eval_file_content.agent_configurations:
+            if agent_conf.agent_setup.llm_client_configuration:
+                default_llm_config = agent_conf.agent_setup.llm_client_configuration
+                break
+    if default_llm_config:
+        default_llm_json = format_model_json(default_llm_config)
+    else:
+        default_llm_json = "{}"
+    llm_config_raw = st.sidebar.text_area(
+        "LLM Configuration",
+        value=default_llm_json,
     )
+    try:
+        llm_config = LLMClientConfiguration.parse_obj(json.loads(llm_config_raw))
+    except Exception:
+        llm_config = None
+        st.sidebar.error(
+            "Invalid LLM configuration. Please provide a valid JSON configuration."
+        )
     reasoner_config = ReasonerEvaluatorConfig.parse_obj(
         json.loads(
             st.sidebar.text_area(
@@ -435,6 +445,11 @@ if sel_existing_eval:  # noqa
     pairwise_clicked = st.button("Evaluate pairwise")
     pointwise_clicked = st.button("Evaluate pointwise")
     if pairwise_clicked or pointwise_clicked:
+        if not llm_config:
+            st.error(
+                "Please provide a valid LLM configuration before running evaluation."
+            )
+            st.stop()
         queries = __construct_ragelo_queries(eval_file_content)
         eval_file_content.ragelo = RageloEvaluation(
             queries=queries,
@@ -447,10 +462,12 @@ if sel_existing_eval:  # noqa
         )
         store_eval_file_content(eval_file_content)
 
-        eval_llm_provider = get_llm_provider(
-            llm_config.llm_provider,
-            model_name=llm_config.model_name,
-            max_tokens=llm_config.max_tokens,
+        eval_llm_client_config = llm_config.model_copy(deep=True)
+        eval_llm_client_config.model_configuration.json_output = True
+        chat_completion_client = ChatClientFactory.create(eval_llm_client_config)
+        eval_llm_provider = ZAVRageloLLMProvider(
+            chat_completion_client,
+            max_tokens=eval_llm_client_config.model_configuration.max_tokens or 2048,
         )
         retrieval_evaluator = get_retrieval_evaluator(
             config=reasoner_config,

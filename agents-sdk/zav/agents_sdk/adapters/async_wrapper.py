@@ -1,20 +1,21 @@
 import asyncio
 import functools
-import inspect
 from concurrent.futures import ThreadPoolExecutor
+from typing import Awaitable, Callable, TypeVar
+
+from typing_extensions import ParamSpec
+
+T = TypeVar("T")
+P = ParamSpec("P")
 
 
-def is_bound_function(obj):
-    return inspect.ismethod(obj) and callable(obj)
-
-
-def force_async(fn):
+def asyncify(f: Callable[P, T]) -> Callable[P, Awaitable[T]]:
     """Turns a sync function to async function using threads."""
     pool = ThreadPoolExecutor()
 
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        future = pool.submit(fn, *args, **kwargs)
+    @functools.wraps(f)
+    def wrapper(*args: P.args, **kwargs: P.kwargs):
+        future = pool.submit(f, *args, **kwargs)
         return asyncio.wrap_future(future)  # make it awaitable
 
     return wrapper

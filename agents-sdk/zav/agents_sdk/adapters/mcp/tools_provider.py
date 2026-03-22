@@ -325,5 +325,7 @@ class MCPToolsProvider:
 
 class MCPToolsProviderFactory(AgentDependencyFactory):
     @classmethod
-    def create(cls, mcp_configuration: MCPConfiguration) -> MCPToolsProvider:
+    def create(
+        cls, mcp_configuration: MCPConfiguration = MCPConfiguration()
+    ) -> MCPToolsProvider:
         return MCPToolsProvider(mcp_configuration)

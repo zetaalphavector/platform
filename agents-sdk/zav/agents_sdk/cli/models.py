@@ -8,6 +8,7 @@ from ragelo.types.configurations import (
     PairwiseEvaluatorConfig,
     ReasonerEvaluatorConfig,
 )
+from zav.llm_domain import LLMClientConfiguration
 from zav.message_bus import MessageBus
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
@@ -86,14 +87,8 @@ class EvaluationAnswerTrace(BaseModel):
     trace_file_name: str
 
 
-class RageloLLMConfig(BaseModel):
-    llm_provider: str
-    model_name: str
-    max_tokens: int
-
-
 class RageloEvaluation(BaseModel):
-    llm_config: RageloLLMConfig
+    llm_config: LLMClientConfiguration
     reasoner_config: ReasonerEvaluatorConfig
     pairwise_config: PairwiseEvaluatorConfig
     custom_agent_eval_config: CustomPromptAnswerEvaluatorConfig

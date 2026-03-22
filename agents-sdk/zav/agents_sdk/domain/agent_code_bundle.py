@@ -2,10 +2,21 @@ import hashlib
 import importlib
 import io
 import os
+import sys
 import zipfile
 from typing import List, Optional
 
 from zav.pydantic_compat import BaseModel
+
+
+def __evict_module_from_cache(module_name: str):
+    stale = [
+        key
+        for key in sys.modules
+        if key == module_name or key.startswith(module_name + ".")
+    ]
+    for key in stale:
+        del sys.modules[key]
 
 
 def _load_python_module(project_dir: str):
@@ -22,13 +33,12 @@ def _load_python_module(project_dir: str):
         )
     try:
         if project_dir == os.getcwd():
-            import sys
-
+            target_module = os.path.basename(project_dir)
+            __evict_module_from_cache(target_module)
             sys.path.append("..")
-            importlib.import_module(os.path.basename(project_dir))
+            importlib.import_module(target_module)
         else:
-            import sys
-
+            __evict_module_from_cache(module_str)
             if os.path.isabs(project_dir):
                 sys.path.append("/")
             else:

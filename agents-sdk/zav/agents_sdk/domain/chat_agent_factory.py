@@ -7,7 +7,10 @@ from zav.llm_tracing import Span, Trace, TracingBackendFactory
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, _BaseModel
 
 from zav.agents_sdk.domain.agent_creator import AgentCreator
-from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistryProtocol
+from zav.agents_sdk.domain.agent_dependency import (
+    AgentDependencyRegistryProtocol,
+    DependencyGroup,
+)
 from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.agent_setup_retriever import (
     AgentSetup,
@@ -198,6 +201,7 @@ class ChatAgentFactory:
         conversation_context: Optional[ConversationContext] = None,
         agent_setup: Optional[AgentSetup] = None,
         span: Optional[Span] = None,
+        resolution_cache: Optional[Dict[type, Any]] = None,
     ) -> Optional[Any]:
         param_annotation = param.annotation
         is_optional = check_is_optional(param_annotation)
@@ -235,11 +239,18 @@ class ChatAgentFactory:
         if self.__agent_dependency_registry and is_class:
             agent_dependency = self.__agent_dependency_registry.get(param_annotation)
             if agent_dependency:
+                is_singleton = getattr(agent_dependency, "__singleton__", False)
+                if (
+                    is_singleton
+                    and resolution_cache is not None
+                    and param_annotation in resolution_cache
+                ):
+                    return resolution_cache[param_annotation]
                 # The agent dependency needs to be inspected and initialized
                 agent_dependency_params = inspect.signature(
                     agent_dependency.create
                 ).parameters
-                return agent_dependency.create(
+                result = agent_dependency.create(
                     **{
                         param_name: (
                             await self.__parse_value(
@@ -249,12 +260,47 @@ class ChatAgentFactory:
                                 conversation_context=conversation_context,
                                 agent_setup=agent_setup,
                                 span=span,
+                                resolution_cache=resolution_cache,
                             )
                         )
                         for param_name, param in agent_dependency_params.items()
                         if param_name != "self"
                     }
                 )
+                if is_singleton and resolution_cache is not None:
+                    resolution_cache[param_annotation] = result
+                return result
+        # Parse dependency group
+        if (
+            self.__agent_dependency_registry
+            and is_class
+            and issubclass(param_annotation, DependencyGroup)
+            and hasattr(param_annotation, "__collects__")
+        ):
+            base_type = param_annotation.__collects__
+            factories = self.__agent_dependency_registry.get_subclasses_of(base_type)
+            items = []
+            for factory in factories:
+                factory_params = inspect.signature(factory.create).parameters
+                item = factory.create(
+                    **{
+                        fp_name: (
+                            await self.__parse_value(
+                                param=fp,
+                                param_name=fp_name,
+                                handler_params=handler_params,
+                                conversation_context=conversation_context,
+                                agent_setup=agent_setup,
+                                span=span,
+                                resolution_cache=resolution_cache,
+                            )
+                        )
+                        for fp_name, fp in factory_params.items()
+                        if fp_name != "self"
+                    }
+                )
+                items.append(item)
+            return param_annotation(items=items)
         has_default = param.default != inspect.Parameter.empty
         # parse conversation context
         is_conversation_context = is_class and issubclass(
@@ -343,6 +389,7 @@ class ChatAgentFactory:
             agent_name=agent_setup.agent_name
         )
         agent_cls_params = inspect.signature(agent_cls).parameters
+        resolution_cache: Dict[type, Any] = {}
         agent_cls_param_values = {
             param_name: await self.__parse_value(
                 param=param,
@@ -351,6 +398,7 @@ class ChatAgentFactory:
                 conversation_context=conversation_context,
                 agent_setup=agent_setup,
                 span=span,
+                resolution_cache=resolution_cache,
             )
             for param_name, param in agent_cls_params.items()
         }

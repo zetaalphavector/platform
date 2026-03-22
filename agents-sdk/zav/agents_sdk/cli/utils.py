@@ -104,8 +104,7 @@ def create_agent_files(
 
     # Create the agent file
     with open(agent_file, "w") as f:
-        f.write(
-            f"""from typing import AsyncGenerator, List
+        f.write(f"""from typing import AsyncGenerator, List
 
 from zav.agents_sdk import ChatAgentClassRegistry, ChatMessage, StreamableChatAgent
 from zav.agents_sdk.adapters import ZAVChatCompletionClient
@@ -133,8 +132,7 @@ class {class_name}(StreamableChatAgent):
                 raise Exception("No response from chat completion client")
 
             yield ChatMessage.from_orm(chat_client_response.chat_completion)
-"""
-        )
+""")
 
     # Update agent_setups.json
     agent_setups_file = os.path.join(project_dir, "agent_setups.json")
@@ -210,8 +208,7 @@ def create_dependency_files(
 
     # Create the dependency file
     with open(dependency_file, "w") as f:
-        f.write(
-            f"""from typing import Dict, Optional
+        f.write(f"""from typing import Dict, Optional
 import httpx
 from zav.agents_sdk import AgentDependencyFactory, AgentDependencyRegistry
 
@@ -234,7 +231,6 @@ class {class_name}Factory(AgentDependencyFactory):
 
 
 AgentDependencyRegistry.register({class_name}Factory)
-"""
-        )
+""")
 
     return dependency_name_snake

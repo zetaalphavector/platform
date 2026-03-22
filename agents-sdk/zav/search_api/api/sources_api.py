@@ -48,6 +48,7 @@ class SourcesApi(object):
             params_map={
                 'all': [
                     'user_roles',
+                    'user_tenants',
                     'tenant',
                 ],
                 'required': [],
@@ -66,15 +67,19 @@ class SourcesApi(object):
                 'openapi_types': {
                     'user_roles':
                         (str,),
+                    'user_tenants':
+                        (str,),
                     'tenant':
                         (str,),
                 },
                 'attribute_map': {
                     'user_roles': 'user-roles',
+                    'user_tenants': 'user-tenants',
                     'tenant': 'tenant',
                 },
                 'location_map': {
                     'user_roles': 'header',
+                    'user_tenants': 'header',
                     'tenant': 'query',
                 },
                 'collection_format_map': {
@@ -104,6 +109,7 @@ class SourcesApi(object):
 
         Keyword Args:
             user_roles (str): [optional]
+            user_tenants (str): [optional]
             tenant (str): Tenant. [optional] if omitted the server will use the default value of "zetaalpha"
             _return_http_data_only (bool): response data without head status
                 code and headers. Default is True.

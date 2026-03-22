@@ -61,3 +61,12 @@ try:
     ]
 except ImportError:
     pass
+
+try:
+    from zav.agents_sdk.adapters.llm_models.ragelo_llm_provider import (
+        ZAVRageloLLMProvider,
+    )
+
+    __all__ += ["ZAVRageloLLMProvider"]
+except ImportError:
+    pass
