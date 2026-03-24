@@ -141,8 +141,12 @@ class ChatResponse(BaseModel):
     error: Optional[Exception] = None
     chat_message: Optional[ChatMessage] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+    else:
+
+        class Config:
+            arbitrary_types_allowed = True
 
 
 class BotConversation(BaseModel):

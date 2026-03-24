@@ -893,6 +893,12 @@ def test(  # noqa: C901
         Optional[str],
         typer.Option(help="Path of the secret agent setup configuration file."),
     ] = None,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            help="Dump per-spec trace files to agent-traces/ for debugging.",
+        ),
+    ] = False,
 ):
     """
     Runs behavior-spec tests for the agents in the project.
@@ -983,6 +989,12 @@ def test(  # noqa: C901
             "[bold]secret setup src[/]", f"[magenta]{secret_setup_src}[/]"
         )
         info_table.add_row("[bold]SDK version[/]", f"[green]{__version__}[/]")
+        if debug:
+            traces_dir = Path("agent-traces")
+            traces_dir.mkdir(exist_ok=True)
+            info_table.add_row(
+                "[bold]traces dir[/]", f"[yellow]{traces_dir.resolve()}[/]"
+            )
         console.print(Panel(info_table, border_style="cyan"))
 
         async def _inner():
@@ -1010,12 +1022,26 @@ def test(  # noqa: C901
                         if case_result.duration is not None
                         else ""
                     )
+                    if debug:
+                        trace_file = traces_dir / f"{case_result.spec_id}.trace.json"
+                        trace_file.write_text(
+                            json.dumps(
+                                local_trace_store.export(),
+                                indent=2,
+                                default=str,
+                            )
+                        )
+                        local_trace_store.reset()
                     if case_result.status == "passed":
                         passed += 1
                         console.print(f"[bold green]PASSED[/] {duration_str}")
+                        if debug:
+                            console.print(f"   [dim]Trace: {trace_file}[/]")
                     else:
                         failures.append((idx, case_result))
                         console.print(f"[bold bright_red]FAILED[/] {duration_str}")
+                        if debug:
+                            console.print(f"   [dim]Trace: {trace_file}[/]")
             console.print()  # newline after progress line
 
         asyncio.run(_inner())

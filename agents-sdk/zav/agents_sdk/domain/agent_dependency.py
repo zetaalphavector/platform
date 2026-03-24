@@ -1,6 +1,16 @@
 import inspect
 from abc import ABC, abstractmethod
-from typing import Dict, Generic, Optional, Protocol, Type, TypeVar, Union, get_args
+from typing import (
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+    get_args,
+)
 
 from typing_extensions import ParamSpec
 
@@ -8,6 +18,31 @@ from zav.agents_sdk.domain.utils import check_is_optional
 
 T = TypeVar("T")
 DEPENDENCY_PARAMS = ParamSpec("DEPENDENCY_PARAMS")
+
+
+class DependencyGroup(Generic[T]):
+    """Marker base for auto-collecting all registered subclasses of a type.
+
+    A concrete subclass declares the base type to collect via
+    ``__collects__`` and can then be used as a constructor parameter.
+    When ``ChatAgentFactory`` encounters such a parameter, it scans the
+    dependency registry for all factories whose return type is a subclass
+    of ``__collects__``, resolves each one via normal DI, and wraps them
+    in the group.
+
+    Example::
+
+        class ToolsSourceGroup(DependencyGroup[ToolsSource]):
+            __collects__ = ToolsSource
+
+    An agent (or another dependency) can then declare
+    ``tools_source_group: ToolsSourceGroup`` in its constructor.
+    """
+
+    __collects__: Type
+
+    def __init__(self, items: List[T]) -> None:
+        self.items = items
 
 
 class AgentDependencyFactory(ABC, Generic[DEPENDENCY_PARAMS, T]):
@@ -32,6 +67,10 @@ class AgentDependencyRegistryProtocol(Protocol):
         self, t: type
     ) -> Optional[Union[Type[AgentDependencyFactory], AgentDependencyFactory]]: ...
 
+    def get_subclasses_of(
+        self, base: type
+    ) -> List[Union[Type[AgentDependencyFactory], AgentDependencyFactory]]: ...
+
 
 class AgentDependencyRegistry(AgentDependencyRegistryProtocol):
     registry: Dict[
@@ -46,6 +85,16 @@ class AgentDependencyRegistry(AgentDependencyRegistryProtocol):
         cls, t: type
     ) -> Optional[Union[Type[AgentDependencyFactory], AgentDependencyFactory]]:
         return cls.registry.get(t)
+
+    @classmethod
+    def get_subclasses_of(
+        cls, base: type
+    ) -> List[Union[Type[AgentDependencyFactory], AgentDependencyFactory]]:
+        return [
+            factory
+            for return_type, factory in cls.registry.items()
+            if inspect.isclass(return_type) and issubclass(return_type, base)
+        ]
 
     @classmethod
     def register(

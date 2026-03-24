@@ -50,6 +50,7 @@ class TenantSettingsApi(object):
                 'all': [
                     'requester_uuid',
                     'tenant',
+                    'user_tenants',
                 ],
                 'required': [],
                 'nullable': [
@@ -69,14 +70,18 @@ class TenantSettingsApi(object):
                         (UUIDString,),
                     'tenant':
                         (str,),
+                    'user_tenants':
+                        (str,),
                 },
                 'attribute_map': {
                     'requester_uuid': 'requester-uuid',
                     'tenant': 'tenant',
+                    'user_tenants': 'user-tenants',
                 },
                 'location_map': {
                     'requester_uuid': 'header',
                     'tenant': 'query',
+                    'user_tenants': 'header',
                 },
                 'collection_format_map': {
                 }
@@ -106,6 +111,7 @@ class TenantSettingsApi(object):
         Keyword Args:
             requester_uuid (UUIDString): [optional]
             tenant (str): Tenant. [optional] if omitted the server will use the default value of "zetaalpha"
+            user_tenants (str): [optional]
             _return_http_data_only (bool): response data without head status
                 code and headers. Default is True.
             _preload_content (bool): if False, the urllib3.HTTPResponse object

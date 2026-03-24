@@ -8,6 +8,7 @@ from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyFactory,
     AgentDependencyRegistry,
     AgentDependencyRegistryProtocol,
+    DependencyGroup,
 )
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
 from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
@@ -32,6 +33,7 @@ from zav.agents_sdk.domain.chat_message import (
     CustomContext,
     CustomContextItem,
     DocumentContext,
+    FilterContext,
     FunctionCallRequest,
     FunctionSpec,
     TagContext,
@@ -58,6 +60,7 @@ __all__ = [
     "AgentDependencyFactory",
     "AgentDependencyRegistry",
     "AgentDependencyRegistryProtocol",
+    "DependencyGroup",
     "AgentSetup",
     "AgentSetupRetriever",
     "ChatAgent",
@@ -72,6 +75,7 @@ __all__ = [
     "ContentPartTable",
     "ConversationContext",
     "DocumentContext",
+    "FilterContext",
     "FunctionCallRequest",
     "FunctionSpec",
     "setup_app",

@@ -54,7 +54,7 @@ class EncryptedStr(str):
         self.__unencrypted_value = unencrypted_value
 
     def get_unencrypted_secret(self) -> Optional[str]:
-        return self.__unencrypted_value
+        return getattr(self, "_EncryptedStr__unencrypted_value", None)
 
     if PYDANTIC_V2:
 
@@ -66,11 +66,20 @@ class EncryptedStr(str):
         def __get_pydantic_core_schema__(
             cls, source: Type[Any], handler: GetCoreSchemaHandler
         ) -> core_schema.CoreSchema:
-            return core_schema.no_info_plain_validator_function(
-                cls.validate,
-                json_schema_input_schema=core_schema.str_schema(
-                    max_length=cls.max_length, min_length=cls.min_length
-                ),
+            # If the string is already an EncryptedStr, return it as-is.
+            # Otherwise, use str_schema
+            return core_schema.union_schema(
+                [
+                    core_schema.is_instance_schema(cls),
+                    core_schema.chain_schema(
+                        [
+                            core_schema.str_schema(
+                                min_length=cls.min_length, max_length=cls.max_length
+                            ),
+                            core_schema.no_info_plain_validator_function(cls.validate),
+                        ]
+                    ),
+                ],
                 serialization=core_schema.plain_serializer_function_ser_schema(
                     cls._serialize,
                     info_arg=False,

@@ -96,8 +96,10 @@ def format_display_text(
     template: str,
     tool_params: Optional[Dict[str, Any]] = None,
     tool_result: Optional[Any] = None,
+    defaults: Optional[Dict[str, Any]] = None,
 ) -> str:
-    context: Dict[str, Any] = {**(tool_params or {})}
+    context: Dict[str, Any] = {**(defaults or {})}
+    context.update(tool_params or {})
     if tool_result is not None and isinstance(tool_result, dict):
         context.update(tool_result)
 
@@ -209,6 +211,47 @@ class Tool(BaseModel):
     executable: Callable
     parameters_spec: Optional[Dict[str, Any]] = None
     streaming_config: Optional[ToolStreamingConfig] = None
+    max_output_tokens: Optional[int] = None
+
+    @classmethod
+    def from_callable(
+        cls,
+        executable: Callable,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        streaming_config: Optional[ToolStreamingConfig] = None,
+        max_output_tokens: Optional[int] = None,
+    ) -> "Tool":
+        """Build a ``Tool`` from a callable with automatic inspection.
+
+        - **name** defaults to the callable's ``__qualname__`` (dots
+          replaced with underscores).
+        - **description** falls back to the callable's docstring.
+        - A ``@streamable`` decorator on the callable is detected
+          automatically when *streaming_config* is not provided.
+        """
+        qualified_name = (name or executable.__qualname__).replace(".", "_")
+        resolved_description = description or inspect.getdoc(executable) or ""
+        detected_streaming_config = getattr(executable, "_streaming_config", None)
+        if not isinstance(detected_streaming_config, ToolStreamingConfig):
+            detected_streaming_config = None
+
+        return cls(
+            name=qualified_name,
+            description=resolved_description,
+            executable=executable,
+            streaming_config=streaming_config or detected_streaming_config,
+            max_output_tokens=max_output_tokens,
+        )
+
+    def get_parameter_defaults(self) -> Dict[str, Any]:
+        """Returns the default values for all parameters that have them."""
+        defaults: Dict[str, Any] = {}
+        sig = inspect.signature(self.executable)
+        for name, param in sig.parameters.items():
+            if param.default is not inspect.Parameter.empty:
+                defaults[name] = param.default
+        return defaults
 
     def get_parameters_spec(self) -> Dict[str, Any]:
         """Returns a JSON schema of the parameters of the tool."""
@@ -220,6 +263,8 @@ class Tool(BaseModel):
 
         signature = inspect.signature(self.executable)
         for name, param in signature.parameters.items():
+            if name.startswith("_"):
+                continue
             param_schema = {}
             param_type = param.annotation
 
@@ -321,23 +366,16 @@ class ToolsRegistry:
         name: Optional[str] = None,
         description: Optional[str] = None,
         streaming_config: Optional[ToolStreamingConfig] = None,
+        max_output_tokens: Optional[int] = None,
     ):
-        qualified_name = (name or executable.__qualname__).replace(".", "_")
-        description = description or inspect.getdoc(executable) or ""
-        detected_streaming_config = getattr(executable, "_streaming_config", None)
-        if not isinstance(detected_streaming_config, ToolStreamingConfig):
-            detected_streaming_config = None
-
-        self.tools_index.update(
-            {
-                qualified_name: Tool(
-                    name=qualified_name,
-                    description=description,
-                    executable=executable,
-                    streaming_config=streaming_config or detected_streaming_config,
-                )
-            }
+        tool = Tool.from_callable(
+            executable=executable,
+            name=name,
+            description=description,
+            streaming_config=streaming_config,
+            max_output_tokens=max_output_tokens,
         )
+        self.tools_index[tool.name] = tool
 
     async def execute(self, name: str, params: Optional[Dict[str, Any]] = None) -> Any:
         if name not in self.tools_index:

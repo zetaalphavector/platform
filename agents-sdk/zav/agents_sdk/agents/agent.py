@@ -1,13 +1,22 @@
-from typing import AsyncGenerator
+from datetime import datetime
+from typing import AsyncGenerator, Optional
+from zoneinfo import ZoneInfo
 
+from zav.agents_sdk.adapters.context.context_provider import ContextProvider
 from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
     ZAVChatCompletionClient,
 )
 from zav.agents_sdk.adapters.mcp.tools_provider import MCPToolsProvider
+from zav.agents_sdk.adapters.memory.memory_provider import MemoryProvider
+from zav.agents_sdk.adapters.message_processing.message_processing_provider import (
+    MessageProcessingProvider,
+)
 from zav.agents_sdk.adapters.skills.skills_provider import SkillsProvider
+from zav.agents_sdk.adapters.sub_agent.sub_agent_tool import SubAgentTool
+from zav.agents_sdk.adapters.tools.tools_provider import ToolsProvider
 from zav.agents_sdk.domain.chat_agent import StreamableChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
-from zav.agents_sdk.domain.chat_message import ChatMessage
+from zav.agents_sdk.domain.chat_message import ChatMessage, ConversationContext
 
 _MAIN_SYSTEM_PROMPT = """You are a helpful AI assistant with access to specialized tools and skills. You are expected to be precise, safe, and helpful.
 
@@ -81,26 +90,87 @@ class Agent(StreamableChatAgent):
         client: ZAVChatCompletionClient,
         skills_provider: SkillsProvider,
         mcp_provider: MCPToolsProvider,
+        sub_agent_tool: SubAgentTool,
+        tools_provider: ToolsProvider,
+        memory_provider: MemoryProvider,
+        context_provider: ContextProvider,
+        message_processing_provider: MessageProcessingProvider,
+        conversation_context: Optional[ConversationContext] = None,
         system_prompt: str = _MAIN_SYSTEM_PROMPT,
+        user_instructions: Optional[str] = None,
+        timezone: str = "UTC",
     ):
         self.client = client
         self.skills_provider = skills_provider
         self.mcp_provider = mcp_provider
+        self.sub_agent_tool = sub_agent_tool
+        self.tools_provider = tools_provider
+        self.memory_provider = memory_provider
+        self.context_provider = context_provider
+        self.__message_processing_provider = message_processing_provider
+        self.__conversation_context = conversation_context
         self.__system_prompt = system_prompt
+        self.__user_instructions = user_instructions
+        self.__timezone = timezone
 
     async def execute_streaming(
         self, conversation: list[ChatMessage]
     ) -> AsyncGenerator[ChatMessage, None]:
         self.tools_registry.extend(await self.mcp_provider.get_tools())
         self.tools_registry.extend(await self.skills_provider.get_tools())
+        self.tools_registry.extend(
+            await self.sub_agent_tool.get_tools(
+                self.agent_identifier,
+            )
+        )
+        self.tools_registry.extend(await self.tools_provider.get_tools())
+        self.tools_registry.extend(await self.memory_provider.get_tools())
+        self.tools_registry.extend(await self.context_provider.get_tools())
 
         skills_prompt = await self.skills_provider.to_prompt()
         if skills_prompt:
             self.__system_prompt = f"{self.__system_prompt}\n\n{skills_prompt}"
 
+        sub_agent_prompt = self.sub_agent_tool.to_prompt()
+        if sub_agent_prompt:
+            self.__system_prompt = f"{self.__system_prompt}\n\n{sub_agent_prompt}"
+
+        tools_prompt = self.tools_provider.to_prompt()
+        if tools_prompt:
+            self.__system_prompt = f"{self.__system_prompt}\n\n{tools_prompt}"
+
+        memory_prompt = await self.memory_provider.to_prompt()
+        if memory_prompt:
+            self.__system_prompt = f"{self.__system_prompt}\n\n{memory_prompt}"
+
+        context_prompt = await self.context_provider.to_prompt(
+            initial_context=self.__conversation_context,
+        )
+        if context_prompt:
+            self.__system_prompt = f"{self.__system_prompt}\n\n{context_prompt}"
+
+        if self.__user_instructions:
+            self.__system_prompt = (
+                f"{self.__system_prompt}\n\n"
+                f"## Additional user instructions\n"
+                f"{self.__user_instructions}"
+            )
+
+        tz = ZoneInfo(self.__timezone)
+        now = datetime.now(tz)
+        date_time_str = now.strftime("%A, %B %-d, %Y, %H:%M %Z")
+        self.__system_prompt = (
+            f"{self.__system_prompt}\n\nThe current date and time is {date_time_str}."
+        )
+
+        completions = await self.context_provider.process_conversation(
+            initial_context=self.__conversation_context,
+            conversation=conversation,
+        )
+
         response = await self.client.complete(
             bot_setup_description=self.__system_prompt,
-            messages=conversation,
+            completions=completions,
             tools=self.tools_registry,
             stream=True,
             execute_tools=True,
@@ -115,4 +185,7 @@ class Agent(StreamableChatAgent):
             if not message:
                 raise Exception("No response from chat completion client")
 
+            message = await self.__message_processing_provider.process(
+                chat_client_response, message
+            )
             yield message
