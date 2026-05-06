@@ -19,6 +19,14 @@ from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
 
 
+async def _async_redirect_handler(url: str) -> None:
+    logger.info(f"OAuth: Visit this URL to authorize: {url}")
+
+
+async def _async_callback_handler() -> tuple:
+    return ("auth_code", None)
+
+
 class InMemoryTokenStorage(TokenStorage):
     # Adapted from https://github.com/modelcontextprotocol/python-sdk/blob/main/examples/clients/simple-auth-client/mcp_simple_auth_client/main.py # noqa: E501
 
@@ -42,6 +50,16 @@ class InMemoryTokenStorage(TokenStorage):
 class OauthClientTransportConfig(BaseModel):
     server_url: str
     client_metadata: OAuthClientMetadata
+    client_id: Optional[str] = Field(
+        None,
+        description="Pre-registered OAuth client ID. When provided together with "
+        "client_secret, the SDK skips dynamic client registration (RFC 7591) "
+        "and uses these credentials directly.",
+    )
+    client_secret: Optional[str] = Field(
+        None,
+        description="Pre-registered OAuth client secret.",
+    )
 
 
 class BaseTransportConfig(BaseModel):
@@ -147,7 +165,11 @@ class MCPServerConfig(BaseModel):
             )
 
 
-class MCPConfiguration(BaseModel):
+class MCPToolsProviderConfiguration(BaseModel):
+    enabled: bool = Field(
+        False,
+        description="Enable MCP tools provider. If false, no tools will be provided.",
+    )
     client_session_timeout_seconds: float = Field(
         5, description="Read timeout in seconds passed to the MCP ClientSession."
     )
@@ -165,11 +187,22 @@ class MCPConfiguration(BaseModel):
 
 class MCPToolsProvider:
 
-    def __init__(self, mcp_configuration: MCPConfiguration):
-        self.__config = mcp_configuration
+    def __init__(self, mcp_tools_provider_configuration: MCPToolsProviderConfiguration):
+        self.__config = mcp_tools_provider_configuration
         self.__stack = AsyncExitStack()
         self.__lock = asyncio.Lock()
         self.__session_map: Dict[str, ClientSession] = {}
+        self.__resolved: Optional[Dict[str, List[Tool]]] = None
+
+    async def describe_loaded(self) -> Dict[str, Any]:
+        resolved = await self.__resolve_server_tools()
+        return {
+            "enabled": self.__config.enabled,
+            "sources": list(resolved.keys()),
+            "tools_by_source": {
+                name: [t.name for t in tools] for name, tools in resolved.items()
+            },
+        }
 
     async def cleanup(self):
         async with self.__lock:
@@ -185,25 +218,31 @@ class MCPToolsProvider:
         try:
             for server_cfg in self.__config.servers:
                 transport_cfg = server_cfg.get_transport_config()
-                oauth_auth = (
-                    OAuthClientProvider(
+                oauth_auth = None
+                if oauth_cfg := transport_cfg.oauth_client:
+                    storage = InMemoryTokenStorage()
+                    if oauth_cfg.client_id:
+                        await storage.set_client_info(
+                            OAuthClientInformationFull(
+                                client_id=oauth_cfg.client_id,
+                                client_secret=oauth_cfg.client_secret,
+                                **oauth_cfg.client_metadata.model_dump(
+                                    exclude_none=True
+                                ),
+                            )
+                        )
+                    oauth_auth = OAuthClientProvider(
                         server_url=oauth_cfg.server_url,
                         client_metadata=OAuthClientMetadata.model_validate(
                             oauth_cfg.client_metadata
                         ),
-                        storage=InMemoryTokenStorage(),
-                        redirect_handler=lambda url: print(
-                            f"Visit: {url}"
-                        ),  # TODO: Implement telling the user to visit the URL as an
+                        storage=storage,
+                        redirect_handler=lambda url: _async_redirect_handler(url),
+                        # TODO: Implement telling the user to visit the URL as an
                         # agent tool response
-                        callback_handler=lambda: (
-                            "auth_code",
-                            None,
-                        ),  # TODO: Implement getting auth code from callback endpoint
+                        callback_handler=lambda: _async_callback_handler(),
+                        # TODO: Implement getting auth code from callback endpoint
                     )
-                    if (oauth_cfg := transport_cfg.oauth_client)
-                    else None
-                )
                 if isinstance(transport_cfg, StdIoTransportConfig):
                     transport = await self.__stack.enter_async_context(
                         stdio_client(
@@ -268,13 +307,23 @@ class MCPToolsProvider:
         Discover MCP tools from all configured servers and
         return them as Tool instances.
         """
+        if not self.__config.enabled:
+            return []
+        resolved = await self.__resolve_server_tools()
+        return [t for tools in resolved.values() for t in tools]
+
+    async def __resolve_server_tools(
+        self,
+    ) -> Dict[str, List[Tool]]:
+        if self.__resolved is not None:
+            return self.__resolved
         if not self.__session_map:
             await self.__connect()
-        tools: List[Tool] = []
-        # Iterate over each server config and discover tools
+        self.__resolved = {}
         for server_cfg in self.__config.servers:
             transport_cfg = server_cfg.get_transport_config()
             server_name = transport_cfg.name
+            server_tools: List[Tool] = []
             mcp_tools = await self.__session_map[server_name].list_tools()
             for mcp_tool in mcp_tools.tools:
                 schema = dict(mcp_tool.inputSchema or {})
@@ -311,7 +360,7 @@ class MCPToolsProvider:
                 else:
                     streaming_config = self.__config.tool_streaming.get(mcp_tool.name)
 
-                tools.append(
+                server_tools.append(
                     Tool(
                         name=mcp_tool.name,
                         description=mcp_tool.description or "",
@@ -320,12 +369,16 @@ class MCPToolsProvider:
                         streaming_config=streaming_config,
                     )
                 )
-        return tools
+            self.__resolved[server_name] = server_tools
+        return self.__resolved
 
 
 class MCPToolsProviderFactory(AgentDependencyFactory):
     @classmethod
     def create(
-        cls, mcp_configuration: MCPConfiguration = MCPConfiguration()
+        cls,
+        mcp_tools_provider_configuration: MCPToolsProviderConfiguration = (
+            MCPToolsProviderConfiguration()
+        ),
     ) -> MCPToolsProvider:
-        return MCPToolsProvider(mcp_configuration)
+        return MCPToolsProvider(mcp_tools_provider_configuration)

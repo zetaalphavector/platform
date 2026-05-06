@@ -223,6 +223,7 @@ class SkillsSource(ABC):
     """Abstract source for skill discovery. Extend this for custom backends."""
 
     source_name: ClassVar[str]
+    enabled: bool
 
     @staticmethod
     def parse_skill_properties(content: str) -> SkillProperties:
@@ -364,6 +365,16 @@ class SkillsSource(ABC):
         """Read the content of a skill resource file."""
         raise NotImplementedError
 
+    async def get_skill_content(self, skill_name: str) -> str:
+        """Return the full raw content (frontmatter + body) for a skill.
+
+        Override in sources that support update. The default raises
+        SkillReadError.
+        """
+        raise SkillReadError(
+            f"Source '{self.source_name}' does not support reading raw content."
+        )
+
     async def create_skill(self, name: str, content: str) -> SkillProperties:
         """Persist a new skill.
 
@@ -378,6 +389,22 @@ class SkillsSource(ABC):
         """
         raise SkillWriteError(
             f"Source '{self.source_name}' is read-only and cannot create skills."
+        )
+
+    async def update_skill(self, name: str, content: str) -> SkillProperties:
+        """Update an existing skill.
+
+        Override in writable sources. The default raises SkillWriteError.
+
+        Args:
+            name: Skill identifier of the existing skill to update.
+            content: Full SKILL.md content (frontmatter + body).
+
+        Returns:
+            The updated properties parsed from the new content.
+        """
+        raise SkillWriteError(
+            f"Source '{self.source_name}' is read-only and cannot update skills."
         )
 
 

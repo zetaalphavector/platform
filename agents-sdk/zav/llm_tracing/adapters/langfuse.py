@@ -1,14 +1,23 @@
+import zav.pydantic_compat._pydantic_v1_py314_fix  # isort: skip  # noqa: F401
+import warnings
 from typing import Dict, Optional, Tuple, Union
 
 import httpx
-from langfuse import Langfuse
-from langfuse.api.resources.commons.types import ScoreDataType
-from langfuse.api.resources.score.types import CreateScoreRequest
-from langfuse.client import (
-    StatefulGenerationClient,
-    StatefulSpanClient,
-    StatefulTraceClient,
-)
+
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message="'return' in a 'finally' block",
+        category=SyntaxWarning,
+    )
+    from langfuse import Langfuse
+    from langfuse.api.resources.commons.types import ScoreDataType
+    from langfuse.api.resources.score.types import CreateScoreRequest
+    from langfuse.client import (
+        StatefulGenerationClient,
+        StatefulSpanClient,
+        StatefulTraceClient,
+    )
 
 from zav.llm_tracing.feedback import FeedbackService
 from zav.llm_tracing.feedback_service_factory import FeedbackServiceFactory

@@ -1,7 +1,17 @@
+from zav.agents_sdk.adapters.llm_models.context_window_manager import (
+    ContextWindowConfiguration,
+    ContextWindowManager,
+    ContextWindowManagerFactory,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
+
+AgentDependencyRegistry.register(ContextWindowManagerFactory)
 
 __all__ = [
     "AgentDependencyRegistry",
+    "ContextWindowConfiguration",
+    "ContextWindowManager",
+    "ContextWindowManagerFactory",
 ]
 
 

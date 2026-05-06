@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from zav.agents_sdk.domain.agent_dependency import DependencyGroup
-from zav.agents_sdk.domain.chat_message import ConversationContext
+from zav.agents_sdk.domain.chat_message import ChatMessage, ConversationContext
 
 
 class ContextOrigin(str, Enum):
@@ -28,6 +28,7 @@ class ContextSource(ABC):
     """
 
     source_name: ClassVar[str]
+    enabled: bool
 
     @abstractmethod
     def describe(self, origin: ContextOrigin) -> str:
@@ -49,6 +50,20 @@ class ContextSource(ABC):
         Returns ``None`` if this source has nothing to contribute.
         """
         raise NotImplementedError
+
+    async def resolve_from_conversation(
+        self, conversation: List[ChatMessage]
+    ) -> Optional[List[ResolvedContextItem]]:
+        """Resolve context by inspecting conversation messages.
+
+        Override this when context data lives inside conversation messages
+        (e.g. tool calls injected by a poller) rather than in
+        ``ConversationContext``. Called once during conversation
+        processing before the LLM call.
+
+        Returns ``None`` if this source has nothing to contribute.
+        """
+        return None
 
     def format_items(
         self,

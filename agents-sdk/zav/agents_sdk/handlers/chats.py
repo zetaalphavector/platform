@@ -1,5 +1,6 @@
 from typing import Any, Callable, List, Optional, Type
 
+from zav.api.errors import BadRequestException, NotFoundException
 from zav.llm_tracing import TracingBackendFactory
 from zav.message_bus import (  # noqa
     CommandHandlerRegistry,
@@ -9,6 +10,10 @@ from zav.message_bus import (  # noqa
 
 from zav.agents_sdk.adapters.event_publishers.event_publisher import (
     AbstractEventPublisher,
+)
+from zav.agents_sdk.adapters.stream_buffer import (
+    StreamBufferLimitError,
+    StreamBufferRegistry,
 )
 from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
@@ -213,3 +218,67 @@ async def handle_create_stream(
         )
 
     return chat_agent_response
+
+
+@CommandHandlerRegistry.register(commands.CreateBufferedChatStream)
+async def handle_create_buffered_stream(
+    cmd: commands.CreateBufferedChatStream,
+    queue: List[Message],
+    agent_registries_factory: AgentRegistriesFactory,
+    tracing_backend_factory: Type[TracingBackendFactory],
+    stream_buffer_registry: StreamBufferRegistry,
+    event_publisher: Optional[AbstractEventPublisher] = None,
+    debug_backend: Optional[Callable[[Any], Any]] = None,
+):
+    generator = await handle_create_stream(
+        cmd=cmd,
+        queue=queue,
+        agent_registries_factory=agent_registries_factory,
+        tracing_backend_factory=tracing_backend_factory,
+        event_publisher=event_publisher,
+        debug_backend=debug_backend,
+    )
+    if not generator:
+        return None
+
+    try:
+        return stream_buffer_registry.create(
+            message_id=cmd.message_id,
+            tenant=cmd.tenant,
+            requester_uuid=cmd.request_headers.requester_uuid,
+            generator=generator,
+        )
+    except StreamBufferLimitError as e:
+        raise BadRequestException(str(e))
+
+
+@CommandHandlerRegistry.register(commands.GetChatStreamBuffer)
+async def handle_get_chat_stream_buffer(
+    cmd: commands.GetChatStreamBuffer,
+    queue: List[Message],
+    stream_buffer_registry: StreamBufferRegistry,
+):
+    buffer = stream_buffer_registry.get(
+        message_id=cmd.message_id,
+        tenant=cmd.tenant,
+        requester_uuid=cmd.requester_uuid,
+    )
+    if buffer is None:
+        raise NotFoundException("Stream not found or expired")
+
+    return buffer
+
+
+@CommandHandlerRegistry.register(commands.CancelChatStream)
+async def handle_cancel_chat_stream(
+    cmd: commands.CancelChatStream,
+    queue: List[Message],
+    stream_buffer_registry: StreamBufferRegistry,
+):
+    cancelled = await stream_buffer_registry.cancel_stream(
+        message_id=cmd.message_id,
+        tenant=cmd.tenant,
+        requester_uuid=cmd.requester_uuid,
+    )
+    if not cancelled:
+        raise NotFoundException("Stream not found or expired")

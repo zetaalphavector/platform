@@ -14,4 +14,5 @@
 #   sys.setrecursionlimit(n)
 
 # Import APIs into API package:
+from zav.user_documents_connector.api.external_documents_api import ExternalDocumentsApi
 from zav.user_documents_connector.api.user_documents_api import UserDocumentsApi

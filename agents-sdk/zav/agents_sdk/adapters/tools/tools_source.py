@@ -13,13 +13,14 @@ class ToolsSource(ABC):
 
     source_name: ClassVar[str]
     """Short identifier for this source, used in configuration filtering."""
+    enabled: bool
 
     @abstractmethod
     async def get_tools(self) -> List[Tool]:
         """Return all tools provided by this source."""
         raise NotImplementedError
 
-    def to_prompt(self) -> str:
+    async def to_prompt(self) -> str:
         return ""
 
 

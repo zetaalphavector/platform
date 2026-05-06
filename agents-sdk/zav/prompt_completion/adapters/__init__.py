@@ -18,3 +18,13 @@ try:
     from zav.prompt_completion.adapters.azure_openai_client import *
 except ImportError:
     pass
+
+try:
+    from zav.prompt_completion.adapters.azure_anthropic_client import *
+except ImportError:
+    pass
+
+try:
+    from zav.prompt_completion.adapters.bedrock_clients import *
+except ImportError:
+    pass

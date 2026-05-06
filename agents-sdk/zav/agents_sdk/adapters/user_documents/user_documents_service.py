@@ -2,13 +2,13 @@ import json
 import mimetypes
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
 from zav.common import mimetypes as _  # noqa: F401 — registers model/jt MIME fix
 from zav.logging import logger
+from zav.pydantic_compat import BaseModel, ConfigDict, Field
 from zav.user_documents_connector import ApiClient, Configuration
-from zav.user_documents_connector.apis import UserDocumentsApi
+from zav.user_documents_connector.apis import ExternalDocumentsApi, UserDocumentsApi
 from zav.user_documents_connector.models import (
     ItemAccessRights,
     UserDocumentForm,
@@ -139,6 +139,7 @@ class UserDocumentsService:
             api_client.set_default_header("X-Auth", request_headers.x_auth)
 
         self.__user_documents = UserDocumentsApi(api_client)
+        self.__external_documents = ExternalDocumentsApi(api_client)
         self.__request_headers = request_headers
         self.__tenant = tenant
         self.__index_id = index_id
@@ -186,6 +187,59 @@ class UserDocumentsService:
             f"requester_uuid: {requester_uuid}"
         )
         user_document = await asyncify(self.__user_documents.create_user_document)(
+            tenant=self.__tenant,
+            user_document_form=document_form,
+            requester_uuid=requester_uuid,
+            user_tenants=user_tenants,
+            user_roles=user_roles,
+            **params,
+        )
+        return _parse_user_document_item(user_document)
+
+    @handle_api_errors
+    async def create_external_document(
+        self,
+        uri: str,
+        title: Optional[str] = None,
+        authors: Optional[List[str]] = None,
+        description: Optional[str] = None,
+        year: Optional[int] = None,
+        date: Optional[str] = None,
+        source: Optional[str] = None,
+        search_engine: Optional[str] = None,
+    ) -> UserDocument:
+        metadata_kwargs: Dict[str, Any] = {}
+        if title is not None:
+            metadata_kwargs["title"] = title
+        if authors is not None:
+            metadata_kwargs["authors"] = authors
+        if description is not None:
+            metadata_kwargs["description"] = description
+        if year is not None:
+            metadata_kwargs["year"] = year
+        if source is not None:
+            metadata_kwargs["source"] = source
+        if search_engine is not None:
+            metadata_kwargs["search_engine"] = search_engine
+        if date is not None:
+            metadata_kwargs["date"] = datetime.fromisoformat(date)
+
+        document_form = UserDocumentForm(
+            access_roles=[ItemAccessRights("own")],
+            document_metadata=ZavUserDocumentMetadata(**metadata_kwargs),
+            uri=uri,
+        )
+
+        user_tenants = self.__user_tenants(self.__tenant)
+        user_roles = self.__user_roles_from_request_headers()
+        requester_uuid = self.__request_headers.requester_uuid or ""
+        params = {
+            **({"index_id": self.__index_id} if self.__index_id else {}),
+        }
+
+        user_document = await asyncify(
+            self.__external_documents.create_external_document
+        )(
             tenant=self.__tenant,
             user_document_form=document_form,
             requester_uuid=requester_uuid,

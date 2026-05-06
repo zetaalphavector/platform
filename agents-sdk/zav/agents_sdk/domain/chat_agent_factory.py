@@ -195,6 +195,7 @@ class ChatAgentFactory:
 
     async def __parse_value(
         self,
+        agent_identifier: str,
         param: inspect.Parameter,
         param_name: str,
         handler_params: Dict[str, Any],
@@ -234,7 +235,9 @@ class ChatAgentFactory:
                     extra_agent_kwargs=extra_agent_kwargs,
                 )
 
-            return AgentCreator(agent_factory=agent_factory)
+            return AgentCreator(
+                agent_factory=agent_factory, default_agent_identifier=agent_identifier
+            )
         # Parse agent dependency
         if self.__agent_dependency_registry and is_class:
             agent_dependency = self.__agent_dependency_registry.get(param_annotation)
@@ -254,6 +257,7 @@ class ChatAgentFactory:
                     **{
                         param_name: (
                             await self.__parse_value(
+                                agent_identifier=agent_identifier,
                                 param=param,
                                 param_name=param_name,
                                 handler_params=handler_params,
@@ -286,6 +290,7 @@ class ChatAgentFactory:
                     **{
                         fp_name: (
                             await self.__parse_value(
+                                agent_identifier=agent_identifier,
                                 param=fp,
                                 param_name=fp_name,
                                 handler_params=handler_params,
@@ -392,6 +397,7 @@ class ChatAgentFactory:
         resolution_cache: Dict[type, Any] = {}
         agent_cls_param_values = {
             param_name: await self.__parse_value(
+                agent_identifier=agent_identifier,
                 param=param,
                 param_name=param_name,
                 handler_params=handler_params,

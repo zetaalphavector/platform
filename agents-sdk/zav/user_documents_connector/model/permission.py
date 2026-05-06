@@ -53,7 +53,6 @@ class Permission(ModelSimple):
     allowed_values = {
         ('value',): {
             'READ': "READ",
-            'ADMIN': "ADMIN",
         },
     }
 
@@ -105,10 +104,10 @@ class Permission(ModelSimple):
         Note that value can be passed either in args or in kwargs, but not in both.
 
         Args:
-            args[0] (str): An enumeration.., must be one of ["READ", "ADMIN", ]  # noqa: E501
+            args[0] (str): An enumeration.. if omitted defaults to "READ", must be one of ["READ", ]  # noqa: E501
 
         Keyword Args:
-            value (str): An enumeration.., must be one of ["READ", "ADMIN", ]  # noqa: E501
+            value (str): An enumeration.. if omitted defaults to "READ", must be one of ["READ", ]  # noqa: E501
             _check_type (bool): if True, values for parameters in openapi_types
                                 will be type checked and a TypeError will be
                                 raised if the wrong type is input.
@@ -149,11 +148,7 @@ class Permission(ModelSimple):
             args = list(args)
             value = args.pop(0)
         else:
-            raise ApiTypeError(
-                "value is required, but not passed in args or kwargs and doesn't have default",
-                path_to_item=_path_to_item,
-                valid_classes=(self.__class__,),
-            )
+            value = "READ"
 
         _check_type = kwargs.pop('_check_type', True)
         _spec_property_naming = kwargs.pop('_spec_property_naming', False)
@@ -195,10 +190,10 @@ class Permission(ModelSimple):
         Note that value can be passed either in args or in kwargs, but not in both.
 
         Args:
-            args[0] (str): An enumeration.., must be one of ["READ", "ADMIN", ]  # noqa: E501
+            args[0] (str): An enumeration.. if omitted defaults to "READ", must be one of ["READ", ]  # noqa: E501
 
         Keyword Args:
-            value (str): An enumeration.., must be one of ["READ", "ADMIN", ]  # noqa: E501
+            value (str): An enumeration.. if omitted defaults to "READ", must be one of ["READ", ]  # noqa: E501
             _check_type (bool): if True, values for parameters in openapi_types
                                 will be type checked and a TypeError will be
                                 raised if the wrong type is input.
@@ -241,11 +236,7 @@ class Permission(ModelSimple):
             args = list(args)
             value = args.pop(0)
         else:
-            raise ApiTypeError(
-                "value is required, but not passed in args or kwargs and doesn't have default",
-                path_to_item=_path_to_item,
-                valid_classes=(self.__class__,),
-            )
+            value = "READ"
 
         _check_type = kwargs.pop('_check_type', True)
         _spec_property_naming = kwargs.pop('_spec_property_naming', False)

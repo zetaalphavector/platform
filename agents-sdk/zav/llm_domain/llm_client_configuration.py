@@ -23,6 +23,8 @@ class LLMProviderName(str, Enum):
     OLLAMA = "ollama"
     ANTHROPIC = "anthropic"
     AZURE_OPENAI = "azure_openai"
+    AZURE_ANTHROPIC = "azure_anthropic"
+    BEDROCK = "bedrock"
 
 
 class AnthropicConfiguration(BaseModel):
@@ -40,6 +42,13 @@ class OpenAIConfiguration(BaseModel):
     openai_api_type: Optional[str] = None
     openai_api_base: Optional[str] = None
     openai_api_version: Optional[str] = None
+
+
+class BedrockConfiguration(BaseModel):
+    aws_region: str
+    aws_access_key: Optional[EncryptedStr] = None
+    aws_secret_key: Optional[EncryptedStr] = None
+    endpoint_url: Optional[str] = None
 
 
 class AzureOpenAIApiKeyAuth(BaseModel):
@@ -87,10 +96,41 @@ class AzureOpenAIConfiguration(BaseModel):
         return values
 
 
+class AzureAnthropicConfiguration(BaseModel):
+    endpoint: str
+    auth_type: Literal["api_key", "client_secret", "workload_identity"]
+    api_key: Optional[AzureOpenAIApiKeyAuth] = None
+    client_secret: Optional[AzureOpenAIClientSecretAuth] = None
+    workload_identity: Optional[AzureOpenAIWorkloadIdentityAuth] = None
+
+    @root_validator()
+    @classmethod
+    def auth_matches_type(cls, values):
+        if PYDANTIC_V2:
+            vals = values.model_dump()
+        else:
+            vals = values
+        auth_type = vals.get("auth_type")
+        if not auth_type:
+            return values
+        if not vals.get(auth_type):
+            raise ValueError(
+                f"auth_type is '{auth_type}' but '{auth_type}' is not set."
+            )
+        for other in get_args(cls.__annotations__["auth_type"]):
+            if other != auth_type and vals.get(other):
+                raise ValueError(
+                    f"auth_type is '{auth_type}' but '{other}' is also set."
+                )
+        return values
+
+
 class LLMVendorConfiguration(BaseModel):
     openai: Optional[OpenAIConfiguration] = None
     anthropic: Optional[AnthropicConfiguration] = None
     azure_openai: Optional[AzureOpenAIConfiguration] = None
+    azure_anthropic: Optional[AzureAnthropicConfiguration] = None
+    bedrock: Optional[BedrockConfiguration] = None
 
     @root_validator()
     @classmethod

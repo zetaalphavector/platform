@@ -1,30 +1,31 @@
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import AsyncGenerator, ClassVar, Tuple
 
 from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import ChatResponse
 from zav.agents_sdk.domain.agent_dependency import DependencyGroup
 from zav.agents_sdk.domain.chat_message import ChatMessage
 
+StreamItem = Tuple[ChatResponse, ChatMessage]
+
 
 class MessageProcessor(ABC):
-    """Transforms outgoing messages before they are yielded to the caller.
+    """Transforms an outgoing message stream before it is yielded to the caller.
 
-    Extend this to add post-processing to LLM responses — e.g. citation
-    resolution, evidence extraction, content rewriting.
-
-    Receives both the raw ``ChatResponse`` from the LLM client and the
-    already-converted ``ChatMessage``.  The response carries metadata
-    (completion sender, function_call_request) that processors may need
-    to decide whether to act.
+    Receives the full async generator of (ChatResponse, ChatMessage) pairs
+    and yields transformed (ChatResponse, ChatMessage) pairs. This gives
+    each processor full control over buffering, batching, or waiting for
+    the stream to complete before acting.
     """
 
     source_name: ClassVar[str]
+    enabled: bool
 
     @abstractmethod
-    async def process(
-        self, response: ChatResponse, message: ChatMessage
-    ) -> ChatMessage:
+    async def process_stream(
+        self, stream: AsyncGenerator[StreamItem, None]
+    ) -> AsyncGenerator[StreamItem, None]:
         raise NotImplementedError
+        yield  # pragma: no cover
 
 
 class MessageProcessorGroup(DependencyGroup[MessageProcessor]):

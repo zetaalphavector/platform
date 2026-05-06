@@ -143,6 +143,7 @@ class AnthropicChatClient(ChatCompletionClient):
         self.__client = client
         self.__model_name = model_configuration.name
         self.__model_temperature = model_configuration.temperature
+        self.__max_tokens = model_configuration.max_tokens
         self.__span = span
 
     def __messages_from(
@@ -199,6 +200,8 @@ class AnthropicChatClient(ChatCompletionClient):
                         },
                     }
                 )
+                if message.content:
+                    content.append({"type": "text", "text": message.content})
             elif message.content:
                 if message.sender == ChatMessageSender.DEVELOPER:
                     dev_msg = (
@@ -320,12 +323,13 @@ class AnthropicChatClient(ChatCompletionClient):
             return ChatResponse(error=e, chat_message=None)
 
         tools_dict = _get_tools_dict(request)
+        max_tokens = request.get("max_tokens") or self.__max_tokens or 32000
         generation_span = create_span(
             messages=messages,
             model_name=self.__model_name,
             model_temperature=self.__model_temperature,
             span=self.__span,
-            max_tokens=request["max_tokens"],
+            max_tokens=max_tokens,
             stream=stream,
             tools_dict=tools_dict,
         )
@@ -333,7 +337,7 @@ class AnthropicChatClient(ChatCompletionClient):
         call_kwargs = {
             "model": self.__model_name,
             "messages": messages,
-            "max_tokens": request["max_tokens"],
+            "max_tokens": max_tokens,
             "temperature": self.__model_temperature,
             "stream": stream,
             **({"system": system_prompt} if system_prompt else {}),  # type: ignore
@@ -414,6 +418,7 @@ class AnthropicChatClient(ChatCompletionClient):
             tool_id: Optional[str] = None
             tool_name: Optional[str] = None
             tool_json = ""
+            pending_tool_calls: List[ToolCallRequest] = []
             async for chunk in completion:
                 # Tool use start: record id and name
                 if (
@@ -434,7 +439,7 @@ class AnthropicChatClient(ChatCompletionClient):
                 ):
                     tool_json += chunk.delta.partial_json  # type: ignore
                     continue
-                # End of tool use block: emit a tool call request
+                # End of tool use block: accumulate the tool call request
                 if (
                     in_tool_block
                     and getattr(chunk, "type", None) == "content_block_stop"
@@ -444,19 +449,15 @@ class AnthropicChatClient(ChatCompletionClient):
                         params = json.loads(tool_json)
                     except Exception:
                         params = {}
-                    tool_req = ToolCallRequest(
-                        id=tool_id or "",
-                        function_call_request=FunctionCallRequest(
-                            function_name=tool_name or "",
-                            function_params=params,
-                        ),
+                    pending_tool_calls.append(
+                        ToolCallRequest(
+                            id=tool_id or "",
+                            function_call_request=FunctionCallRequest(
+                                function_name=tool_name or "",
+                                function_params=params,
+                            ),
+                        )
                     )
-                    msg = ChatMessage(
-                        content=partial.content,
-                        sender=ChatMessageSender.BOT,
-                        tool_call_requests=[tool_req],
-                    )
-                    yield ChatResponse(error=None, chat_message=msg)
                     continue
                 # Text delta events: accumulate and stream content
                 if getattr(chunk, "type", None) == "content_block_delta" and getattr(
@@ -470,6 +471,19 @@ class AnthropicChatClient(ChatCompletionClient):
                             sender=ChatMessageSender.BOT,
                         ),
                     )
+
+            # After the stream ends, emit all accumulated tool calls in one
+            # ChatResponse so the consumer can execute them together.
+            if pending_tool_calls:
+                yield ChatResponse(
+                    error=None,
+                    chat_message=ChatMessage(
+                        content=partial.content,
+                        sender=ChatMessageSender.BOT,
+                        tool_call_requests=pending_tool_calls,
+                    ),
+                )
+
             end_span(
                 usage={},
                 span=generation_span,

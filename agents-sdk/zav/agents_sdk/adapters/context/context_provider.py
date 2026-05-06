@@ -1,10 +1,11 @@
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
+from zav.agents_sdk.adapters._filtering import is_source_active
 from zav.agents_sdk.adapters.context.context_source import (
     ContextOrigin,
     ContextSource,
@@ -20,7 +21,7 @@ from zav.agents_sdk.domain.chat_message import ChatMessage, ConversationContext
 from zav.agents_sdk.domain.tools import Tool
 
 
-class ContextConfiguration(BaseModel):
+class ContextProviderConfiguration(BaseModel):
     """Configuration for the context provider."""
 
     enabled: bool = Field(True, description="Enable conversation context resolution.")
@@ -41,6 +42,12 @@ class ContextConfiguration(BaseModel):
             "'xml' (structured XML tags per source with per-item ids, similar to how "
             "GitHub Copilot formats attachments)."
         ),
+    )
+    include_sources: Optional[List[str]] = Field(
+        None, description="Allowlist of context source names to include."
+    )
+    exclude_sources: Optional[List[str]] = Field(
+        None, description="Denylist of context source names to exclude."
     )
     max_item_content_length: Optional[int] = Field(
         None,
@@ -75,12 +82,23 @@ class ContextProvider:
         injection_mode: Literal["prompt", "conversation", "both"],
         content_format: Literal["json", "xml"],
         max_item_content_length: Optional[int],
+        include_sources: Optional[Set[str]] = None,
+        exclude_sources: Optional[Set[str]] = None,
     ):
         self.__sources = sources
         self.__enabled = enabled
         self.__injection_mode = injection_mode
         self.__content_format = content_format
         self.__max_item_content_length = max_item_content_length
+        self.__include_sources = include_sources
+        self.__exclude_sources = exclude_sources
+        self.__cached_active: Optional[List[ContextSource]] = None
+
+    def describe_loaded(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.__enabled,
+            "sources": [s.source_name for s in self.__active_sources()],
+        }
 
     async def get_tools(self) -> List[Tool]:
         if not self.__enabled:
@@ -96,10 +114,8 @@ class ContextProvider:
         if self.__injection_mode not in ("prompt", "both"):
             return ""
 
-        if not initial_context or initial_context.is_empty():
-            return ""
-
-        blocks = await self.__resolve_sources(initial_context, ContextOrigin.INITIAL)
+        ctx = initial_context or ConversationContext()
+        blocks = await self.__resolve_sources(ctx, ContextOrigin.INITIAL)
         if not blocks:
             return ""
 
@@ -116,36 +132,55 @@ class ContextProvider:
         completions: List[ChatCompletion] = []
 
         if self.__injection_mode in ("conversation", "both"):
-            if initial_context and not initial_context.is_empty():
-                completion = await self.__to_completion(
-                    initial_context, ContextOrigin.INITIAL
-                )
-                if completion:
-                    completions.append(completion)
+            ctx = initial_context or ConversationContext()
+            completion = await self.__to_completion(ctx, ContextOrigin.INITIAL)
+            if completion:
+                completions.append(completion)
 
         for message in conversation:
-            text_completion = ChatCompletion.from_chat_message(message)
-
             if message.content_parts:
                 for content_part in message.content_parts:
-                    ctx = content_part.context
-                    if ctx and not ctx.is_empty():
+                    inner_ctx: Optional[ConversationContext] = content_part.context
+                    if inner_ctx and not inner_ctx.is_empty():
                         if self.__injection_mode in ("conversation", "both"):
                             completion = await self.__to_completion(
-                                ctx, ContextOrigin.CONTENT_PART
+                                inner_ctx, ContextOrigin.CONTENT_PART
                             )
                             if completion:
                                 completions.append(completion)
 
-            completions.append(text_completion)
+            completions.append(ChatCompletion.from_chat_message(message))
+
+        conversation_blocks = await self.__resolve_conversation_sources(conversation)
+        if conversation_blocks:
+            completion = ChatCompletion(
+                sender=ChatCompletionSender.DEVELOPER,
+                content=self.__format(conversation_blocks),
+            )
+            completions.append(completion)
 
         return completions
+
+    def __active_sources(self) -> List[ContextSource]:
+        if self.__cached_active is not None:
+            return self.__cached_active
+        self.__cached_active = [
+            source
+            for source in self.__sources
+            if is_source_active(
+                source.source_name,
+                source.enabled,
+                self.__include_sources,
+                self.__exclude_sources,
+            )
+        ]
+        return self.__cached_active
 
     async def __resolve_sources(
         self, context: ConversationContext, origin: ContextOrigin
     ) -> List[_ResolvedSourceBlock]:
         blocks: List[_ResolvedSourceBlock] = []
-        for source in self.__sources:
+        for source in self.__active_sources():
             try:
                 items = await source.resolve(context)
                 if items:
@@ -158,6 +193,28 @@ class ContextProvider:
                     )
             except Exception as e:
                 logger.error(f"Context source '{source.source_name}' failed: {e}")
+        return blocks
+
+    async def __resolve_conversation_sources(
+        self, conversation: List[ChatMessage]
+    ) -> List[_ResolvedSourceBlock]:
+        blocks: List[_ResolvedSourceBlock] = []
+        for source in self.__active_sources():
+            try:
+                items = await source.resolve_from_conversation(conversation)
+                if items:
+                    blocks.append(
+                        _ResolvedSourceBlock(
+                            source=source,
+                            description=source.describe(ContextOrigin.INITIAL),
+                            items=items,
+                        )
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Context source '{source.source_name}'"
+                    f" conversation resolution failed: {e}"
+                )
         return blocks
 
     def __format(self, blocks: List[_ResolvedSourceBlock]) -> str:
@@ -204,12 +261,26 @@ class ContextProviderFactory(AgentDependencyFactory):
     def create(
         cls,
         context_source_group: ContextSourceGroup = ContextSourceGroup(items=[]),
-        context_configuration: ContextConfiguration = ContextConfiguration(),
+        context_provider_configuration: ContextProviderConfiguration = (
+            ContextProviderConfiguration()
+        ),
     ) -> ContextProvider:
         return ContextProvider(
             sources=context_source_group.items,
-            enabled=context_configuration.enabled,
-            injection_mode=context_configuration.injection_mode,
-            content_format=context_configuration.content_format,
-            max_item_content_length=context_configuration.max_item_content_length,
+            enabled=context_provider_configuration.enabled,
+            injection_mode=context_provider_configuration.injection_mode,
+            content_format=context_provider_configuration.content_format,
+            max_item_content_length=(
+                context_provider_configuration.max_item_content_length
+            ),
+            include_sources=(
+                set(context_provider_configuration.include_sources)
+                if context_provider_configuration.include_sources
+                else None
+            ),
+            exclude_sources=(
+                set(context_provider_configuration.exclude_sources)
+                if context_provider_configuration.exclude_sources
+                else None
+            ),
         )

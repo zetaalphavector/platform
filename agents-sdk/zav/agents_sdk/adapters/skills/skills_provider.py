@@ -1,9 +1,10 @@
 import html
-from typing import Dict, List, Literal, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
+from zav.agents_sdk.adapters._filtering import is_source_active
 from zav.agents_sdk.adapters.skills.skills_source import (
     SkillNotFoundError,
     SkillProperties,
@@ -17,9 +18,10 @@ from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
 
 
-class SkillsConfiguration(BaseModel):
+class SkillsProviderConfiguration(BaseModel):
     """Configuration for skills discovery and presentation."""
 
+    enabled: bool = Field(True, description="Enable the skills system.")
     prompt_format: Literal["xml", "text"] = Field(
         "text", description="Format for skill catalog in system prompt."
     )
@@ -59,6 +61,7 @@ class SkillsProvider:
     def __init__(
         self,
         sources: List[SkillsSource],
+        enabled: bool,
         prompt_format: Literal["xml", "text"],
         include_location_in_prompt: bool,
         injection_mode: Literal["prompt", "tools", "both"],
@@ -67,6 +70,7 @@ class SkillsProvider:
         writable_source: Optional[str] = None,
     ):
         self.__sources = sources
+        self.__enabled = enabled
         self.__prompt_format = prompt_format
         self.__include_location = include_location_in_prompt
         self.__injection_mode = injection_mode
@@ -75,22 +79,30 @@ class SkillsProvider:
         self.__skills: Optional[Dict[str, SkillProperties]] = None
         self.__skill_sources: Dict[str, SkillsSource] = {}
         self.__writable_source = self.__resolve_writable(sources, writable_source)
+        self.__cached_active: Optional[List[SkillsSource]] = None
+        self.__created_skills: List[SkillProperties] = []
+        self.__edited_skills: List[SkillProperties] = []
 
     def __active_sources(self) -> List[SkillsSource]:
-        return [
+        if self.__cached_active is not None:
+            return self.__cached_active
+        self.__cached_active = [
             source
             for source in self.__sources
-            if (
-                (
-                    self.__include_sources is None
-                    or source.source_name in self.__include_sources
-                )
-                and (
-                    self.__exclude_sources is None
-                    or source.source_name not in self.__exclude_sources
-                )
+            if is_source_active(
+                source.source_name,
+                source.enabled,
+                self.__include_sources,
+                self.__exclude_sources,
             )
         ]
+        return self.__cached_active
+
+    def describe_loaded(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.__enabled,
+            "sources": [s.source_name for s in self.__active_sources()],
+        }
 
     async def __ensure_discovered(self) -> Dict[str, SkillProperties]:
         if self.__skills is not None:
@@ -119,6 +131,8 @@ class SkillsProvider:
 
     async def to_prompt(self, format: Optional[Literal["xml", "text"]] = None) -> str:
         """Generate skill catalog for system prompt injection."""
+        if not self.__enabled:
+            return ""
         if self.__injection_mode not in ("prompt", "both"):
             return ""
 
@@ -168,6 +182,8 @@ class SkillsProvider:
 
     async def get_tools(self) -> List[Tool]:
         """Return all skill-related tools for registration with ToolsRegistry."""
+        if not self.__enabled:
+            return []
         if self.__injection_mode not in ("tools", "both"):
             return []
 
@@ -180,9 +196,15 @@ class SkillsProvider:
         resource_tool = await self.__get_resource_tool(skills)
         if resource_tool:
             tools.append(resource_tool)
+        content_tool = self.__get_skill_content_tool(skills)
+        if content_tool:
+            tools.append(content_tool)
         create_tool = self.__get_create_skill_tool()
         if create_tool:
             tools.append(create_tool)
+        edit_tool = self.__get_edit_skill_content_tool(skills)
+        if edit_tool:
+            tools.append(edit_tool)
         return tools
 
     def __get_skill_tool(self, skills: Dict[str, SkillProperties]) -> Optional[Tool]:
@@ -317,8 +339,54 @@ class SkillsProvider:
             return None
         return sources[0]
 
+    def __get_skill_content_tool(
+        self, skills: Dict[str, SkillProperties]
+    ) -> Optional[Tool]:
+        if not skills:
+            return None
+
+        return Tool(
+            name="get_skill_content",
+            description=(
+                "Read the full raw content of a skill (YAML frontmatter + "
+                "markdown body). Use this before calling edit_skill_content "
+                "so you have the exact current text to base your edits on."
+            ),
+            executable=self.__get_skill_content,
+            parameters_spec={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the skill to read.",
+                    },
+                },
+                "required": ["name"],
+            },
+            streaming_config=ToolStreamingConfig(
+                running_text="Reading skill content {{ name }}...",
+                completed_text="Read skill content {{ name }}",
+            ),
+        )
+
+    async def __get_skill_content(self, name: str) -> str:
+        source = self.__skill_sources.get(name)
+        if not source:
+            skills = await self.__ensure_discovered()
+            return (
+                f"Error: skill '{name}' not found. Available: "
+                f"{', '.join(skills.keys())}"
+            )
+
+        try:
+            return await source.get_skill_content(name)
+        except (SkillReadError, SkillNotFoundError) as e:
+            return f"Error: {e}"
+
     def __get_create_skill_tool(self) -> Optional[Tool]:
         if not self.__writable_source:
+            return None
+        if self.__writable_source not in self.__active_sources():
             return None
 
         return Tool(
@@ -353,38 +421,201 @@ class SkillsProvider:
             streaming_config=ToolStreamingConfig(
                 running_text="Creating skill {{ name }}...",
                 completed_text="Created skill {{ name }}",
+                response_transform=lambda r: (
+                    {**r, "metadata": self.__created_skills[-1].metadata}
+                    if r and self.__created_skills
+                    else r
+                ),
             ),
         )
 
-    async def __create_skill(self, name: str, content: str) -> str:
+    async def __create_skill(self, name: str, content: str) -> Dict:
         try:
             properties = SkillsSource.parse_skill_properties(content)
             if properties.name != name:
-                return (
-                    f"Error: skill name mismatch — parameter 'name' is "
-                    f"'{name}' but frontmatter 'name' is '{properties.name}'. "
-                    f"They must match."
-                )
+                return {
+                    "error": (
+                        f"Skill name mismatch — parameter 'name' is "
+                        f"'{name}' but frontmatter 'name' is '{properties.name}'. "
+                        f"They must match."
+                    )
+                }
         except SkillReadError as e:
-            return f"Error: invalid SKILL.md content — {e}"
+            return {"error": f"Invalid SKILL.md content — {e}"}
 
         source = self.__writable_source
         if not source:
-            return "Error: no writable skill source configured."
+            return {"error": "No writable skill source configured."}
 
         try:
             saved = await source.create_skill(name, content)
         except SkillWriteError as e:
-            return f"Error: {e}"
+            return {"error": str(e)}
 
         self.__skills = None
         self.__skill_sources.clear()
+        self.__created_skills.append(saved)
 
-        return (
-            f"Skill '{saved.name}' created successfully "
-            f"in source '{source.source_name}'.\n\n"
-            f"Description: {saved.description}"
+        return {
+            "info": (
+                f"Skill '{saved.name}' created successfully "
+                f"in source '{source.source_name}'.\n\n"
+                f"Description: {saved.description}"
+            ),
+        }
+
+    def __get_edit_skill_content_tool(
+        self, skills: Dict[str, SkillProperties]
+    ) -> Optional[Tool]:
+        if not self.__writable_source:
+            return None
+        if self.__writable_source not in self.__active_sources():
+            return None
+        if not skills:
+            return None
+
+        return Tool(
+            name="edit_skill_content",
+            description=(
+                "Edit an existing skill using find-and-replace. You MUST "
+                "first read the skill's full content using "
+                "get_skill_content before calling this. "
+                "Provide a list of edits, each with the exact text to "
+                "find (old_str) and its replacement (new_str). Each "
+                "old_str must match exactly once; if it appears multiple "
+                "times, include more surrounding context. Never call "
+                "this tool without reading the skill content first."
+            ),
+            executable=self.__edit_skill_content,
+            parameters_spec={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": ("Name of the existing skill to update."),
+                    },
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_str": {
+                                    "type": "string",
+                                    "description": (
+                                        "Exact text to find in the skill "
+                                        "content. Must match exactly once."
+                                    ),
+                                },
+                                "new_str": {
+                                    "type": "string",
+                                    "description": ("Text to replace old_str with."),
+                                },
+                            },
+                            "required": ["old_str", "new_str"],
+                        },
+                        "description": (
+                            "List of find-and-replace edits to apply " "sequentially."
+                        ),
+                    },
+                },
+                "required": ["name", "edits"],
+            },
+            streaming_config=ToolStreamingConfig(
+                running_text="Updating skill {{ name }}...",
+                completed_text="Updated skill {{ name }}",
+                response_transform=lambda r: (
+                    {**r, "metadata": self.__edited_skills[-1].metadata}
+                    if r and self.__edited_skills
+                    else r
+                ),
+            ),
         )
+
+    async def __edit_skill_content(
+        self, name: str, edits: List[Dict[str, str]]
+    ) -> Dict:
+        source = self.__skill_sources.get(name)
+        if not source:
+            return {"error": f"Skill '{name}' not found."}
+
+        try:
+            content = await source.get_skill_content(name)
+        except (SkillReadError, SkillNotFoundError) as e:
+            return {"error": str(e)}
+
+        if not edits:
+            return {"error": "No edits provided."}
+
+        for i, edit in enumerate(edits):
+            old_str = edit.get("old_str", "")
+            new_str = edit.get("new_str", "")
+
+            if not old_str:
+                return {
+                    "error": (
+                        f"Edit {i + 1}/{len(edits)} failed: "
+                        f"old_str must not be empty. "
+                        f"No edits were applied."
+                    )
+                }
+
+            count = content.count(old_str)
+            preview = old_str[:80] + "…" if len(old_str) > 80 else old_str
+
+            if count == 0:
+                return {
+                    "error": (
+                        f"Edit {i + 1}/{len(edits)} failed for "
+                        f"old_str='{preview}': "
+                        f"this text was not found in the skill content. "
+                        f"Make sure you've read the skill first and the "
+                        f"text matches exactly. "
+                        f"No edits were applied."
+                    )
+                }
+
+            if count > 1:
+                return {
+                    "error": (
+                        f"Edit {i + 1}/{len(edits)} failed for "
+                        f"old_str='{preview}': "
+                        f"this text appears {count} times in the skill "
+                        f"— include more surrounding context to make "
+                        f"the match unique. "
+                        f"No edits were applied."
+                    )
+                }
+
+            content = content.replace(old_str, new_str, 1)
+
+        try:
+            properties = SkillsSource.parse_skill_properties(content)
+            if properties.name != name:
+                return {
+                    "error": (
+                        f"After edits, skill name changed from "
+                        f"'{name}' to '{properties.name}'. "
+                        f"The skill name must remain the same."
+                    )
+                }
+        except SkillReadError as e:
+            return {"error": (f"After applying edits, skill content is invalid: {e}")}
+
+        try:
+            saved = await source.update_skill(name, content)
+        except SkillWriteError as e:
+            return {"error": str(e)}
+
+        self.__skills = None
+        self.__skill_sources.clear()
+        self.__edited_skills.append(saved)
+
+        return {
+            "info": (
+                f"Skill '{saved.name}' updated successfully "
+                f"in source '{source.source_name}'."
+            ),
+        }
 
 
 class SkillsProviderFactory(AgentDependencyFactory):
@@ -393,22 +624,27 @@ class SkillsProviderFactory(AgentDependencyFactory):
     def create(
         cls,
         skills_source_group: SkillsSourceGroup = SkillsSourceGroup(items=[]),
-        skills_configuration: SkillsConfiguration = SkillsConfiguration(),
+        skills_provider_configuration: SkillsProviderConfiguration = (
+            SkillsProviderConfiguration()
+        ),
     ) -> SkillsProvider:
         return SkillsProvider(
             sources=skills_source_group.items,
-            prompt_format=skills_configuration.prompt_format,
-            include_location_in_prompt=skills_configuration.include_location_in_prompt,
-            injection_mode=skills_configuration.injection_mode,
+            enabled=skills_provider_configuration.enabled,
+            prompt_format=skills_provider_configuration.prompt_format,
+            include_location_in_prompt=(
+                skills_provider_configuration.include_location_in_prompt
+            ),
+            injection_mode=skills_provider_configuration.injection_mode,
             include_sources=(
-                set(skills_configuration.include_sources)
-                if skills_configuration.include_sources
+                set(skills_provider_configuration.include_sources)
+                if skills_provider_configuration.include_sources
                 else None
             ),
             exclude_sources=(
-                set(skills_configuration.exclude_sources)
-                if skills_configuration.exclude_sources
+                set(skills_provider_configuration.exclude_sources)
+                if skills_provider_configuration.exclude_sources
                 else None
             ),
-            writable_source=skills_configuration.writable_source,
+            writable_source=skills_provider_configuration.writable_source,
         )

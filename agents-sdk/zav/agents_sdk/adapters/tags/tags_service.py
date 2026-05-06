@@ -181,6 +181,8 @@ class TagsService:
         params["id"] = tag_id
         params["tag_type"] = tag_type
 
+        uri_hash = uri_hash.split("_")[0] + "_0"
+
         tagged_document_form = TaggedDocumentForm(
             document_id=GUIDString(uri_hash),
             document_type=document_type,
@@ -196,6 +198,23 @@ class TagsService:
         return tagged_document_response.to_dict()
 
     @handle_api_errors
+    async def untag_document(
+        self,
+        tag_id: int,
+        tag_type: Literal["own", "shared", "following"],
+        uri_hash: str,
+    ) -> None:
+        params = self.__request_params.copy()
+        params["id"] = tag_id
+        params["tag_type"] = tag_type
+        params["document_id"] = GUIDString(uri_hash)
+
+        await asyncify(self.__tags.delete_tagged_document)(
+            tenant=self.__tenant,
+            **params,
+        )
+
+    @handle_api_errors
     async def create_tag(
         self,
         name: str,
@@ -203,20 +222,19 @@ class TagsService:
         color: Optional[str] = None,
         sharing: Optional[SharingPolicy] = None,
         settings: Optional[TagItemSettings] = None,
+        recommendations_enabled: bool = False,
     ) -> Dict:
         """Create a new tag."""
+        if settings is None:
+            settings = TagItemSettings(
+                newsletter_schedule=None,
+                recommendations_enabled=recommendations_enabled,
+            )
         tag_form = TagForm(
             name=TagName(name),
             description=description,
             color=color,
-            settings=(
-                settings
-                if settings is not None
-                else TagItemSettings(
-                    newsletter_schedule=None,
-                    recommendations_enabled=False,
-                )
-            ),
+            settings=settings,
             sharing=sharing if sharing is not None else SharingPolicy(),
             user_order=None,
         )
