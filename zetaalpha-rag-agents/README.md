@@ -9,4 +9,4 @@ For new projects, use:
 pip install zetaalpha.agents
 ```
 
-All extras are forwarded: `pip install zetaalpha.rag-agents[cli]` installs `zetaalpha.agents[cli]`, etc.
+All extras are forwarded: `pip install zetaalpha.rag-agents[mcp]` installs `zetaalpha.agents[mcp]`, etc.
