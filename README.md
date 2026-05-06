@@ -12,7 +12,7 @@
   <em>Advanced AI solutions for the enterprise</em>
 </p>
 
-Zeta Alpha empowers knowledge-intensive companies to quickly turn their domain expertise and R&D into Generative AI solutions. Our platform provides the tools needed to integrate and enhance access-restricted data sources, configure and fine-tune AI search models, and build powerful RAG applications and AI agents. Deploy on-prem or in the cloud, and scale with ease.
+Zeta Alpha empowers knowledge-intensive companies to quickly turn their domain expertise and R&D into Generative AI solutions. Our platform provides the tools needed to integrate and enhance access-restricted data sources, configure and fine-tune AI search models, and build powerful AI agents. Deploy on-prem or in the cloud, and scale with ease.
 
 # Quick Start
 
@@ -20,13 +20,13 @@ Create your first conversational AI agent.
 
 ```bash
 # Install the package
-pip install zetaalpha.rag-agents
+pip install zetaalpha.agents
 
 # Initialize a new project
-rag_agents init
+za agents init
 
 # Start the development UI
-rag_agents dev
+za agents dev
 ```
 
 

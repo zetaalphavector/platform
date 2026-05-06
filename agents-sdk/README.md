@@ -20,13 +20,13 @@ Create your first conversational AI agent.
 
 ```bash
 # Install the package
-pip install zetaalpha.rag-agents
+pip install zetaalpha.agents
 
 # Initialize a new project
-rag_agents init
+za agents init
 
 # Start the development UI
-rag_agents dev
+za agents dev
 ```
 
 https://github.com/user-attachments/assets/2d0b86f8-2d1e-4131-8de9-9d3d1909b631

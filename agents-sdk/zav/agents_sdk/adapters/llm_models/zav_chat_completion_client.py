@@ -1,3 +1,4 @@
+import asyncio
 import enum
 import json
 from typing import (
@@ -31,7 +32,7 @@ from zav.prompt_completion import ToolCallRequest as PcToolCallRequest
 from zav.prompt_completion import ToolCallResponse as PcToolCallResponse
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
-from zav.agents_sdk.adapters.compaction.context_window_manager import (
+from zav.agents_sdk.adapters.llm_models.context_window_manager import (
     ContextWindowManager,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
@@ -88,11 +89,17 @@ class ChatCompletion(BaseModel):
 
     @classmethod
     def from_chat_message(cls, chat_message: ChatMessage):
+        # TODO: Bot messages currently store tool-call metadata in content_parts
+        # but never include a text content_part for the final answer (text lives
+        # only in message.content). The `or chat_message.content` fallback below
+        # works around this. A proper fix would have to_chat_message() (and
+        # potentially intermediate LLM completions) emit text content_parts so
+        # the join is self-sufficient.
         content = (
             "".join([part.text for part in chat_message.content_parts if part.text])
             if chat_message.content_parts
             else chat_message.content
-        )
+        ) or chat_message.content
         return cls(
             sender=ChatCompletionSender(chat_message.sender),
             content=content,
@@ -158,13 +165,15 @@ class ChatResponse(BaseModel):
 
 
 def parse_chat_message(message: Union[ChatMessage, ChatCompletion]) -> PcChatMessage:
+    # TODO: same content_parts workaround as ChatCompletion.from_chat_message
     return PcChatMessage(
         sender=ChatMessageSender(message.sender),
         content=(
             "".join([part.text for part in message.content_parts if part.text])
             if isinstance(message, ChatMessage) and message.content_parts
             else message.content
-        ),
+        )
+        or message.content,
         image_uri=message.image_uri,
         function_call_request=(
             PcFunctionCallRequest(
@@ -230,6 +239,7 @@ async def execute_tool_call_request(
     tool_choice: Optional[str] = None,
     log_fn: Optional[Callable] = None,
     span: Optional[Span] = None,
+    concurrent_tool_execution: bool = False,
 ) -> Tuple[Optional[ChatCompletion], ShouldReturnToUser]:
 
     tool_completion = None
@@ -241,6 +251,7 @@ async def execute_tool_call_request(
         tool_choice=tool_choice,
         log_fn=log_fn,
         span=span,
+        concurrent_tool_execution=concurrent_tool_execution,
     ):
         # Ignore ContentPartTool events in non-streaming mode
         if isinstance(event, tuple):
@@ -250,12 +261,13 @@ async def execute_tool_call_request(
     return tool_completion, should_return_to_user
 
 
-async def execute_tool_call_request_streaming(
+async def execute_tool_call_request_streaming(  # noqa: C901
     tools_registry: ToolsRegistry,
     tool_call_requests: Optional[List[ToolCallRequest]] = None,
     tool_choice: Optional[str] = None,
     log_fn: Optional[Callable] = None,
     span: Optional[Span] = None,
+    concurrent_tool_execution: bool = False,
 ) -> AsyncIterator[Union[ContentPartTool, Tuple[Optional[ChatCompletion], bool]]]:
     if tool_choice and tool_choice not in ("auto", "none") and not tool_call_requests:
         if log_fn:
@@ -291,12 +303,14 @@ async def execute_tool_call_request_streaming(
     if log_fn:
         log_fn({"Tool Call Requests": tool_call_requests})
 
-    tool_outputs: List = []
-    for tool_call_request in tool_call_requests:
-        tool_call_id = tool_call_request.id
-        function_call_request = tool_call_request.function_call_request
-        tool_name = function_call_request.name
-        tool_params = function_call_request.params
+    # Pre-compute metadata for each tool call (streaming config, visible
+    # params, spans) and yield all "running" events before execution starts.
+    tool_metas: List[Dict[str, Any]] = []
+    for tcr in tool_call_requests:
+        tool_call_id = tcr.id
+        func = tcr.function_call_request
+        tool_name = func.name
+        tool_params = func.params
 
         tool = tools_registry.tools_index.get(tool_name)
         streaming_config = tool.streaming_config if tool else None
@@ -306,8 +320,31 @@ async def execute_tool_call_request_streaming(
             if streaming_config
             else tool_params
         )
-
         param_defaults = tool.get_parameter_defaults() if tool else None
+
+        new_span = (
+            span.new(
+                name=tool_name,
+                attributes={
+                    "metadata": {"tool_call_id": tool_call_id},
+                    "input": tool_params or {},
+                },
+            )
+            if span
+            else None
+        )
+
+        tool_metas.append(
+            {
+                "tcr": tcr,
+                "tool_name": tool_name,
+                "tool_params": tool_params,
+                "streaming_config": streaming_config,
+                "visible_params": visible_params,
+                "param_defaults": param_defaults,
+                "span": new_span,
+            }
+        )
 
         if streaming_config is not None:
             yield ContentPartTool(
@@ -322,18 +359,11 @@ async def execute_tool_call_request_streaming(
                 status="running",
             )
 
-        new_span = (
-            span.new(
-                name=tool_name,
-                attributes={
-                    "metadata": {"tool_call_id": tool_call_id},
-                    "input": tool_params or {},
-                },
-            )
-            if span
-            else None
-        )
-
+    async def _execute_one(meta: Dict[str, Any]) -> Dict[str, Any]:
+        tcr = meta["tcr"]
+        tool_name = meta["tool_name"]
+        tool_params = meta["tool_params"]
+        t_span = meta["span"]
         try:
             if (
                 tool_choice
@@ -350,70 +380,144 @@ async def execute_tool_call_request_streaming(
                 name=tool_name, params=tool_params
             )
             tool_response = str(exec_response)
+            if t_span:
+                t_span.end(attributes={"output": tool_response})
+            return {
+                "id": tcr.id,
+                "response": tool_response,
+                "exec_response": exec_response,
+                "error": None,
+            }
+        except ValueError as ve:
+            err = str(ve)
+            if t_span:
+                t_span.end(attributes={"output": err})
+            return {
+                "id": tcr.id,
+                "response": err,
+                "exec_response": None,
+                "error": "value_error",
+            }
+        except Exception as e:
+            err = str(e)
+            if log_fn:
+                log_fn({"Error": err})
+            if t_span:
+                t_span.end(attributes={"output": err})
+            return {
+                "id": tcr.id,
+                "response": err,
+                "exec_response": None,
+                "error": "exception",
+            }
 
-            if new_span:
-                new_span.end(attributes={"output": tool_response})
+    results: Dict[int, Dict[str, Any]] = {}
 
-            if streaming_config is not None:
+    if concurrent_tool_execution:
+        # Execute all tool calls concurrently, yielding streaming events as
+        # each one completes. This keeps the websocket alive during
+        # long-running batches like sub-agent delegations.
+        done_queue: asyncio.Queue[Tuple[int, Dict[str, Any]]] = asyncio.Queue()
+
+        async def _execute_and_enqueue(idx: int, meta: Dict[str, Any]) -> None:
+            result = await _execute_one(meta)
+            await done_queue.put((idx, result))
+
+        tasks = [
+            asyncio.create_task(_execute_and_enqueue(i, meta))
+            for i, meta in enumerate(tool_metas)
+        ]
+
+        try:
+            for _ in range(len(tasks)):
+                idx, result = await done_queue.get()
+                results[idx] = result
+                meta = tool_metas[idx]
+                tcr = meta["tcr"]
+                streaming_config = meta["streaming_config"]
+
+                if result["error"]:
+                    if streaming_config is not None:
+                        yield ContentPartTool(
+                            tool_call_id=tcr.id,
+                            name=meta["tool_name"],
+                            params=meta["visible_params"],
+                            display_text=None,
+                            status="error",
+                        )
+                elif streaming_config is not None:
+                    completed_text = streaming_config.completed_text or (
+                        streaming_config.running_text
+                    )
+                    result_dict = _parse_result_dict(result["exec_response"])
+                    visible_response = apply_transform(
+                        result_dict, streaming_config.response_transform
+                    )
+                    yield ContentPartTool(
+                        tool_call_id=tcr.id,
+                        name=meta["tool_name"],
+                        params=meta["visible_params"],
+                        response=visible_response,
+                        display_text=format_display_text(
+                            completed_text,
+                            meta["tool_params"],
+                            result_dict,
+                            defaults=meta["param_defaults"],
+                        ),
+                        status="completed",
+                    )
+        except (asyncio.CancelledError, GeneratorExit):
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            raise
+    else:
+        # Execute tool calls sequentially.
+        for idx, meta in enumerate(tool_metas):
+            result = await _execute_one(meta)
+            results[idx] = result
+            tcr = meta["tcr"]
+            streaming_config = meta["streaming_config"]
+
+            if result["error"]:
+                if streaming_config is not None:
+                    yield ContentPartTool(
+                        tool_call_id=tcr.id,
+                        name=meta["tool_name"],
+                        params=meta["visible_params"],
+                        display_text=None,
+                        status="error",
+                    )
+            elif streaming_config is not None:
                 completed_text = streaming_config.completed_text or (
                     streaming_config.running_text
                 )
-                result_dict = _parse_result_dict(exec_response)
+                result_dict = _parse_result_dict(result["exec_response"])
                 visible_response = apply_transform(
                     result_dict, streaming_config.response_transform
                 )
                 yield ContentPartTool(
-                    tool_call_id=tool_call_id,
-                    name=tool_name,
-                    params=visible_params,
+                    tool_call_id=tcr.id,
+                    name=meta["tool_name"],
+                    params=meta["visible_params"],
                     response=visible_response,
                     display_text=format_display_text(
                         completed_text,
-                        tool_params,
+                        meta["tool_params"],
                         result_dict,
-                        defaults=param_defaults,
+                        defaults=meta["param_defaults"],
                     ),
                     status="completed",
                 )
 
-            if isinstance(exec_response, ChatCompletion):
-                yield (exec_response, True)
-                return
-
-            tool_outputs.append({"id": tool_call_id, "response": tool_response})
-
-        except ValueError as ve:
-            str_value_err = str(ve)
-            tool_outputs.append({"id": tool_call_id, "response": str_value_err})
-            if new_span:
-                new_span.end(attributes={"output": str_value_err})
-
-            if streaming_config is not None:
-                yield ContentPartTool(
-                    tool_call_id=tool_call_id,
-                    name=tool_name,
-                    params=visible_params,
-                    display_text=None,
-                    status="error",
-                )
-            continue
-
-        except Exception as e:
-            str_err = str(e)
-            if log_fn:
-                log_fn({"Error": str_err})
-            if new_span:
-                new_span.end(attributes={"output": str_err})
-            tool_outputs.append({"id": tool_call_id, "response": str_err})
-
-            if streaming_config is not None:
-                yield ContentPartTool(
-                    tool_call_id=tool_call_id,
-                    name=tool_name,
-                    params=visible_params,
-                    display_text=None,
-                    status="error",
-                )
+    # All tasks done. Check for ChatCompletion short-circuit, collect outputs.
+    tool_outputs: List = []
+    for idx, meta in enumerate(tool_metas):
+        result = results[idx]
+        if isinstance(result.get("exec_response"), ChatCompletion):
+            yield (result["exec_response"], True)
+            return
+        tool_outputs.append({"id": result["id"], "response": result["response"]})
 
     yield (
         ChatCompletion(
@@ -461,6 +565,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> ChatResponse: ...
@@ -484,6 +589,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> AsyncIterator[ChatResponse]: ...
@@ -507,6 +613,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]: ...
@@ -529,6 +636,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
@@ -653,6 +761,7 @@ class ZAVChatCompletionClient:
                                 tool_choice=tool_choice,
                                 log_fn=log_fn,
                                 span=self.__span,
+                                concurrent_tool_execution=concurrent_tool_execution,
                             ):
                                 if isinstance(event, ContentPartTool):
                                     tool_events_by_id[event.tool_call_id] = event
@@ -671,10 +780,12 @@ class ZAVChatCompletionClient:
                                     tool_choice=tool_choice,
                                     log_fn=log_fn,
                                     span=self.__span,
+                                    concurrent_tool_execution=concurrent_tool_execution,
                                 )
                             )
 
-                    if tool_completion and stream_tool_calls:
+                    should_yield = stream_tool_calls or should_return_to_user
+                    if tool_completion and should_yield:
                         # Only yield the TOOL completion to consumers if there
                         # are tool_events to display (i.e. the tool was
                         # @streamable). Non-streamable tool completions are
@@ -714,6 +825,7 @@ class ZAVChatCompletionClient:
                         reasoning_effort=reasoning_effort,
                         logprobs=logprobs,
                         parallel_tool_calls=parallel_tool_calls,
+                        concurrent_tool_execution=concurrent_tool_execution,
                         seed=seed,
                         verbosity=verbosity,
                     )
@@ -745,6 +857,7 @@ class ZAVChatCompletionClient:
                     tool_choice=tool_choice,
                     log_fn=log_fn,
                     span=self.__span,
+                    concurrent_tool_execution=concurrent_tool_execution,
                 )
                 if (
                     response.chat_completion
@@ -776,6 +889,7 @@ class ZAVChatCompletionClient:
                 reasoning_effort=reasoning_effort,
                 logprobs=logprobs,
                 parallel_tool_calls=parallel_tool_calls,
+                concurrent_tool_execution=concurrent_tool_execution,
                 seed=seed,
                 verbosity=verbosity,
             )
@@ -871,6 +985,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> Optional[ChatResponse]: ...
@@ -895,6 +1010,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> Optional[AsyncIterator[ChatResponse]]: ...
@@ -919,6 +1035,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]: ...
@@ -942,6 +1059,7 @@ class ZAVChatCompletionClient:
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]:
@@ -971,6 +1089,7 @@ class ZAVChatCompletionClient:
                 reasoning_effort=reasoning_effort,
                 logprobs=logprobs,
                 parallel_tool_calls=parallel_tool_calls,
+                concurrent_tool_execution=concurrent_tool_execution,
                 seed=seed,
                 verbosity=verbosity,
             )

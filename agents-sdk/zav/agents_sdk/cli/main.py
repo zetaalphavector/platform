@@ -1,52 +1,66 @@
-import asyncio
-import base64
-import io
 import json
 import os
 import sys
-from pathlib import Path
 from typing import Optional
 
 import typer
 import uvicorn
 from rich.console import Console
-from rich.panel import Panel
-from rich.rule import Rule
-from rich.table import Table
-from streamlit.web import cli as stcli
 from typing_extensions import Annotated
-from zav.chat_service import ApiClient, Configuration
-from zav.chat_service.apis import AgentBundlesApi
-from zav.chat_service.exceptions import NotFoundException
-from zav.chat_service.models import AgentBundleForm, AgentBundlePatch
-from zav.llm_tracing import LocalTraceStore, TracingBackendFactory
 
-from zav.agents_sdk import AgentDependencyRegistry, AgentSetupRetrieverFromFile
-from zav.agents_sdk.behavior import TestHarness
-from zav.agents_sdk.cli.load_chat_agent_factory import (
-    from_string as import_chat_agent_class_registry_from_string,
+from zav.agents_sdk.cli.commands.agent_cmd import (
+    agent_add,
+    agent_configure,
+    agent_list,
+    agent_remove,
 )
+from zav.agents_sdk.cli.commands.dependency_cmd import dependency_app
+from zav.agents_sdk.cli.commands.deploy_cmd import deploy_app
+from zav.agents_sdk.cli.commands.init_cmd import init_command as new_init_command
+from zav.agents_sdk.cli.commands.instruction_cmd import instruction_app
+from zav.agents_sdk.cli.commands.mcp_cmd import mcp_app
+from zav.agents_sdk.cli.commands.model_cmd import model_app
+from zav.agents_sdk.cli.commands.policy_cmd import policies_app
+from zav.agents_sdk.cli.commands.provider_cmd import provider_app
+from zav.agents_sdk.cli.commands.provider_factory import make_provider_app
+from zav.agents_sdk.cli.commands.run_cmd import run_command
+from zav.agents_sdk.cli.commands.show_cmd import show_command
+from zav.agents_sdk.cli.commands.skill_cmd import skill_app
+from zav.agents_sdk.cli.commands.source_cmd import source_app
+from zav.agents_sdk.cli.commands.spec_cmd import spec_app
+from zav.agents_sdk.cli.source_aliases import get_providers
 from zav.agents_sdk.cli.utils import (
     create_agent_files,
     create_dependency_files,
     init_dependencies,
-    init_project,
-    is_valid_project_directory,
 )
-from zav.agents_sdk.domain.agent_code_bundle import AgentCodeBundle
-from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
-from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
-from zav.agents_sdk.version import __version__
 
 ZA_BASE_URL = "https://api.zeta-alpha.com"
+console = Console()
 app = typer.Typer(no_args_is_help=True)
-config_app = typer.Typer()
-app.add_typer(
-    config_app,
-    name="config",
-    help="Zeta Alpha Client configuration.",
+
+# --- Sub-apps (order doesn't matter, registered at the bottom) ---
+
+capabilities_app = typer.Typer(no_args_is_help=True)
+for _prov_name, _prov_info in get_providers().items():
+    if _prov_info.source_base is None:
+        continue
+    _display = _prov_info.display_name
+    _cli_name = _prov_info.cli_name
+    capabilities_app.add_typer(
+        make_provider_app(_prov_name),
+        name=_cli_name,
+        help=f"Manage {_display.lower()}.",
+        no_args_is_help=True,
+    )
+capabilities_app.add_typer(
+    mcp_app,
+    name="mcp-servers",
+    help="Manage MCP server integrations.",
     no_args_is_help=True,
 )
+
+config_app = typer.Typer()
 
 
 def get_value_or_prompt(prompt: str, default: str, error_message: str, **prompt_kwargs):
@@ -62,23 +76,9 @@ def get_value_or_prompt(prompt: str, default: str, error_message: str, **prompt_
 
 
 def get_project_directory(project_dir: Optional[str] = None) -> str:
-    if project_dir is None:
-        project_dir = os.getcwd()
-        if not is_valid_project_directory(project_dir):
-            project_dir = typer.prompt("Enter the project directory", default="agents")
-    if not is_valid_project_directory(project_dir):
-        typer.echo(
-            "Invalid project directory. Please ensure you are in a valid project "
-            "directory."
-        )
-        typer.echo(
-            typer.style(
-                "You can create a new project directory by running 'rag_agents init'.",
-                fg=typer.colors.GREEN,
-            )
-        )
-        raise typer.Exit()
-    return project_dir  # type: ignore
+    from zav.agents_sdk.cli.require import resolve_project_dir
+
+    return resolve_project_dir(project_dir)
 
 
 def agent_exists_callback(agent_name_snake: str) -> str:
@@ -97,7 +97,7 @@ def openai_key_prompt_callback(default_openai_api_key_obscured: str) -> str:
     return openai_api_key
 
 
-@app.command()
+@app.command(hidden=True)
 def new(
     agent_name: Annotated[
         Optional[str],
@@ -148,7 +148,7 @@ def dependency_file_exists_callback(dependency_name_snake: str) -> str:
     return dependency_name
 
 
-@app.command()
+@app.command(hidden=True)
 def new_dependency(
     dependency_name: Annotated[
         Optional[str],
@@ -176,7 +176,6 @@ def new_dependency(
     assert dependency_name is not None
     dependencies_dir = init_dependencies(project_dir=project_dir)
 
-    # Create the dependency files
     dependency_name_snake = create_dependency_files(
         project_dir=project_dir,
         dependencies_dir=dependencies_dir,
@@ -193,43 +192,6 @@ def new_dependency(
     )
 
 
-@app.command()
-def init(
-    project_dir: Annotated[
-        Optional[str],
-        typer.Argument(
-            callback=get_value_or_prompt(
-                prompt="Enter the directory name",
-                default="agents",
-                error_message="Directory name cannot be empty.",
-            ),
-            help="The directory where the project will be initialized. If not provided,"
-            " a wizard will ask for the directory name.",
-        ),
-    ] = None,
-):
-    """
-    Initializes a new Zeta Alpha Agents SDK project.
-    """
-    assert project_dir is not None
-
-    init_project(project_dir=project_dir, sdk_version=__version__)
-    typer.echo(
-        typer.style(f"Project initialized in {project_dir}", fg=typer.colors.GREEN)
-    )
-
-    # Run the new command to create an agent
-    new(
-        project_dir=project_dir,
-        agent_name=get_value_or_prompt(
-            prompt="Enter the agent name",
-            default="chat-agent",
-            error_message="Agent name cannot be empty.",
-        )(),
-    )
-
-
-@app.command()
 def serve(
     project_dir: Annotated[
         Optional[str],
@@ -263,6 +225,7 @@ def serve(
     Starts the local REST API server for the agents project.
     """
     assert project_dir is not None
+    project_dir = os.path.abspath(project_dir)
     if setup_src is None:
         setup_src = os.path.join(project_dir, "agent_setups.json")
     if secret_setup_src is None:
@@ -276,8 +239,8 @@ def serve(
         os.environ["ZAV_AGENT_SETUP_SRC"] = setup_src
     if secret_setup_src:
         os.environ["ZAV_SECRET_AGENT_SETUP_SRC"] = secret_setup_src
-    # This is needed so the agent module can be reached inside the uvicorn process
-    sys.path.insert(0, os.getcwd())
+    sys.path.insert(0, project_dir)
+    os.chdir(project_dir)
 
     uvicorn.run(
         "zav.agents_sdk.cli.local_app:app",
@@ -286,7 +249,6 @@ def serve(
     )
 
 
-@app.command()
 def dev(
     project_dir: Annotated[
         Optional[str],
@@ -307,6 +269,10 @@ def dev(
         bool,
         typer.Option(help="Enable auto-reload."),
     ] = False,
+    host: Annotated[
+        Optional[str],
+        typer.Option(help="Host to listen on."),
+    ] = None,
     zav_fe_url: Annotated[
         str,
         typer.Option(help="Base URL of the Zeta Alpha Front End."),
@@ -324,6 +290,7 @@ def dev(
     Starts the Debugging Environment for the agents project.
     """
     assert project_dir is not None
+    project_dir = os.path.abspath(project_dir)
     if setup_src is None:
         setup_src = os.path.join(project_dir, "agent_setups.json")
     if secret_setup_src is None:
@@ -340,18 +307,24 @@ def dev(
     if secret_setup_src:
         os.environ["ZAV_SECRET_AGENT_SETUP_SRC"] = secret_setup_src
 
-    existing_pythonpath = os.getenv("PYTHONPATH")
-    current_path = os.getcwd()
-    os.environ["PYTHONPATH"] = (
-        f"{existing_pythonpath}:{current_path}" if existing_pythonpath else current_path
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [project_dir, os.getenv("PYTHONPATH")])
     )
 
-    # This is needed so the agent module can be reached inside the uvicorn process
-    sys.path.insert(0, os.getcwd())
+    sys.path.insert(0, project_dir)
+    os.chdir(project_dir)
     sys.argv = [
         "streamlit",
         "run",
         os.path.join(os.path.dirname(__file__), "ui_app.py"),
+        *(
+            [
+                "--server.address",
+                host,
+            ]
+            if host
+            else []
+        ),
         "--server.port",
         "8000",
         "--server.runOnSave",
@@ -363,6 +336,8 @@ def dev(
         "--client.showSidebarNavigation",
         "false",
     ]
+    from streamlit.web import cli as stcli
+
     sys.exit(stcli.main())
 
 
@@ -384,352 +359,6 @@ def load_client_config(project_dir: str):
         config = json.load(file)
 
     return config
-
-
-def create_agent_code_bundle(project_dir: str, project_name: str):
-    # Update PYTHONPATH so agent modules can be discovered
-    existing_pythonpath = os.getenv("PYTHONPATH")
-    current_path = os.getcwd()
-    os.environ["PYTHONPATH"] = (
-        f"{existing_pythonpath}:{current_path}" if existing_pythonpath else current_path
-    )
-
-    # Load registries for the selected project
-    AgentCodeBundle.load_agent_registries_from(project_dir=project_dir)
-    agent_names = [
-        agent.agent_name for agent in ChatAgentClassRegistry.registry.values()
-    ]
-
-    # Create a bundle with the provided project name
-    agent_code_bundle = AgentCodeBundle.from_project_dir(
-        project=project_name, agent_names=agent_names, project_dir=project_dir
-    )
-    return agent_code_bundle
-
-
-@app.command()
-def bundle(
-    project_dir: Annotated[
-        Optional[str],
-        typer.Argument(
-            callback=get_project_directory,
-            help="The project directory where the agents are located.",
-        ),
-    ] = None,
-    project_name: Annotated[
-        Optional[str],
-        typer.Option(
-            help="The name of the project under which the agents will be bundled.",
-        ),
-    ] = None,
-    output_dir: Annotated[
-        Optional[str],
-        typer.Option(
-            help="The directory where the bundle will be stored. If not provided, the "
-            "bundle will be stored in the project directory.",
-        ),
-    ] = None,
-):
-    """
-    Creates a bundle of the current project.
-
-    This can be uploaded to the Zeta Alpha Platform via the REST API. If you want to
-    upload the project directly, use the 'upload' command instead.
-    """
-    assert project_dir is not None
-
-    # Determine the project name to use for the upload
-    if project_name is None:
-        project_name = os.path.basename(os.path.abspath(project_dir))
-
-    agent_code_bundle = create_agent_code_bundle(
-        project_dir=project_dir, project_name=project_name
-    )
-    if output_dir is None:
-        output_dir = project_dir
-
-    # Store the agent bundle on disk
-    with open(os.path.join(output_dir, "build.zip"), "wb") as file:
-        file.write(agent_code_bundle.agent_bundle)
-
-
-@app.command()
-def upload(
-    project_dir: Annotated[
-        Optional[str],
-        typer.Argument(
-            callback=get_project_directory,
-            help="The project directory where the agents are located.",
-        ),
-    ] = None,
-    project_name: Annotated[
-        Optional[str],
-        typer.Option(
-            help="The name of the project under which the agents will be uploaded.",
-        ),
-    ] = None,
-):
-    """
-    Uploads the current project to the Zeta Alpha Platform.
-    """
-    assert project_dir is not None
-
-    # Determine the project name to use for the upload
-    if project_name is None:
-        project_name = os.path.basename(os.path.abspath(project_dir))
-
-    # Get configuration
-    try:
-        config = load_client_config(project_dir)
-    except FileNotFoundError:
-        config_set(
-            project_dir=project_dir,
-            base_url=get_value_or_prompt(
-                prompt="Enter the Zeta Alpha API base URL",
-                default=ZA_BASE_URL,
-                error_message="Base URL cannot be empty.",
-            )(),
-            api_key=get_value_or_prompt(
-                prompt="Enter your Zeta Alpha API key",
-                default="",
-                error_message="API key cannot be empty.",
-                hide_input=True,
-            )(),
-        )
-        config = load_client_config(project_dir)
-
-    agent_code_bundle = create_agent_code_bundle(
-        project_dir=project_dir, project_name=project_name
-    )
-    encoded_bundle = base64.b64encode(agent_code_bundle.agent_bundle).decode("utf-8")
-
-    # Prompt the user to verify if they want to upload the agents
-    typer.echo(
-        typer.style(
-            "🚀 Preparing to upload the following agents:",
-            fg=typer.colors.CYAN,
-            bold=True,
-        )
-    )
-    for name in agent_code_bundle.agent_names:
-        typer.echo(
-            typer.style(
-                f"  • {project_name}:{name}", fg=typer.colors.MAGENTA, bold=True
-            )
-        )
-    typer.echo(
-        typer.style("These agents will be uploaded to tenant ", fg=typer.colors.BLUE)
-        + typer.style(f"{config['tenant']}", fg=typer.colors.GREEN)
-        + typer.style(" at ", fg=typer.colors.BLUE)
-        + typer.style(f"{config['base_url']}", fg=typer.colors.GREEN)
-    )
-    confirm = typer.confirm(
-        typer.style("Do you want to continue?", fg=typer.colors.CYAN), default=True
-    )
-    if not confirm:
-        typer.echo(typer.style("Upload cancelled.", fg=typer.colors.RED))
-        raise typer.Exit()
-
-    # Prepare API client with authentication configuration
-    host = config["base_url"]
-    if not host.rstrip("/").endswith("v0/service"):
-        host = host.rstrip("/") + "/v0/service"
-    api_config = Configuration(host=host)
-    api_client = ApiClient(api_config)
-    api_client.set_default_header("X-Auth", config["api_key"])
-    agent_bundles_api = AgentBundlesApi(api_client)
-
-    # First check if the project already exists
-    try:
-        existing_project = agent_bundles_api.retrieve_agent_bundle(
-            # user_roles=json.dumps(
-            #     dict(
-            #         roles=["admin"],
-            #         role_data=[],
-            #     )
-            # ),
-            # user_tenants=json.dumps(dict(tenants=["test_tenant"])),
-            # requester_uuid="test_requester_uuid",
-            user_roles="",
-            user_tenants="",
-            requester_uuid="",
-            project=agent_code_bundle.project,
-            tenant=config["tenant"],
-        )
-    except NotFoundException:
-        existing_project = None
-    if existing_project is not None:
-        typer.echo(
-            typer.style("⛔️ The project '", fg=typer.colors.YELLOW)
-            + typer.style(agent_code_bundle.project, fg=typer.colors.GREEN)
-            + typer.style(
-                "' already exists. It contains the following agents:",
-                fg=typer.colors.YELLOW,
-            )
-        )
-        for agent in existing_project.agent_names:
-            created_date = existing_project.created_at.strftime("%b %d, %Y %H:%M")
-            updated_date = existing_project.last_updated_at.strftime("%b %d, %Y %H:%M")
-            typer.echo(
-                typer.style(
-                    f"  • {existing_project.project}:{agent} ",
-                    fg=typer.colors.MAGENTA,
-                    bold=True,
-                )
-                + typer.style(
-                    f"Created: {created_date} - Updated: {updated_date}",
-                    dim=True,
-                    italic=True,
-                ),
-            )
-        confirm = typer.confirm(
-            typer.style(
-                "Do you want to overwrite the existing project?",
-                fg=typer.colors.BRIGHT_YELLOW,
-            ),
-            default=False,
-        )
-        if not confirm:
-            typer.echo(typer.style("Upload cancelled.", fg=typer.colors.RED))
-            raise typer.Exit()
-        else:
-            agent_bundles_api.update_agent_bundle(
-                # user_roles=json.dumps(
-                #     dict(
-                #         roles=["admin"],
-                #         role_data=[],
-                #     )
-                # ),
-                # user_tenants=json.dumps(dict(tenants=["test_tenant"])),
-                # requester_uuid="test_requester_uuid",
-                user_roles="",
-                user_tenants="",
-                requester_uuid="",
-                project=agent_code_bundle.project,
-                tenant=config["tenant"],
-                agent_bundle_patch=AgentBundlePatch(
-                    agent_names=agent_code_bundle.agent_names,
-                    agent_bundle=io.StringIO(encoded_bundle),
-                ),
-            )
-    else:
-        agent_bundles_api.create_agent_bundle(
-            # user_roles=json.dumps(
-            #     dict(
-            #         roles=["admin"],
-            #         role_data=[],
-            #     )
-            # ),
-            # user_tenants=json.dumps(dict(tenants=["test_tenant"])),
-            # requester_uuid="test_requester_uuid",
-            user_roles="",
-            user_tenants="",
-            requester_uuid="",
-            tenant=config["tenant"],
-            agent_bundle_form=AgentBundleForm(
-                project=agent_code_bundle.project,
-                agent_names=agent_code_bundle.agent_names,
-                agent_bundle=io.StringIO(encoded_bundle),
-            ),
-        )
-    typer.echo(
-        typer.style(
-            f"Project '{agent_code_bundle.project}' was successfully uploaded "
-            f"from '{project_dir}'.",
-            fg=typer.colors.GREEN,
-        )
-    )
-
-
-@app.command()
-def list_remote(
-    project_dir: Annotated[
-        Optional[str],
-        typer.Argument(
-            callback=get_project_directory,
-            help="The project directory where the agents are located.",
-        ),
-    ] = None,
-):
-    """
-    Lists the projects and agents available on the Zeta Alpha Platform.
-    """
-    assert project_dir is not None
-
-    # Get configuration
-    try:
-        config = load_client_config(project_dir)
-    except FileNotFoundError:
-        config_set(
-            project_dir=project_dir,
-            base_url=get_value_or_prompt(
-                prompt="Enter the Zeta Alpha API base URL",
-                default=ZA_BASE_URL,
-                error_message="Base URL cannot be empty.",
-            )(),
-            api_key=get_value_or_prompt(
-                prompt="Enter your Zeta Alpha API key",
-                default="",
-                error_message="API key cannot be empty.",
-                hide_input=True,
-            )(),
-        )
-        config = load_client_config(project_dir)
-
-    # Prepare API client with authentication configuration
-    host = config["base_url"]
-    if not host.rstrip("/").endswith("v0/service"):
-        host = host.rstrip("/") + "/v0/service"
-    api_config = Configuration(host=host)
-    api_client = ApiClient(api_config)
-    api_client.set_default_header("X-Auth", config["api_key"])
-    agent_bundles_api = AgentBundlesApi(api_client)
-
-    # First check if the project already exists
-    available_agent_bundles = agent_bundles_api.filter_agent_bundle(
-        # user_roles=json.dumps(
-        #     dict(
-        #         roles=["admin"],
-        #         role_data=[],
-        #     )
-        # ),
-        # user_tenants=json.dumps(dict(tenants=["test_tenant"])),
-        # requester_uuid="test_requester_uuid",
-        user_roles="",
-        user_tenants="",
-        requester_uuid="",
-        tenant=config["tenant"],
-    )
-    if available_agent_bundles.count == 0:
-        typer.echo("No projects found.")
-        return
-
-    typer.echo(
-        typer.style(
-            "Agents available on the Zeta Alpha Platform for tenant ",
-            fg=typer.colors.BLUE,
-        )
-        + typer.style(f"{config['tenant']}", fg=typer.colors.GREEN)
-        + typer.style(" at ", fg=typer.colors.BLUE)
-        + typer.style(f"{config['base_url']}", fg=typer.colors.GREEN)
-        + typer.style(":", fg=typer.colors.BLUE)
-    )
-    for agent_bundle in available_agent_bundles.results:
-        for agent in agent_bundle.agent_names:
-            created_date = agent_bundle.created_at.strftime("%b %d, %Y %H:%M")
-            updated_date = agent_bundle.last_updated_at.strftime("%b %d, %Y %H:%M")
-            typer.echo(
-                typer.style(
-                    f"  • {agent_bundle.project}:{agent} ",
-                    fg=typer.colors.MAGENTA,
-                    bold=True,
-                )
-                + typer.style(
-                    f"Created: {created_date} - Updated: {updated_date}",
-                    dim=True,
-                    italic=True,
-                ),
-            )
 
 
 @config_app.command("set")
@@ -807,7 +436,7 @@ def config_show(
     try:
         config = load_client_config(project_dir)
     except FileNotFoundError:
-        typer.echo("No configuration found. Please run 'rag_agents config set' first.")
+        typer.echo("No configuration found. Please run 'za platform login' first.")
         raise typer.Exit()
 
     base_url = config.get("base_url", "Not set")
@@ -863,233 +492,91 @@ def config_reset(
     )
 
 
-@app.command()
-def test(  # noqa: C901
-    specs_path: Annotated[
-        str,
-        typer.Argument(
-            help="Path to a spec file or directory containing YAML spec files.",
-        ),
-    ],
-    pattern: Annotated[
-        str,
-        typer.Option(
-            help="Glob pattern to match spec files inside the directory.",
-            show_default=True,
-        ),
-    ] = "*.yaml",
-    project_dir: Annotated[
-        Optional[str],
-        typer.Option(
-            callback=get_project_directory,
-            help="The project directory where the agents are located.",
-        ),
-    ] = None,
-    setup_src: Annotated[
-        Optional[str],
-        typer.Option(help="Path of the agent setup configuration file."),
-    ] = None,
-    secret_setup_src: Annotated[
-        Optional[str],
-        typer.Option(help="Path of the secret agent setup configuration file."),
-    ] = None,
-    debug: Annotated[
-        bool,
-        typer.Option(
-            help="Dump per-spec trace files to agent-traces/ for debugging.",
-        ),
-    ] = False,
-):
-    """
-    Runs behavior-spec tests for the agents in the project.
-    """
-    assert project_dir is not None
-    if setup_src is None:
-        setup_src = os.path.join(project_dir, "agent_setups.json")
-    if secret_setup_src is None:
-        secret_setup_src = os.path.join(project_dir, "env", "agent_setups.json")
-
-    # Ensure the project directory is on PYTHONPATH so agent modules can be imported
-    existing_pythonpath = os.getenv("PYTHONPATH") or ""
-    if project_dir not in existing_pythonpath.split(os.pathsep):
-        os.environ["PYTHONPATH"] = os.pathsep.join(
-            filter(None, [project_dir, existing_pythonpath])
-        )
-    if project_dir not in sys.path:
-        sys.path.insert(0, project_dir)
-    import_chat_agent_class_registry_from_string(project_dir)
-    local_trace_store = LocalTraceStore()
-    harness = TestHarness(local_trace_store)
-    specs_root = Path(specs_path)
-    if specs_root.is_dir():
-        harness.discover(specs_root, pattern=pattern)
-    else:
-        harness.add_spec(specs_root)
-    harness.load()
-
-    # Load agent setups and ensure capture tracing is enabled by default for tests
-    agent_setup_retriever = AgentSetupRetrieverFromFile(
-        file_path=setup_src, secret_file_path=secret_setup_src
-    )
-    try:
-        # Inject capture tracing config if missing
-        setups = asyncio.run(agent_setup_retriever.list())
-        for s in setups:
-            if s.tracing_configuration is None:
-                agent_setup_retriever.update_agent_setup(
-                    s.agent_identifier,
-                    {
-                        "tracing_configuration": {
-                            "vendor": "capture",
-                            "vendor_configuration": {
-                                "capture": {"_store": local_trace_store}
-                            },
-                        }
-                    },
-                )
-    except Exception:
-        # Non-fatal: if event loop or retriever errors occur, continue without injection
-        typer.echo(
-            typer.style(
-                "Failed to inject capture tracing config, continuing without it",
-                fg=typer.colors.RED,
-            )
-        )
-
-    chat_agent_factory = ChatAgentFactory(
-        agent_setup_retriever=agent_setup_retriever,
-        chat_agent_class_registry=ChatAgentClassRegistry,
-        tracing_backend_factory=TracingBackendFactory,
-        trace_state_params={},
-        agent_dependency_registry=AgentDependencyRegistry,
-    )
-
-    def _run_test():
-
-        console = Console()
-        failures = []
-        results = []
-        passed = 0
-        total_time = 0.0
-        idx = 0
-        last_running = None
-        test_paths = [str(p) for p in harness.get_spec_paths()]
-        n_items = len(test_paths)
-
-        console.print(Rule("[bold cyan]Agent Spec Test Run[/]", style="cyan"))
-
-        # Collected info panel
-        info_table = Table.grid(padding=(0, 1))
-        info_table.add_row("[bold]collected[/]", f"[cyan]{n_items} items[/]")
-        info_table.add_row("[bold]specs path[/]", f"[magenta]{specs_path}[/]")
-        info_table.add_row("[bold]pattern[/]", f"[blue]{pattern}[/]")
-        info_table.add_row("[bold]project dir[/]", f"[magenta]{project_dir}[/]")
-        info_table.add_row("[bold]setup src[/]", f"[magenta]{setup_src}[/]")
-        info_table.add_row(
-            "[bold]secret setup src[/]", f"[magenta]{secret_setup_src}[/]"
-        )
-        info_table.add_row("[bold]SDK version[/]", f"[green]{__version__}[/]")
-        if debug:
-            traces_dir = Path("agent-traces")
-            traces_dir.mkdir(exist_ok=True)
-            info_table.add_row(
-                "[bold]traces dir[/]", f"[yellow]{traces_dir.resolve()}[/]"
-            )
-        console.print(Panel(info_table, border_style="cyan"))
-
-        async def _inner():
-            nonlocal idx, passed, total_time, last_running
-            first = True
-            async for case_result in harness.run_iter(chat_agent_factory):
-                if case_result.status == "running":
-                    if not first:
-                        console.print()
-                    first = False
-                    last_running = case_result
-                    # Minimal modern test header
-                    header = f"[{idx + 1:02d}] {case_result.spec_id}"
-                    console.print(f"[bold bright_blue]{header}[/]")
-                    if case_result.description:
-                        console.print(f"   [dim italic]{case_result.description}[/]")
-                    if getattr(case_result, "path", None):
-                        console.print(f"   [dim]Spec: {case_result.path}[/]")
-                else:
-                    idx += 1
-                    results.append(case_result)
-                    total_time += case_result.duration or 0.0
-                    duration_str = (
-                        f"[bright_magenta]{case_result.duration:.2f}s[/]"
-                        if case_result.duration is not None
-                        else ""
-                    )
-                    if debug:
-                        trace_file = traces_dir / f"{case_result.spec_id}.trace.json"
-                        trace_file.write_text(
-                            json.dumps(
-                                local_trace_store.export(),
-                                indent=2,
-                                default=str,
-                            )
-                        )
-                        local_trace_store.reset()
-                    if case_result.status == "passed":
-                        passed += 1
-                        console.print(f"[bold green]PASSED[/] {duration_str}")
-                        if debug:
-                            console.print(f"   [dim]Trace: {trace_file}[/]")
-                    else:
-                        failures.append((idx, case_result))
-                        console.print(f"[bold bright_red]FAILED[/] {duration_str}")
-                        if debug:
-                            console.print(f"   [dim]Trace: {trace_file}[/]")
-            console.print()  # newline after progress line
-
-        asyncio.run(_inner())
-
-        if failures:
-            console.print()
-            console.print(Rule("[bold bright_red]FAILURES[/]", style="bright_red"))
-            for ordinal, r in failures:
-                header = f"[{ordinal:02d}] {r.spec_id}"
-                console.print(f"[bold bright_red]{header}[/]")
-                if r.description:
-                    console.print(f"   [dim italic]{r.description}[/]")
-                if getattr(r, "path", None):
-                    console.print(f"   [dim]Spec: {r.path}[/]")
-                if r.error:
-                    console.print(f"   [bright_yellow]Error: {r.error}[/]")
-                if hasattr(r, "run_details") and r.run_details:
-                    console.print("   [dark_green]Run Details:[/]")
-                    formatted_json = json.dumps(r.run_details, indent=2)
-                    for line in formatted_json.split("\n"):
-                        console.print(f"   {line}")
-                console.print()
-
-        failed = len(failures)
-        total = len(results)
-        summary_line = (
-            f"[green]{passed} passed[/]"
-            + (f", [bright_red]{failed} failed[/]" if failed else "")
-            + f", [cyan]{total} total[/]"
-        )
-        console.print(
-            Rule("[bold]SUMMARY[/]", style="green" if failed == 0 else "bright_red")
-        )
-        console.print(f"{summary_line} in [bold]{total_time:.2f}s[/]")
-        if failed:
-            raise typer.Exit(code=1)
-
-    _run_test()
-
-
-@app.command()
-def version():
-    """
-    Prints the current version of the SDK.
-    """
-    typer.echo(f"Zeta Alpha Agents SDK Version: {__version__}")
-
-
 @app.callback()
 def callback():
     pass
+
+
+# --- Command registration (order determines help output) ---
+
+app.command("init", rich_help_panel="Project")(new_init_command)
+app.command("list", rich_help_panel="Agents")(agent_list)
+app.command("show", rich_help_panel="Agents")(show_command)
+app.command("add", rich_help_panel="Agents")(agent_add)
+app.command("remove", rich_help_panel="Agents")(agent_remove)
+app.command("configure", rich_help_panel="Agents")(agent_configure)
+app.add_typer(
+    model_app,
+    name="model",
+    help="Manage LLM model configuration.",
+    rich_help_panel="Configuration",
+)
+app.add_typer(
+    capabilities_app,
+    name="capabilities",
+    help="Manage agent capabilities (tools, skills, memory, etc.).",
+    no_args_is_help=True,
+    rich_help_panel="Configuration",
+)
+app.add_typer(
+    policies_app,
+    name="policies",
+    help="Manage cross-cutting policies (citations, ...).",
+    no_args_is_help=True,
+    rich_help_panel="Configuration",
+)
+app.add_typer(
+    skill_app,
+    name="skill",
+    help="Manage skill files.",
+    no_args_is_help=True,
+    rich_help_panel="Configuration",
+)
+app.command("dev", rich_help_panel="Development")(dev)
+app.command("serve", rich_help_panel="Development")(serve)
+app.command("run", rich_help_panel="Development")(run_command)
+app.add_typer(spec_app, name="test", rich_help_panel="Development")
+app.add_typer(
+    deploy_app,
+    name="deploy",
+    help="Bundle and deploy agents to the Zeta Alpha Platform.",
+    no_args_is_help=True,
+    rich_help_panel="Development",
+)
+
+# Hidden commands
+app.add_typer(
+    config_app,
+    name="config",
+    help="Zeta Alpha Client configuration.",
+    no_args_is_help=True,
+    hidden=True,
+)
+app.add_typer(
+    provider_app,
+    name="provider",
+    help="Manage agent providers.",
+    no_args_is_help=True,
+    hidden=True,
+)
+app.add_typer(
+    source_app,
+    name="source",
+    help="Manage sources within providers.",
+    no_args_is_help=True,
+    hidden=True,
+)
+app.add_typer(
+    instruction_app,
+    name="instruction",
+    help="Manage instruction files.",
+    no_args_is_help=True,
+    hidden=True,
+)
+app.add_typer(
+    dependency_app,
+    name="dependency",
+    help="Advanced: manage injectable dependencies.",
+    no_args_is_help=True,
+    hidden=True,
+)

@@ -6,6 +6,7 @@ from zav.message_bus import Bootstrap, BootstrapDependency
 from zav.agents_sdk.adapters.event_publishers.event_publisher import (
     AbstractEventPublisher,
 )
+from zav.agents_sdk.adapters.stream_buffer import StreamBufferRegistry
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
 from zav.agents_sdk.handlers import CommandHandlerRegistry, EventHandlerRegistry
 
@@ -38,6 +39,10 @@ def setup_bootstrap(
         BootstrapDependency(
             name="debug_backend",
             value=debug_backend,
+        ),
+        BootstrapDependency(
+            name="stream_buffer_registry",
+            value=StreamBufferRegistry(),
         ),
     ]
     if extra_bootstrap_deps is not None:

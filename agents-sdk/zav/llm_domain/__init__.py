@@ -1,6 +1,8 @@
 from zav.llm_domain.llm_client_configuration import (
     AnthropicConfiguration,
+    AzureAnthropicConfiguration,
     AzureOpenAIConfiguration,
+    BedrockConfiguration,
     LLMClientConfiguration,
     LLMModelConfiguration,
     LLMModelType,
@@ -11,7 +13,9 @@ from zav.llm_domain.llm_client_configuration import (
 
 __all__ = [
     "AnthropicConfiguration",
+    "AzureAnthropicConfiguration",
     "AzureOpenAIConfiguration",
+    "BedrockConfiguration",
     "LLMClientConfiguration",
     "LLMModelConfiguration",
     "LLMModelType",

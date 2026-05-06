@@ -4,10 +4,10 @@ __all__ = ["AgentDependencyRegistry"]
 
 try:
     from zav.agents_sdk.adapters.mcp.tools_provider import (
-        MCPConfiguration,
         MCPServerConfig,
         MCPServerTransportConfig,
         MCPToolsProvider,
+        MCPToolsProviderConfiguration,
         MCPToolsProviderFactory,
         SseTransportConfig,
         StdIoTransportConfig,
@@ -15,7 +15,7 @@ try:
 
     AgentDependencyRegistry.register(MCPToolsProviderFactory)
     __all__ += [
-        "MCPConfiguration",
+        "MCPToolsProviderConfiguration",
         "MCPServerConfig",
         "MCPServerTransportConfig",
         "MCPToolsProvider",

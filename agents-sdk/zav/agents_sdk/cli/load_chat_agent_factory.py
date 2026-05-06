@@ -13,7 +13,7 @@ from zav.agents_sdk.domain.chat_agent_registry import (
 
 
 def from_string(zav_project_dir: str) -> ChatAgentClassRegistryProtocol:
-    import_str = zav_project_dir.replace("/", ".")
+    import_str = zav_project_dir.replace("/", ".").lstrip(".")
     module_str, _, attrs_str = import_str.partition(":")
     if not module_str:
         raise Exception(
@@ -21,16 +21,13 @@ def from_string(zav_project_dir: str) -> ChatAgentClassRegistryProtocol:
             "or <module>:<attribute>."
         )
     try:
-        if zav_project_dir == os.getcwd():
-            import sys
+        import sys
 
-            sys.path.append("..")
-            dynamic_module = importlib.import_module(os.path.basename(zav_project_dir))
-        else:
-            import sys
-
-            sys.path.append(".")
-            dynamic_module = importlib.import_module(module_str)
+        parent = os.path.dirname(os.path.abspath(zav_project_dir))
+        basename = os.path.basename(os.path.abspath(zav_project_dir))
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+        dynamic_module = importlib.import_module(basename)
     except ImportError as exc:
         if exc.name != module_str:
             raise exc from None

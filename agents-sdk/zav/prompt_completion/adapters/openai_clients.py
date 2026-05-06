@@ -390,6 +390,7 @@ class OpenAiChatClient(ChatCompletionClient):
         self.__client = client
         self.__model_name = model_configuration.name
         self.__model_temperature = model_configuration.temperature
+        self.__max_tokens = model_configuration.max_tokens
         self.__json_output = model_configuration.json_output
         self.__interleave_system_message = model_configuration.interleave_system_message
         self.__logprobs = model_configuration.logprobs
@@ -448,7 +449,7 @@ class OpenAiChatClient(ChatCompletionClient):
                 model_name=self.__model_name,
                 model_temperature=self.__model_temperature,
                 span=self.__span,
-                max_tokens=request["max_tokens"],
+                max_tokens=request.get("max_tokens") or self.__max_tokens,
                 json_output=self.__json_output,
                 interleave_system_message=self.__interleave_system_message,
                 stream=stream,
@@ -475,7 +476,7 @@ class OpenAiChatClient(ChatCompletionClient):
             }
             if self.__json_output:
                 kwargs["response_format"] = {"type": "json_object"}
-            if max_tokens := request.get("max_tokens"):
+            if max_tokens := (request.get("max_tokens") or self.__max_tokens):
                 kwargs["max_completion_tokens"] = max_tokens
             if (logprobs := request.get("logprobs", self.__logprobs)) is not None:
                 kwargs["logprobs"] = logprobs
@@ -1052,7 +1053,16 @@ class OpenAiChatClient(ChatCompletionClient):
         return cls(client=client, model_configuration=model_configuration, span=span)
 
     def __del__(self):
-        asyncio.create_task(self.__client.close())
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.__client.close())
+        except RuntimeError:
+            logger.warning(
+                "No running event loop found when trying to close OpenAI client."
+            )
+            # No running event loop — the client will be closed by the
+            # underlying httpx/aiohttp finaliser or OS on process exit.
+            pass
 
 
 @PromptClientFactory.register(LLMProviderName.OPENAI, LLMModelType.CHAT)

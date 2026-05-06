@@ -2,7 +2,8 @@ import copy
 import inspect
 from typing import Annotated, Any, Callable, Dict, List, Optional, get_args, get_origin
 
-from jinja2 import Environment, Undefined
+from jinja2 import Undefined
+from jinja2.sandbox import SandboxedEnvironment
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
 
 from zav.agents_sdk.domain.utils import is_union
@@ -103,7 +104,7 @@ def format_display_text(
     if tool_result is not None and isinstance(tool_result, dict):
         context.update(tool_result)
 
-    env = Environment(undefined=_SilentUndefined, autoescape=True)
+    env = SandboxedEnvironment(undefined=_SilentUndefined, autoescape=False)
     return env.from_string(template).render(**context)
 
 

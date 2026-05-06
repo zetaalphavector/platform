@@ -23,3 +23,22 @@ class CreateChatResponse(Command):
 @dataclass
 class CreateChatStream(CreateChatResponse):
     pass
+
+
+@dataclass
+class CreateBufferedChatStream(CreateChatStream):
+    pass
+
+
+@dataclass
+class GetChatStreamBuffer(Command):
+    message_id: str
+    tenant: str
+    requester_uuid: Optional[str] = None
+
+
+@dataclass
+class CancelChatStream(Command):
+    message_id: str
+    tenant: str
+    requester_uuid: Optional[str] = None

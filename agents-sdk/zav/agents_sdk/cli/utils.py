@@ -1,17 +1,6 @@
 import json
 import os
-from typing import Callable, Optional
-
-
-def is_valid_project_directory(directory: Optional[str] = None) -> bool:
-    if directory is None:
-        return False
-    init_file = os.path.join(directory, "__init__.py")
-    if not os.path.isfile(init_file):
-        return False
-    with open(init_file, "r") as f:
-        content = f.read()
-        return "Zeta Alpha Agents SDK" in content
+from typing import Callable
 
 
 def to_camel_case(name: str) -> str:
@@ -122,7 +111,6 @@ class {class_name}(StreamableChatAgent):
     ) -> AsyncGenerator[ChatMessage, None]:
         response = await self.client.complete(
             messages=conversation,
-            max_tokens=2048,
             stream=True,
         )
         async for chat_client_response in response:
@@ -146,7 +134,7 @@ class {class_name}(StreamableChatAgent):
                     "vendor": "openai",
                     "vendor_configuration": {},
                     "model_configuration": {
-                        "name": "gpt-4o-mini",
+                        "name": "gpt-5.4-mini",
                         "type": "chat",
                         "temperature": 0.0,
                     },
@@ -208,29 +196,199 @@ def create_dependency_files(
 
     # Create the dependency file
     with open(dependency_file, "w") as f:
-        f.write(f"""from typing import Dict, Optional
-import httpx
+        f.write(f"""from typing import Optional
 from zav.agents_sdk import AgentDependencyFactory, AgentDependencyRegistry
 
 
 class {class_name}:
-    def __init__(self, headers: Optional[Dict[str, str]] = None):
-        self.headers = headers
+    def __init__(self, api_url: Optional[str] = None):
+        self.__api_url = api_url
 
-    async def crawl(self, url: str) -> str:
-        \"\"\"Crawl the given URL and return the HTML content.\"\"\"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=self.headers)
-            return response.text
+    async def execute(self, input: str) -> str:
+        # TODO: implement your dependency logic here
+        return f"Received: {{input}}"
 
 
 class {class_name}Factory(AgentDependencyFactory):
     @classmethod
-    def create(cls, headers: Optional[Dict[str, str]] = None) -> {class_name}:
-        return {class_name}(headers=headers)
+    def create(cls, api_url: Optional[str] = None) -> {class_name}:
+        return {class_name}(api_url=api_url)
 
 
 AgentDependencyRegistry.register({class_name}Factory)
 """)
 
     return dependency_name_snake
+
+
+SOURCE_TEMPLATES = {
+    "tools": {
+        "base_import": "from zav.agents_sdk.adapters.tools.tools_source import ToolsSource",  # noqa: E501
+        "extra_imports": "from zav.agents_sdk.domain.tools import Tool",
+        "base_class": "ToolsSource",
+        "body": '''
+    source_name = "{source_name}"
+
+    def __init__(self, {config_snake}_configuration: {class_name}Configuration):
+        self.enabled = {config_snake}_configuration.enabled
+
+    async def get_tools(self) -> list:
+        async def example_tool(query: str) -> str:
+            """An example tool. Replace with your own implementation.
+
+            Args:
+                query: Input to process.
+
+            Returns:
+                The processed result.
+            """
+            return f"Received: {{query}}"
+
+        return [Tool.from_callable(name="{source_name}_example", executable=example_tool)]
+''',  # noqa: E501
+    },
+    "instructions": {
+        "base_import": "from zav.agents_sdk.adapters.instructions.instruction_source import InstructionSource",  # noqa: E501
+        "extra_imports": "",
+        "base_class": "InstructionSource",
+        "body": """
+    source_name = "{source_name}"
+
+    def __init__(self, {config_snake}_configuration: {class_name}Configuration):
+        self.enabled = {config_snake}_configuration.enabled
+
+    async def to_prompt(self) -> str:
+        # TODO: return your custom instructions
+        return "You are a helpful assistant."
+""",  # noqa: E501
+    },
+    "context": {
+        "base_import": "from zav.agents_sdk.adapters.context.context_source import ContextSource",  # noqa: E501
+        "extra_imports": "from zav.agents_sdk.adapters.context.context_source import ContextSourceDescription, ResolvedContextItem",  # noqa: E501
+        "base_class": "ContextSource",
+        "body": """
+    source_name = "{source_name}"
+
+    def __init__(self, {config_snake}_configuration: {class_name}Configuration):
+        self.enabled = {config_snake}_configuration.enabled
+
+    async def describe(self) -> ContextSourceDescription:
+        return ContextSourceDescription(
+            name="{source_name}",
+            description="TODO: describe this context source",
+        )
+
+    async def resolve(self, query: str) -> list:
+        # TODO: return relevant context items
+        return []
+""",  # noqa: E501
+    },
+    "processors": {
+        "base_import": "from zav.agents_sdk.adapters.message_processing.message_processor import MessageProcessor, StreamItem",  # noqa: E501
+        "extra_imports": "from typing import AsyncGenerator",
+        "base_class": "MessageProcessor",
+        "body": """
+    source_name = "{source_name}"
+
+    def __init__(self, {config_snake}_configuration: {class_name}Configuration):
+        self.enabled = {config_snake}_configuration.enabled
+
+    async def process_stream(
+        self, stream: AsyncGenerator[StreamItem, None]
+    ) -> AsyncGenerator[StreamItem, None]:
+        async for response, message in stream:
+            # TODO: transform the message before yielding
+            yield response, message
+""",  # noqa: E501
+    },
+}
+
+
+def create_source_files(
+    project_dir: str,
+    dependencies_dir: str,
+    source_name: str,
+    provider_name: str,
+    file_exists_callback: Callable[[str], str],
+) -> str:
+    class_name = to_camel_case(source_name)
+    source_name_snake = to_snake_case(source_name)
+    source_file = os.path.join(dependencies_dir, f"{source_name_snake}.py")
+    while os.path.exists(source_file):
+        source_name = file_exists_callback(source_name_snake)
+        class_name = to_camel_case(source_name)
+        source_name_snake = to_snake_case(source_name)
+        source_file = os.path.join(dependencies_dir, f"{source_name_snake}.py")
+
+    init_file = os.path.join(dependencies_dir, "__init__.py")
+    if not os.path.exists(init_file):
+        with open(init_file, "w"):
+            pass
+
+    project_init_file = os.path.join(project_dir, "__init__.py")
+    with open(project_init_file, "a") as f:
+        f.write(f"\nfrom .dependencies.{source_name_snake} import *\n")
+
+    template = SOURCE_TEMPLATES.get(provider_name)
+    if template is None:
+        from zav.agents_sdk.cli.source_aliases import get_provider_source_bases
+
+        base_info = get_provider_source_bases().get(provider_name, ("", "ABC"))
+        base_module = base_info[0]
+        base_class_name = base_info[1]
+        base_import = (
+            f"from {base_module} import {base_class_name}" if base_module else ""
+        )
+        extra_imports = ""
+        base_class = base_class_name
+        body = f"""
+    source_name = "{source_name_snake}"
+
+    def __init__(self, {source_name_snake}_configuration: {class_name}Configuration):
+        self.enabled = {source_name_snake}_configuration.enabled
+"""
+    else:
+        base_import = template["base_import"]
+        extra_imports = template["extra_imports"]
+        base_class = template["base_class"]
+        body = template["body"].format(
+            source_name=source_name_snake,
+            class_name=class_name,
+            config_snake=source_name_snake,
+        )
+
+    config_snake = source_name_snake
+
+    imports = (
+        "from zav.agents_sdk import AgentDependencyFactory, AgentDependencyRegistry"
+    )
+    if base_import:
+        imports += f"\n{base_import}"
+    if extra_imports:
+        imports += f"\n{extra_imports}"
+
+    with open(source_file, "w") as f:
+        f.write(f"""from zav.pydantic_compat import BaseModel, Field
+{imports}
+
+
+class {class_name}Configuration(BaseModel):
+    enabled: bool = Field(False, description="Whether this source is enabled.")
+
+
+class {class_name}Source({base_class}):
+{body}
+
+class {class_name}SourceFactory(AgentDependencyFactory):
+    @classmethod
+    def create(
+        cls,
+        {config_snake}_configuration: {class_name}Configuration = {class_name}Configuration(),
+    ) -> {class_name}Source:
+        return {class_name}Source({config_snake}_configuration={config_snake}_configuration)
+
+
+AgentDependencyRegistry.register({class_name}SourceFactory)
+""")  # noqa: E501  # noqa: E501
+
+    return source_name_snake

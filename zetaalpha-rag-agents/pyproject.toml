@@ -1,0 +1,32 @@
+[project]
+name = "zetaalpha.rag-agents"
+version = "1.0.0"
+description = "Compatibility wrapper — installs zetaalpha.agents. Use 'pip install zetaalpha.agents' for new projects."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+dependencies = [
+    "zetaalpha.agents",
+]
+
+[project.optional-dependencies]
+anthropic = ["zetaalpha.agents[anthropic]"]
+azure-anthropic = ["zetaalpha.agents[azure-anthropic]"]
+azure-openai = ["zetaalpha.agents[azure-openai]"]
+bedrock-anthropic = ["zetaalpha.agents[bedrock-anthropic]"]
+bedrock-converse = ["zetaalpha.agents[bedrock-converse]"]
+dataframe_tools = ["zetaalpha.agents[dataframe_tools]"]
+langchain = ["zetaalpha.agents[langchain]"]
+langchain-anthropic = ["zetaalpha.agents[langchain-anthropic]"]
+langchain-aws = ["zetaalpha.agents[langchain-aws]"]
+langchain-openai = ["zetaalpha.agents[langchain-openai]"]
+langfuse = ["zetaalpha.agents[langfuse]"]
+mcp = ["zetaalpha.agents[mcp]"]
+openai = ["zetaalpha.agents[openai]"]
+sql_tools = ["zetaalpha.agents[sql_tools]"]
+web_tools = ["zetaalpha.agents[web_tools]"]
+all = ["zetaalpha.agents[all]"]
+
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"

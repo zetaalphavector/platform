@@ -54,10 +54,11 @@ class NotesService:
     async def create_note(
         self,
         content: str,
+        object_type: str = "free",
     ) -> Dict:
         note_form = NoteForm(
             content=content,
-            object_type=NoteObjectType("free"),
+            object_type=NoteObjectType(object_type),
             annotation_highlight=None,
             sharing=SharingPolicy(),
             object_id=None,
@@ -72,6 +73,37 @@ class NotesService:
             **self.__internal_headers,
         )
         return response.to_dict()
+
+    @handle_api_errors
+    async def retrieve_notes(
+        self,
+        note_object_type: Optional[str] = None,
+        note_object_id: Optional[str] = None,
+        page: Optional[int] = None,
+        page_size: Optional[int] = None,
+        created_by_me: Optional[bool] = None,
+    ) -> List:
+        params = {
+            **({"index_id": self.__index_id} if self.__index_id else {}),
+            **({"page": page} if page is not None else {}),
+            **({"page_size": page_size} if page_size is not None else {}),
+            **({"created_by_me": created_by_me} if created_by_me is not None else {}),
+            **(
+                {"note_object_id": note_object_id} if note_object_id is not None else {}
+            ),
+            **(
+                {"note_object_type": NoteObjectType(note_object_type)}
+                if note_object_type is not None
+                else {}
+            ),
+        }
+        response = await asyncify(self.__notes.filter_notes)(
+            tenant=self.__tenant,
+            **params,
+            **self.__internal_headers,
+        )
+        resp = response.to_dict().get("results", [])
+        return [item.to_dict() if hasattr(item, "to_dict") else item for item in resp]
 
     @handle_api_errors
     async def retrieve_note(
@@ -95,10 +127,11 @@ class NotesService:
         self,
         note_id: int,
         content: str,
+        object_type: str = "free",
     ) -> None:
         note_form = NoteForm(
             content=content,
-            object_type=NoteObjectType("free"),
+            object_type=NoteObjectType(object_type),
             annotation_highlight=None,
             sharing=SharingPolicy(),
             object_id=None,

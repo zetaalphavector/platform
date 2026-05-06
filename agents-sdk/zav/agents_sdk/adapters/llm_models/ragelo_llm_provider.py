@@ -1,7 +1,6 @@
 import json
 from typing import TypeVar
 
-from pydantic import BaseModel
 from ragelo.llm_providers.base_llm_provider import BaseLLMProvider
 from ragelo.types.formats import LLMInputPrompt, LLMResponseType
 from zav.prompt_completion import (
@@ -13,6 +12,7 @@ from zav.prompt_completion import ChatMessage as PcChatMessage
 from zav.prompt_completion import (
     ChatMessageSender,
 )
+from zav.pydantic_compat import BaseModel
 
 T_Schema = TypeVar("T_Schema", bound=BaseModel)
 

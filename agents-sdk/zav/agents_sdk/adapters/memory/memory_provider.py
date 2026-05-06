@@ -1,8 +1,9 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
+from zav.agents_sdk.adapters._filtering import is_source_active
 from zav.agents_sdk.adapters.memory.memory_store import (
     MemoryEntry,
     MemoryStore,
@@ -26,6 +27,10 @@ conventions, and key decisions.
 3. When the user shares personal details (name, role, preferences, \
 expertise), ALWAYS save them. Building a user profile is critical \
 for personalization across sessions.
+4. When you learn that a previously saved memory is outdated, \
+incorrect, or needs refinement, use the `update_memory` tool \
+to replace it. Provide the memory's internal id shown in the recalled \
+memories list and the full updated content.
 
 Apply a minimum signal gate: only save facts that would be \
 genuinely valuable to recall in a future session. Do not save \
@@ -34,7 +39,7 @@ captured in existing memories.\
 """
 
 
-class MemoryConfiguration(BaseModel):
+class MemoryProviderConfiguration(BaseModel):
     enabled: bool = Field(
         False,
         description="Enable the memory system.",
@@ -70,6 +75,12 @@ class MemoryConfiguration(BaseModel):
             "about when and how to write to memory."
         ),
     )
+    include_sources: Optional[List[str]] = Field(
+        None, description="Allowlist of memory store source names to include."
+    )
+    exclude_sources: Optional[List[str]] = Field(
+        None, description="Denylist of memory store source names to exclude."
+    )
 
 
 class MemoryProvider:
@@ -82,6 +93,8 @@ class MemoryProvider:
         read_instructions: Optional[str],
         write_instructions: Optional[str],
         writable_source: Optional[str] = None,
+        include_sources: Optional[Set[str]] = None,
+        exclude_sources: Optional[Set[str]] = None,
     ):
         self.__stores = stores
         self.__enabled = enabled
@@ -89,8 +102,19 @@ class MemoryProvider:
         self.__provide_tools = provide_tools
         self.__read_instructions = read_instructions
         self.__write_instructions = write_instructions
-        writable = self.__resolve_writable(stores, writable_source)
-        self.__writable_store = writable
+        self.__include_sources = include_sources
+        self.__exclude_sources = exclude_sources
+        self.__writable_source_name = writable_source
+        self.__writable_store: Optional[MemoryStore] = None
+        self.__cached_active: Optional[List[MemoryStore]] = None
+
+    def describe_loaded(self) -> Dict[str, Any]:
+        writable = self.__get_writable_store()
+        return {
+            "enabled": self.__enabled,
+            "sources": [s.source_name for s in self.__active_stores()],
+            "writable": writable.source_name if writable else None,
+        }
 
     async def to_prompt(self) -> str:
         if not self.__enabled:
@@ -113,13 +137,14 @@ class MemoryProvider:
     async def get_tools(self) -> List[Tool]:
         if not self.__enabled or not self.__provide_tools:
             return []
-        if not self.__writable_store:
+        writable = self.__get_writable_store()
+        if not writable:
             return []
-        return self.__writable_store.get_tools()
+        return writable.get_tools()
 
     async def __load_all_entries(self) -> List[MemoryEntry]:
         entries: List[MemoryEntry] = []
-        for store in self.__stores:
+        for store in self.__active_stores():
             try:
                 entries.extend(await store.load_context())
             except Exception as e:
@@ -131,22 +156,44 @@ class MemoryProvider:
     def __format_entries(self, entries: List[MemoryEntry]) -> str:
         lines = ["## Recalled memories", ""]
         for entry in entries:
-            lines.append(f"- {entry.content}")
+            parts = []
+            if entry.id:
+                parts.append(f"id:{entry.id}")
+            if entry.created_at:
+                parts.append(entry.created_at[:10])
+            prefix = f"[{', '.join(parts)}] " if parts else ""
+            lines.append(f"- {prefix}{entry.content}")
         return "\n".join(lines)
 
-    @staticmethod
-    def __resolve_writable(
-        stores: List[MemoryStore],
-        writable_source: Optional[str],
-    ) -> Optional[MemoryStore]:
-        if not stores:
+    def __active_stores(self) -> List[MemoryStore]:
+        if self.__cached_active is not None:
+            return self.__cached_active
+        self.__cached_active = [
+            store
+            for store in self.__stores
+            if is_source_active(
+                store.source_name,
+                store.enabled,
+                self.__include_sources,
+                self.__exclude_sources,
+            )
+        ]
+        return self.__cached_active
+
+    def __get_writable_store(self) -> Optional[MemoryStore]:
+        if self.__writable_store is not None:
+            return self.__writable_store
+        active = self.__active_stores()
+        if not active:
             return None
-        if writable_source:
-            for store in stores:
-                if store.source_name == writable_source:
+        if self.__writable_source_name:
+            for store in active:
+                if store.source_name == self.__writable_source_name:
+                    self.__writable_store = store
                     return store
             return None
-        return stores[0]
+        self.__writable_store = active[0]
+        return self.__writable_store
 
 
 class MemoryProviderFactory(AgentDependencyFactory):
@@ -155,14 +202,26 @@ class MemoryProviderFactory(AgentDependencyFactory):
     def create(
         cls,
         memory_store_group: MemoryStoreGroup = MemoryStoreGroup(items=[]),
-        memory_configuration: MemoryConfiguration = MemoryConfiguration(),
+        memory_provider_configuration: MemoryProviderConfiguration = (
+            MemoryProviderConfiguration()
+        ),
     ) -> MemoryProvider:
         return MemoryProvider(
             stores=memory_store_group.items,
-            enabled=memory_configuration.enabled,
-            inject_context=memory_configuration.inject_context,
-            provide_tools=memory_configuration.provide_tools,
-            read_instructions=memory_configuration.read_instructions,
-            write_instructions=memory_configuration.write_instructions,
-            writable_source=memory_configuration.writable_source,
+            enabled=memory_provider_configuration.enabled,
+            inject_context=memory_provider_configuration.inject_context,
+            provide_tools=memory_provider_configuration.provide_tools,
+            read_instructions=memory_provider_configuration.read_instructions,
+            write_instructions=memory_provider_configuration.write_instructions,
+            writable_source=memory_provider_configuration.writable_source,
+            include_sources=(
+                set(memory_provider_configuration.include_sources)
+                if memory_provider_configuration.include_sources
+                else None
+            ),
+            exclude_sources=(
+                set(memory_provider_configuration.exclude_sources)
+                if memory_provider_configuration.exclude_sources
+                else None
+            ),
         )

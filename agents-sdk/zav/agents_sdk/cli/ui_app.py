@@ -2,14 +2,16 @@ import asyncio
 import base64
 import json
 import os
+import time
 from datetime import datetime
 from typing import Any, List, Optional
 
 import streamlit as st
-from zav.llm_domain import LLMModelType
+from zav.llm_domain import LLMModelType, LLMProviderName
 from zav.object_storage_repo import ObjectRepositoryFactory, ObjectStorageItem
 from zav.pydantic_compat import PYDANTIC_V2
 
+import zav.agents_sdk.agents  # noqa: F401 - registers built-in Agent class
 from zav.agents_sdk import (
     AgentSetup,
     AgentSetupRetrieverFromFile,
@@ -67,7 +69,9 @@ storage_backend = os.environ["STORAGE_BACKEND"]
 storage_path = os.environ["STORAGE_PATH"]
 
 object_storage_repo = ObjectRepositoryFactory.create(storage_backend)
-import_chat_agent_class_registry_from_string(zav_project_dir)
+
+if os.path.isfile(os.path.join(zav_project_dir, "__init__.py")):
+    import_chat_agent_class_registry_from_string(zav_project_dir)
 # No secrets in this retriever, so it's safe to store
 safe_agent_setup_retriever = AgentSetupRetrieverFromFile(file_path=zav_agent_setup_src)
 agent_setup_retriever = AgentSetupRetrieverFromFile(
@@ -308,20 +312,30 @@ async def create_chat_response(
     if streaming_mode:
         conversation_generator = await compute_conversation_streaming()
         last_message = None
+        last_debug_write = 0.0
         while True:
             try:
                 conversation_task = asyncio.create_task(anext(conversation_generator))
                 while not conversation_task.done():
-                    if agent_debug_logs and debug_storage:
+                    now = time.monotonic()
+                    if (
+                        agent_debug_logs
+                        and debug_storage
+                        and now - last_debug_write >= 1.0
+                    ):
                         agent_debug_logs.json(debug_storage)
+                        last_debug_write = now
 
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.1)
                 conversation_result = conversation_task.result()
                 last_message = conversation_result
                 render_chat_message_item_content(
                     chat_message_item_content, last_message
                 )
             except StopAsyncIteration:
+                break
+            except Exception as e:
+                chat_message_item_content.error(f"Agent error: {e}")
                 break
     else:
         conversation_task = asyncio.create_task(compute_conversation())
@@ -406,6 +420,12 @@ def render_chat_configuration_item(
                 if llm_client_configuration
                 else None
             )
+            st.caption("Vendor")
+            st.text(
+                llm_client_configuration.vendor.value
+                if llm_client_configuration
+                else None
+            )
             st.caption("Name")
             st.text(llm_model_configuration.name if llm_model_configuration else None)
             st.caption("Type")
@@ -419,6 +439,12 @@ def render_chat_configuration_item(
             st.caption("Max tokens")
             st.text(
                 llm_model_configuration.max_tokens if llm_model_configuration else None
+            )
+            st.caption("Reasoning effort")
+            st.text(
+                llm_model_configuration.reasoning_effort
+                if llm_model_configuration
+                else None
             )
 
             st.subheader("Conversation context")
@@ -594,7 +620,8 @@ with st.sidebar:
                 agent_setup.agent_identifier
                 for agent_setup in all_agent_setups
                 if agent_setup.agent_identifier == st.session_state.agent_identifier
-            )
+            ),
+            st.session_state.agent_identifier,
         )
         agent_setup = asyncio.run(
             safe_agent_setup_retriever.get(
@@ -617,10 +644,25 @@ with st.sidebar:
         )
 
     with st.expander("LLM model configuration"):
-        llm_model_configuration = (
-            agent_setup.llm_client_configuration.model_configuration
+        llm_client_configuration = (
+            agent_setup.llm_client_configuration
             if agent_setup and agent_setup.llm_client_configuration
             else None
+        )
+        llm_model_configuration = (
+            llm_client_configuration.model_configuration
+            if llm_client_configuration
+            else None
+        )
+        vendor_options = [e.value for e in LLMProviderName]
+        sel_vendor = st.selectbox(
+            "Vendor",
+            vendor_options,
+            index=(
+                vendor_options.index(llm_client_configuration.vendor.value)
+                if llm_client_configuration
+                else None
+            ),
         )
         sel_name = st.text_input(
             "Name", llm_model_configuration.name if llm_model_configuration else None
@@ -645,6 +687,18 @@ with st.sidebar:
             "Max tokens",
             value=(
                 llm_model_configuration.max_tokens if llm_model_configuration else None
+            ),
+        )
+        sel_reasoning_effort = st.text_input(
+            "Reasoning effort",
+            value=(
+                llm_model_configuration.reasoning_effort
+                if llm_model_configuration and llm_model_configuration.reasoning_effort
+                else ""
+            ),
+            help=(
+                "Constrains effort on reasoning for reasoning models "
+                "(e.g. low, medium, high)"
             ),
         )
 
@@ -747,6 +801,10 @@ with st.sidebar:
         if sel_agent_configuration:
             agent_setup.agent_configuration = json.loads(sel_agent_configuration)
         if agent_setup.llm_client_configuration:
+            if sel_vendor:
+                agent_setup.llm_client_configuration.vendor = LLMProviderName(
+                    sel_vendor
+                )
             if sel_name:
                 agent_setup.llm_client_configuration.model_configuration.name = sel_name
             if sel_type:
@@ -761,6 +819,9 @@ with st.sidebar:
                 agent_setup.llm_client_configuration.model_configuration.max_tokens = (
                     int(sel_max_tokens)
                 )
+            agent_setup.llm_client_configuration.model_configuration.reasoning_effort = (  # noqa: E501
+                sel_reasoning_effort if sel_reasoning_effort else None
+            )
         st.session_state.agent_setup = agent_setup
 
         safe_agent_setup_retriever.update_agent_setup(

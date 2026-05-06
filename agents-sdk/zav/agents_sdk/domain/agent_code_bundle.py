@@ -85,7 +85,11 @@ class AgentCodeBundle(BaseModel):
             if project is None:
                 raise ValueError("Either project or project_dir must be provided.")
             project_dir = os.path.join(base_path, project)
-        _load_python_module(project_dir)
+
+        import zav.agents_sdk.agents  # noqa: F401
+
+        if os.path.isfile(os.path.join(project_dir, "__init__.py")):
+            _load_python_module(project_dir)
 
     @classmethod
     def from_project_dir(cls, project: str, agent_names: List[str], project_dir: str):
@@ -94,9 +98,8 @@ class AgentCodeBundle(BaseModel):
             filestream, mode="w", compression=zipfile.ZIP_DEFLATED
         ) as zip_ref:
             for root, _, files in os.walk(project_dir):
-                if os.path.basename(root) == "__pycache__":
-                    continue
-                if os.path.basename(root) == "env":
+                basename = os.path.basename(root)
+                if basename in {"__pycache__", "env", "memories"}:
                     continue
 
                 for filename in files:

@@ -1,11 +1,11 @@
 from typing import Optional
 
-from pydantic import BaseModel
 from zav.authentication_service.api.authentication_api import AuthenticationApi
 from zav.authentication_service.api.settings_api import SettingsApi
 from zav.authentication_service.api_client import ApiClient
 from zav.authentication_service.configuration import Configuration
 from zav.authentication_service.models import UserSettings, VerifyForm
+from zav.pydantic_compat import BaseModel
 
 from zav.agents_sdk.adapters.async_wrapper import asyncify
 from zav.agents_sdk.adapters.error_handling import handle_api_errors
@@ -19,6 +19,7 @@ class UserInfo(BaseModel):
     last_name: str
     email: str
     report_email: bool
+    affiliation: Optional[str] = None
 
 
 class RegistrationService:
@@ -95,6 +96,7 @@ class RegistrationService:
             last_name=user_info.last_name,
             email=user_email,
             report_email=user_info.report_email,
+            affiliation=getattr(user_info, "affiliation", None),
         )
 
     @handle_api_errors
@@ -130,6 +132,7 @@ class RegistrationService:
             last_name=user_info.last_name,
             email=user_email,
             report_email=user_info.report_email,
+            affiliation=getattr(user_info, "affiliation", None),
         )
 
 

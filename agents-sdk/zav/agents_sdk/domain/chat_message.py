@@ -73,11 +73,16 @@ class FilterContext(BaseModel):
     filters: Dict  # Boolean tree format (FiltersConfiguration-compatible)
 
 
+class UserDocumentContext(BaseModel):
+    enabled: bool = True
+
+
 class ConversationContext(BaseModel):
     document_context: Optional[DocumentContext] = None
     custom_context: Optional[CustomContext] = None
     tag_context: Optional[TagContext] = None
     filter_context: Optional[FilterContext] = None
+    user_document_context: Optional[UserDocumentContext] = None
 
     @root_validator()
     @classmethod
@@ -104,6 +109,7 @@ class ConversationContext(BaseModel):
             and (not self.custom_context or not self.custom_context.items)
             and (not self.tag_context or self.tag_context.is_empty())
             and not self.filter_context
+            and not self.user_document_context
         )
 
 
