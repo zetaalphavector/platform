@@ -20,7 +20,7 @@ jobs:
     - name: Extract package details
       id: package-details
       run: |
-        package_version=$(sed -n "s/.*__version__ = \"\(.*\)\".*/\1/p" "zav/agents_sdk/version.py")
+        package_version=$(sed -n 's/^version\s*=\s*"\([^"]*\)".*/\1/p' "pyproject.toml" | head -n 1)
         package_name=$(sed -n 's/^name\s*=\s*"\([^"]*\)".*/\1/p' "pyproject.toml" | head -n 1)
         github_tag="$package_name-$package_version"
 

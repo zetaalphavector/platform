@@ -1,6 +1,6 @@
 [project]
 name = "zetaalpha.agents"
-dynamic = ["version"]
+version = "0.1.0"
 description = "The Agents SDK is designed to provide a flexible, scalable, and efficient framework for building, testing, and deploying LLM agents."
 readme = "README.md"
 authors = [
@@ -1806,5 +1806,3 @@ exclude = ["tests*"]
 Homepage = "https://github.com/zetaalphavector/platform"
 Repository = "https://github.com/zetaalphavector/platform"
 Issues = "https://github.com/zetaalphavector/platform/issues"
-[tool.setuptools.dynamic]
-version = { attr = "zav.agents_sdk.version.__version__" }
