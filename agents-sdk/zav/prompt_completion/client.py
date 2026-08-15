@@ -100,6 +100,8 @@ class ChatMessage(BaseModel):
     function_call_response: Optional[FunctionCallResponse] = None
     tool_call_requests: Optional[List[ToolCallRequest]] = None
     tool_call_responses: Optional[List[ToolCallResponse]] = None
+    response_replay_items: Optional[List[Dict[str, Any]]] = None
+    reasoning_summary: Optional[str] = None
 
     def __str__(self) -> str:
         # TODO: This gets logged by the chat service. We should probably obfuscate the

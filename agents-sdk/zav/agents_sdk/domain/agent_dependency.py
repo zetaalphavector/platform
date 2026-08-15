@@ -1,6 +1,8 @@
 import inspect
 from abc import ABC, abstractmethod
 from typing import (
+    Any,
+    ClassVar,
     Dict,
     Generic,
     List,
@@ -58,6 +60,28 @@ class AgentDependencyFactory(ABC, Generic[DEPENDENCY_PARAMS, T]):
         - (un)typed key-value pairs within the handler command, matched by argument name
         - other dependencies matched by their type
         """
+        raise NotImplementedError
+
+
+class ResumableAgentDependency(ABC):
+    state_key: ClassVar[str]
+
+    # True iff this dependency's restored state IS the agent's conversation
+    # transcript, so on a resumed turn the agent already holds its prior messages
+    # and is sent only the new turn. Only the resumable chat-completion client
+    # replays the transcript; other resumable state (counters, caches, scratch
+    # data) does not — so an agent carrying only those still needs the full stored
+    # transcript re-fed on a stateful follow-up. The chat handler keys its history
+    # gap-fill on this (see ChatAgentFactory.resumes_conversation /
+    # resolve_turn_conversation).
+    restores_conversation: ClassVar[bool] = False
+
+    @abstractmethod
+    async def dump(self) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def load(self, state: Dict[str, Any]) -> None:
         raise NotImplementedError
 
 

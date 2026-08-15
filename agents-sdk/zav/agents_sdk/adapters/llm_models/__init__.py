@@ -52,6 +52,8 @@ try:
         ChatCompletionSender,
         ChatResponse,
         FunctionCallResponse,
+        ResumableZAVChatCompletionClient,
+        ResumableZAVChatCompletionClientFactory,
         ToolCallRequest,
         ToolCallResponse,
         ZAVChatCompletionClient,
@@ -59,7 +61,10 @@ try:
     )
 
     AgentDependencyRegistry.register(ZAVChatCompletionClientFactory)
+    AgentDependencyRegistry.register(ResumableZAVChatCompletionClientFactory)
     __all__ += [
+        "ResumableZAVChatCompletionClient",
+        "ResumableZAVChatCompletionClientFactory",
         "ZAVChatCompletionClient",
         "ZAVChatCompletionClientFactory",
         "ChatCompletion",
@@ -68,6 +73,20 @@ try:
         "FunctionCallResponse",
         "ToolCallRequest",
         "ToolCallResponse",
+    ]
+except ImportError:
+    pass
+
+try:
+    from zav.agents_sdk.adapters.llm_models.replay_chat_completion_client import (
+        ReplayResumableZAVChatCompletionClient,
+        ReplayResumableZAVChatCompletionClientFactory,
+    )
+
+    AgentDependencyRegistry.register(ReplayResumableZAVChatCompletionClientFactory)
+    __all__ += [
+        "ReplayResumableZAVChatCompletionClient",
+        "ReplayResumableZAVChatCompletionClientFactory",
     ]
 except ImportError:
     pass

@@ -1,6 +1,6 @@
 [project]
 name = "zetaalpha.rag-agents"
-version = "0.1.0"
+version = "0.2.0"
 description = "Compatibility wrapper — installs zetaalpha.agents. Use 'pip install zetaalpha.agents' for new projects."
 readme = "README.md"
 license = { file = "LICENSE" }

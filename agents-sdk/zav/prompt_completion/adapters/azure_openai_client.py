@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import openai
 from azure.identity import (
@@ -19,6 +19,10 @@ from zav.prompt_completion.adapters.openai_clients import (
     OpenAiChatClient2PromptClientAdapter,
     OpenAiPromptClient,
     OpenAiPromptWithLogitsClient,
+)
+from zav.prompt_completion.adapters.openai_responses_client import (
+    OpenAiResponsesClient,
+    OpenAiResponsesClient2PromptClientAdapter,
 )
 from zav.prompt_completion.client_factories import (
     ChatClientFactory,
@@ -74,6 +78,53 @@ def build_client(
         azure_endpoint=vendor_configuration.endpoint,
         api_version=vendor_configuration.api_version,
     )
+
+
+def build_responses_client(
+    vendor_configuration: AzureOpenAIConfiguration,
+    client_factory: Callable = openai.AsyncOpenAI,
+    client_secret_credential_factory: Callable = ClientSecretCredential,
+    workload_identity_credential_factory: Callable = WorkloadIdentityCredential,
+    token_provider_factory: Callable = get_bearer_token_provider,
+) -> openai.AsyncOpenAI:
+    endpoint = vendor_configuration.endpoint.rstrip("/")
+    if not endpoint.endswith("/openai/v1"):
+        endpoint = f"{endpoint}/openai/v1"
+    base_url = f"{endpoint}/"
+
+    if vendor_configuration.auth_type == "api_key":
+        if vendor_configuration.api_key is None:
+            raise ValueError("api_key auth_type requires api_key configuration")
+        api_key = vendor_configuration.api_key.api_key.get_unencrypted_secret()
+    elif vendor_configuration.auth_type == "client_secret":
+        if vendor_configuration.client_secret is None:
+            raise ValueError(
+                "client_secret auth_type requires client_secret configuration"
+            )
+        creds = vendor_configuration.client_secret
+        credential = client_secret_credential_factory(
+            tenant_id=creds.tenant_id,
+            client_id=creds.client_id,
+            client_secret=creds.client_secret.get_unencrypted_secret(),
+        )
+        api_key = token_provider_factory(credential, "https://ai.azure.com/.default")
+    elif vendor_configuration.auth_type == "workload_identity":
+        if vendor_configuration.workload_identity is None:
+            raise ValueError(
+                "workload_identity auth_type requires workload_identity configuration"
+            )
+        creds = vendor_configuration.workload_identity
+        kwargs = {}
+        if creds.tenant_id:
+            kwargs["tenant_id"] = creds.tenant_id
+        if creds.client_id:
+            kwargs["client_id"] = creds.client_id
+        credential = workload_identity_credential_factory(**kwargs)
+        api_key = token_provider_factory(credential, "https://ai.azure.com/.default")
+    else:
+        raise ValueError(f"Unsupported auth_type: {vendor_configuration.auth_type}")
+
+    return client_factory(api_key=api_key, base_url=base_url)
 
 
 @PromptWithLogitsClientFactory.register(
@@ -132,6 +183,36 @@ class AzureOpenAiChatClient2PromptClientAdapter(
         span: Optional[Span] = None,
     ) -> "AzureOpenAiChatClient2PromptClientAdapter":
         chat_client = AzureOpenAiChatClient.from_configuration(
+            vendor_configuration, model_configuration, span=span
+        )
+        return cls(chat_client=chat_client)
+
+
+@ChatClientFactory.register(LLMProviderName.AZURE_OPENAI, LLMModelType.RESPONSES)
+class AzureOpenAiResponsesClient(OpenAiResponsesClient):
+    @classmethod
+    def from_configuration(
+        cls,
+        vendor_configuration: AzureOpenAIConfiguration,
+        model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
+    ) -> "AzureOpenAiResponsesClient":
+        client = build_responses_client(vendor_configuration)
+        return cls(client=client, model_configuration=model_configuration, span=span)
+
+
+@PromptClientFactory.register(LLMProviderName.AZURE_OPENAI, LLMModelType.RESPONSES)
+class AzureOpenAiResponsesClient2PromptClientAdapter(
+    OpenAiResponsesClient2PromptClientAdapter
+):
+    @classmethod
+    def from_configuration(
+        cls,
+        vendor_configuration: AzureOpenAIConfiguration,
+        model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
+    ) -> "AzureOpenAiResponsesClient2PromptClientAdapter":
+        chat_client = AzureOpenAiResponsesClient.from_configuration(
             vendor_configuration, model_configuration, span=span
         )
         return cls(chat_client=chat_client)

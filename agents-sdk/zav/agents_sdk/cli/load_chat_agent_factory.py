@@ -23,10 +23,16 @@ def from_string(zav_project_dir: str) -> ChatAgentClassRegistryProtocol:
     try:
         import sys
 
-        parent = os.path.dirname(os.path.abspath(zav_project_dir))
-        basename = os.path.basename(os.path.abspath(zav_project_dir))
+        project_abs = os.path.abspath(zav_project_dir)
+        parent = os.path.dirname(project_abs)
+        basename = os.path.basename(project_abs)
         if parent not in sys.path:
             sys.path.insert(0, parent)
+        # Also expose the project dir itself so the project's top-level absolute
+        # imports (e.g. `from dependencies.x import y`) resolve — Streamlit's
+        # script runner only puts the SDK's own dir on sys.path, not the project.
+        if project_abs not in sys.path:
+            sys.path.insert(0, project_abs)
         dynamic_module = importlib.import_module(basename)
     except ImportError as exc:
         if exc.name != module_str:

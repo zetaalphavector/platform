@@ -141,6 +141,10 @@ _PROVIDERS: Tuple[ProviderInfo, ...] = (
 
 _PROVIDER_MAP: Dict[str, ProviderInfo] = {p.name: p for p in _PROVIDERS}
 
+_SOURCE_CONFIG_KEY_OVERRIDES: Dict[Tuple[str, str], str] = {
+    ("processing", "artifact_conductor"): "artifact_conductor_processor_configuration",
+}
+
 
 def get_providers() -> Dict[str, ProviderInfo]:
     return _PROVIDER_MAP
@@ -290,6 +294,8 @@ def get_source_config_key(provider: str, internal_name: str) -> str:
     meta = SourceRegistry.get_source(provider, internal_name)
     if meta is not None:
         return meta.config_key
+    if (provider, internal_name) in _SOURCE_CONFIG_KEY_OVERRIDES:
+        return _SOURCE_CONFIG_KEY_OVERRIDES[(provider, internal_name)]
     return f"{internal_name}_source_configuration"
 
 

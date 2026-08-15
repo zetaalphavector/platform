@@ -21,6 +21,7 @@ from zav.user_documents_connector.model_utils import (  # noqa: F401
     none_type,
     validate_and_convert_types
 )
+from zav.user_documents_connector.model.error_response import ErrorResponse
 from zav.user_documents_connector.model.http_validation_error import HTTPValidationError
 from zav.user_documents_connector.model.paginated_response_user_document_item import PaginatedResponseUserDocumentItem
 from zav.user_documents_connector.model.user_document_form import UserDocumentForm

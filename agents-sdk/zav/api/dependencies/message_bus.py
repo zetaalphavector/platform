@@ -1,4 +1,5 @@
-def get_message_bus():
+from zav.message_bus import MessageBus
 
-    sentinel_bus = object()
-    return sentinel_bus
+from zav.api.app_resources import AppResource
+
+get_message_bus = AppResource[MessageBus]("message_bus")

@@ -18,6 +18,7 @@ from zav.agents_sdk.domain.chat_message import (
     ChatMessage,
     ChatMessageEvidence,
     FunctionCallRequest,
+    extract_internal_document_id_from_evidence_url,
 )
 
 
@@ -154,12 +155,17 @@ def _assert_citations(
         )
     if expectation.cited_docs is not None:
         cited_doc_ids = []
+        ignored_evidence_urls = []
         for e in evidences:
-            doc_id = e.document_hit_url.split("property_values=")[1]
-            doc_id = doc_id.split("_")[0]  # convert to guid
-            cited_doc_ids.append(doc_id)
+            doc_id = extract_internal_document_id_from_evidence_url(e.document_hit_url)
+            if doc_id is None:
+                ignored_evidence_urls.append(e.document_hit_url)
+            else:
+                cited_doc_ids.append(doc_id)
         if not all(doc in cited_doc_ids for doc in expectation.cited_docs):
             raise AssertionError(
                 "Expected the following documents to be cited: "
-                f"{expectation.cited_docs}, but got: {cited_doc_ids}."
+                f"{expectation.cited_docs}, but got internal document citations: "
+                f"{cited_doc_ids}. Ignored non-internal evidence URLs: "
+                f"{ignored_evidence_urls}."
             )

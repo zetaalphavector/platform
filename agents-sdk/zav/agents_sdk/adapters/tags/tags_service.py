@@ -10,6 +10,8 @@ from zav.saved_results.model.tag_form import TagForm
 from zav.saved_results.model.tag_item_settings import TagItemSettings
 from zav.saved_results.model.tag_name import TagName
 from zav.saved_results.model.tagged_document_form import TaggedDocumentForm
+from zav.saved_results.model.tagged_resource_collection import TaggedResourceCollection
+from zav.saved_results.model.tagged_resource_form import TaggedResourceForm
 from zav.saved_results.model.uuid_string import UUIDString
 
 from zav.agents_sdk.adapters.async_wrapper import asyncify
@@ -39,17 +41,23 @@ class TagsService:
         self.__internal_headers = request_headers.dict(
             exclude_none=True, exclude={"authorization", "x_auth"}
         )
-        if (
+        has_auth_token = bool(
             request_headers.authorization
             or api_client.default_headers.get("Authorization")
             or request_headers.x_auth
             or api_client.default_headers.get("X-Auth")
-        ):
+        )
+        if has_auth_token:
             # This is the case when the external API is being called
             if "requester_uuid" not in self.__internal_headers:
                 self.__internal_headers["requester_uuid"] = UUIDString("")
             if "user_roles" not in self.__internal_headers:
                 self.__internal_headers["user_roles"] = ""
+        # Checked lazily (not here) so agents that never tag still construct.
+        self.__has_identity = has_auth_token or bool(
+            self.__internal_headers.get("requester_uuid")
+            and self.__internal_headers.get("user_roles")
+        )
         self.__tenant = tenant
         self.__index_id = index_id
         self.__tags_service_page_size = int(tags_service_page_size)
@@ -59,6 +67,15 @@ class TagsService:
         }
         self.__max_documents_per_page = int(max_documents_per_page)
         super().__init__()
+
+    def __require_request_params(self) -> Dict:
+        # Clear error instead of a cryptic TypeError from the vendored client.
+        if not self.__has_identity:
+            raise ValueError(
+                "TagsService requires a requester identity (requester_uuid and "
+                "user_roles) or an auth token, but none were provided."
+            )
+        return self.__request_params
 
     @handle_api_errors
     async def get_tags(self, page_size: Optional[int] = None) -> List[Dict]:
@@ -73,7 +90,7 @@ class TagsService:
                 tenant=self.__tenant,
                 page=page,
                 page_size=page_size,
-                **self.__request_params,
+                **self.__require_request_params(),
             )
             tag_results = tag_response.to_dict()
             page_results = [r.to_dict() for r in tag_results.get("results", [])]
@@ -99,7 +116,7 @@ class TagsService:
         tag_response = await asyncify(self.__tags.tags_filter_all)(
             tenant=self.__tenant,
             tag_ids=[tag_id],
-            **self.__request_params,
+            **self.__require_request_params(),
         )
         tag_results = tag_response.to_dict().get("results", [])
         if not tag_results:
@@ -132,7 +149,7 @@ class TagsService:
         Returns:
             Dict with 'results' (list of documents) and pagination info
         """
-        params = self.__request_params.copy()
+        params = self.__require_request_params().copy()
         if (tag_type := tag_type.lower()) == "favourites":
             api = self.__tags.favorite_tag_documents_filter
         else:
@@ -177,7 +194,7 @@ class TagsService:
         document_type: Literal["document"] = "document",
         user_order: Optional[int] = None,
     ) -> Dict:
-        params = self.__request_params.copy()
+        params = self.__require_request_params().copy()
         params["id"] = tag_id
         params["tag_type"] = tag_type
 
@@ -204,12 +221,54 @@ class TagsService:
         tag_type: Literal["own", "shared", "following"],
         uri_hash: str,
     ) -> None:
-        params = self.__request_params.copy()
+        params = self.__require_request_params().copy()
         params["id"] = tag_id
         params["tag_type"] = tag_type
         params["document_id"] = GUIDString(uri_hash)
 
         await asyncify(self.__tags.delete_tagged_document)(
+            tenant=self.__tenant,
+            **params,
+        )
+
+    @handle_api_errors
+    async def tag_note(
+        self,
+        tag_id: int,
+        tag_type: Literal["own", "shared", "following"],
+        note_id: int,
+    ) -> Dict:
+        params = self.__require_request_params().copy()
+        params["id"] = tag_id
+        params["tag_type"] = tag_type
+        params["taggable_resource_collection"] = TaggedResourceCollection("notes")
+        params["tagged_resource_form"] = TaggedResourceForm(
+            taggable_resource_id=str(note_id),
+        )
+
+        tagged_resource_response = await asyncify(
+            self.__tags.create_tagged_resource_v1
+        )(
+            tenant=self.__tenant,
+            **params,
+        )
+
+        return tagged_resource_response.to_dict()
+
+    @handle_api_errors
+    async def untag_note(
+        self,
+        tag_id: int,
+        tag_type: Literal["own", "shared", "following"],
+        note_id: int,
+    ) -> None:
+        params = self.__require_request_params().copy()
+        params["id"] = tag_id
+        params["tag_type"] = tag_type
+        params["taggable_resource_collection"] = TaggedResourceCollection("notes")
+        params["taggable_resource_id"] = str(note_id)
+
+        await asyncify(self.__tags.delete_tagged_resource_v1)(
             tenant=self.__tenant,
             **params,
         )
@@ -242,7 +301,7 @@ class TagsService:
         tag_response = await asyncify(self.__tags.tag_create)(
             tenant=self.__tenant,
             tag_form=tag_form,
-            **self.__request_params,
+            **self.__require_request_params(),
         )
 
         return tag_response.to_dict()

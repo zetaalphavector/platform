@@ -20,6 +20,7 @@ from zav.agents_sdk.cli.commands.init_cmd import init_command as new_init_comman
 from zav.agents_sdk.cli.commands.instruction_cmd import instruction_app
 from zav.agents_sdk.cli.commands.mcp_cmd import mcp_app
 from zav.agents_sdk.cli.commands.model_cmd import model_app
+from zav.agents_sdk.cli.commands.perf_cmd import perf_app
 from zav.agents_sdk.cli.commands.policy_cmd import policies_app
 from zav.agents_sdk.cli.commands.provider_cmd import provider_app
 from zav.agents_sdk.cli.commands.provider_factory import make_provider_app
@@ -239,6 +240,14 @@ def serve(
         os.environ["ZAV_AGENT_SETUP_SRC"] = setup_src
     if secret_setup_src:
         os.environ["ZAV_SECRET_AGENT_SETUP_SRC"] = secret_setup_src
+    # Keep the invocation directory importable so agents that use absolute
+    # imports rooted at the app package (e.g. `from src.adapters import ...`)
+    # still resolve after we chdir into the project directory below.
+    invocation_dir = os.getcwd()
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [project_dir, invocation_dir, os.getenv("PYTHONPATH")])
+    )
+    sys.path.insert(0, invocation_dir)
     sys.path.insert(0, project_dir)
     os.chdir(project_dir)
 
@@ -307,10 +316,16 @@ def dev(
     if secret_setup_src:
         os.environ["ZAV_SECRET_AGENT_SETUP_SRC"] = secret_setup_src
 
+    # Keep the invocation directory importable so agents that use absolute
+    # imports rooted at the app package (e.g. `from src.adapters import ...`)
+    # still resolve after we chdir into the project directory below.
+    invocation_dir = os.getcwd()
+
     os.environ["PYTHONPATH"] = os.pathsep.join(
-        filter(None, [project_dir, os.getenv("PYTHONPATH")])
+        filter(None, [project_dir, invocation_dir, os.getenv("PYTHONPATH")])
     )
 
+    sys.path.insert(0, invocation_dir)
     sys.path.insert(0, project_dir)
     os.chdir(project_dir)
     sys.argv = [
@@ -330,7 +345,7 @@ def dev(
         "--server.runOnSave",
         str(reload).lower(),
         "--server.fileWatcherType",
-        "poll",
+        "poll" if reload else "none",
         "--browser.gatherUsageStats",
         "false",
         "--client.showSidebarNavigation",
@@ -536,6 +551,13 @@ app.command("dev", rich_help_panel="Development")(dev)
 app.command("serve", rich_help_panel="Development")(serve)
 app.command("run", rich_help_panel="Development")(run_command)
 app.add_typer(spec_app, name="test", rich_help_panel="Development")
+app.add_typer(
+    perf_app,
+    name="perf",
+    help="Crash-test resumable streaming across servers (server + client).",
+    no_args_is_help=True,
+    rich_help_panel="Development",
+)
 app.add_typer(
     deploy_app,
     name="deploy",

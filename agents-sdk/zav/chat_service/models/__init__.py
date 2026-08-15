@@ -11,6 +11,7 @@
 from zav.chat_service.model.agent_bundle_form import AgentBundleForm
 from zav.chat_service.model.agent_bundle_item import AgentBundleItem
 from zav.chat_service.model.agent_bundle_patch import AgentBundlePatch
+from zav.chat_service.model.error_response import ErrorResponse
 from zav.chat_service.model.http_validation_error import HTTPValidationError
 from zav.chat_service.model.page_params import PageParams
 from zav.chat_service.model.paginated_response_agent_bundle_item import PaginatedResponseAgentBundleItem

@@ -80,6 +80,14 @@ class TagTools(ToolsSource):
                 executable=self.untag_document,
             ),
             Tool.from_callable(
+                name="tag_note",
+                executable=self.tag_note,
+            ),
+            Tool.from_callable(
+                name="untag_note",
+                executable=self.untag_note,
+            ),
+            Tool.from_callable(
                 name="create_tag",
                 executable=self.create_tag,
             ),
@@ -333,6 +341,98 @@ class TagTools(ToolsSource):
         except Exception as e:
             logger.exception(f"Error removing document from tag: {e}")
             raise Exception(f"Could not remove document from tag: {e}") from e
+
+    @streamable(
+        running_text="Adding note to tag...",
+        completed_text="Note added to {{ tag_name }}.",
+        params_transform=hide,
+        response_transform=hide,
+    )
+    async def tag_note(
+        self,
+        tag_id: int,
+        note_id: int,
+    ) -> Dict[str, Any]:
+        """Add a note to a tag.
+
+        Args:
+            tag_id: The ID of the tag to add the note to.
+            note_id: The note ID to add (the note's numeric id, as returned by
+                create_note or list_my_notes).
+
+        Returns:
+            Dict confirming the note was added.
+        """
+        try:
+            tag = await self.__tags_service.get_tag_by_id(tag_id)
+            if not tag:
+                raise ValueError(f"Tag with ID {tag_id} not found")
+            tag_type = tag.get("tag_type", "own").lower()
+            tag_name = tag.get("name", str(tag_id))
+
+            result = await self.__tags_service.tag_note(
+                tag_id=tag_id,
+                tag_type=tag_type,
+                note_id=note_id,
+            )
+            return {
+                "status": "added",
+                "tag_id": tag_id,
+                "tag_name": tag_name,
+                "note_id": note_id,
+                **result,
+            }
+        except Exception as e:
+            if isinstance(e, UnknownException) and "already tagged" in str(e).lower():
+                return {
+                    "status": "already_tagged",
+                    "tag_id": tag_id,
+                    "tag_name": tag_name,
+                    "note_id": note_id,
+                }
+            logger.exception(f"Error adding note to tag: {e}")
+            raise Exception(f"Could not add note to tag: {e}") from e
+
+    @streamable(
+        running_text="Removing note from tag...",
+        completed_text="Note removed from {{ tag_name }}.",
+        params_transform=hide,
+        response_transform=hide,
+    )
+    async def untag_note(
+        self,
+        tag_id: int,
+        note_id: int,
+    ) -> Dict[str, Any]:
+        """Remove a note from a tag.
+
+        Args:
+            tag_id: The ID of the tag to remove the note from.
+            note_id: The note ID to remove.
+
+        Returns:
+            Dict confirming the note was removed.
+        """
+        try:
+            tag = await self.__tags_service.get_tag_by_id(tag_id)
+            if not tag:
+                raise ValueError(f"Tag with ID {tag_id} not found")
+            tag_type = tag.get("tag_type", "own").lower()
+            tag_name = tag.get("name", str(tag_id))
+            await self.__tags_service.untag_note(
+                tag_id=tag_id,
+                tag_type=tag_type,
+                note_id=note_id,
+            )
+            return {
+                "status": "removed",
+                "tag_id": tag_id,
+                "tag_name": tag_name,
+                "note_id": note_id,
+            }
+        except Exception as e:
+            logger.exception(f"Error removing note from tag: {e}")
+            raise Exception(f"Could not remove note from tag: {e}") from e
 
     @streamable(
         running_text="Creating tag {{ name }}...",

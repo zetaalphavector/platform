@@ -31,6 +31,7 @@ class ToolStreamingConfig(BaseModel):
     completed_text: Optional[str] = None
     params_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None
     response_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None
+    llm_response_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None
 
     if PYDANTIC_V2:
         model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -45,6 +46,7 @@ def streamable(
     completed_text: Optional[str] = None,
     params_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None,
     response_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None,
+    llm_response_transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]] = None,
 ):
     def decorator(func: Callable) -> Callable:
         setattr(
@@ -55,6 +57,7 @@ def streamable(
                 completed_text=completed_text,
                 params_transform=params_transform,
                 response_transform=response_transform,
+                llm_response_transform=llm_response_transform,
             ),
         )
         return func

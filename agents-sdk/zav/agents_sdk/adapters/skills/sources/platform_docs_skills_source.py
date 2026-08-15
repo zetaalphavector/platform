@@ -254,57 +254,6 @@ If a SQL database is connected, the agent can:
 """,
     ),
     InMemorySkillDefinition(
-        name="platform-chemistry",
-        description=(
-            "How to use the chemistry and molecular tools — SMILES "
-            "validation, molecular descriptors, PubChem search, "
-            "drug-likeness, toxicity, and safety data."
-        ),
-        body="""\
-# Chemistry and Molecular Tools
-
-The platform includes specialized tools for chemistry, \
-pharmaceutical, and life sciences workflows.
-
-## Molecular computation (RDKit-based)
-- `validate_and_convert` — validate and convert between SMILES \
-and InChI representations.
-- `compute_molecular_descriptors` — molecular weight, LogP, TPSA, \
-hydrogen bond donors/acceptors, rotatable bonds, and more.
-- `compute_fingerprint` — generate molecular fingerprints for \
-comparison.
-- `compute_similarity` — compute Tanimoto or other similarity \
-measures between two molecules.
-- `check_drug_likeness` — evaluate Lipinski's Rule of Five and \
-QED (Quantitative Estimate of Drug-likeness).
-- `identify_functional_groups` — detect functional groups in a \
-molecule.
-- `get_scaffold` — extract the Murcko scaffold.
-- `enumerate_stereoisomers` — enumerate possible stereoisomers.
-
-## PubChem database tools
-- `search_compounds` — search PubChem by name, formula, or SMILES.
-- `suggest_compounds` — autocomplete compound names.
-- `get_compound_summary` / `get_compound_info` — retrieve detailed \
-properties and descriptions.
-- `get_compound_image` — get 2D structure images.
-- `get_compound_synonyms` — find alternative names.
-- `search_similar_compounds` — similarity search in PubChem.
-- `search_substructure` — substructure search.
-- `get_bioassays` — retrieve bioassay data for a compound.
-- `get_safety_data` — GHS hazard and safety information.
-- `get_toxicity_info` — toxicity profiles.
-- `assess_environmental_fate` — environmental impact data.
-- `get_regulatory_info` — regulatory status and compliance.
-
-## Typical workflows
-- Paste a SMILES string and ask for a drug-likeness assessment.
-- Compare candidate compounds by computing descriptors for a series.
-- Search PubChem for safety data before ordering a new reagent.
-- Evaluate SAR by computing fingerprints across a compound library.
-""",
-    ),
-    InMemorySkillDefinition(
         name="platform-skills-and-memory",
         description=(
             "How the agent learns from you — persistent memory, "

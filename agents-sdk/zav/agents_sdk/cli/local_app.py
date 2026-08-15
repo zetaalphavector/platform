@@ -10,6 +10,7 @@ from zav.agents_sdk.adapters.local_agent_registries_factory import (
 from zav.agents_sdk.cli.load_chat_agent_factory import (
     from_string as import_chat_agent_class_registry_from_string,
 )
+from zav.agents_sdk.cli.local_mcp_oauth import setup_local_mcp_oauth
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
 
 zav_project_dir = os.environ["ZAV_PROJECT_DIR"]
@@ -23,6 +24,7 @@ import_chat_agent_class_registry_from_string(zav_project_dir)
 agent_setup_retriever = AgentSetupRetrieverFromFile(
     file_path=zav_agent_setup_src, secret_file_path=zav_secret_agent_setup_src
 )
+mcp_oauth_store, mcp_oauth_token_client = setup_local_mcp_oauth(AgentDependencyRegistry)
 
 app = setup_app(
     agent_registries_factory=LocalAgentRegistriesFactory(
@@ -31,4 +33,6 @@ app = setup_app(
         agent_dependency_registry=AgentDependencyRegistry,
     ),
     debug_backend=logger.info,
+    mcp_oauth_store=mcp_oauth_store,
+    mcp_oauth_token_client=mcp_oauth_token_client,
 )

@@ -1,6 +1,5 @@
-import asyncio
-import enum
 import json
+import warnings
 from typing import (
     Any,
     AsyncIterator,
@@ -8,7 +7,6 @@ from typing import (
     Dict,
     List,
     Optional,
-    Tuple,
     Union,
     overload,
 )
@@ -16,523 +14,52 @@ from typing import (
 from typing_extensions import Literal
 from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span
-from zav.prompt_completion import (
-    BotConversation,
-    ChatClientFactory,
-    ChatClientRequest,
-    ChatCompletionClient,
-)
-from zav.prompt_completion import ChatMessage as PcChatMessage
-from zav.prompt_completion import (
-    ChatMessageSender,
-)
-from zav.prompt_completion import FunctionCallRequest as PcFunctionCallRequest
-from zav.prompt_completion import FunctionCallResponse as PcFunctionCallResponse
-from zav.prompt_completion import ToolCallRequest as PcToolCallRequest
-from zav.prompt_completion import ToolCallResponse as PcToolCallResponse
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
+from zav.prompt_completion import ChatClientFactory, ChatCompletionClient
 
+from zav.agents_sdk.adapters.llm_models.chat_completion_types import (
+    ChatCompletion,
+    ChatCompletionSender,
+    ChatResponse,
+    FunctionCallResponse,
+    ToolCallRequest,
+    ToolCallResponse,
+    parse_chat_message,
+)
+from zav.agents_sdk.adapters.llm_models.chat_request_builder import ChatRequestBuilder
+from zav.agents_sdk.adapters.llm_models.chat_turn_request import (
+    STREAM_TOOL_EVENTS_DEPRECATION_MESSAGE,
+    ChatTurnRequest,
+)
+from zav.agents_sdk.adapters.llm_models.chat_turn_runner import (
+    MAX_NESTING_FALLBACK_BOT_MESSAGE,
+    MAX_NESTING_FINAL_TURN_INSTRUCTION,
+    ChatTurnRunner,
+)
 from zav.agents_sdk.adapters.llm_models.context_window_manager import (
     ContextWindowManager,
 )
-from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.chat_message import (
-    ChatMessage,
+from zav.agents_sdk.domain.agent_dependency import (
+    AgentDependencyFactory,
+    ResumableAgentDependency,
 )
-from zav.agents_sdk.domain.chat_message import (
-    ChatMessageSender as AgentChatMessageSender,
-)
-from zav.agents_sdk.domain.chat_message import (
-    ContentPart,
-    ContentPartTool,
-    FunctionCallRequest,
-)
-from zav.agents_sdk.domain.tools import (
-    ToolsRegistry,
-    apply_transform,
-    format_display_text,
-)
+from zav.agents_sdk.domain.chat_message import ChatMessage
+from zav.agents_sdk.domain.tools import ToolsRegistry
 
-
-class ToolCallRequest(BaseModel):
-    id: str
-    function_call_request: FunctionCallRequest
-
-
-class FunctionCallResponse(BaseModel):
-    name: str
-    response: Optional[str] = None
-
-
-class ToolCallResponse(BaseModel):
-    id: str
-    response: Optional[str] = None
-
-
-class ChatCompletionSender(str, enum.Enum):
-    USER = "user"
-    BOT = "bot"
-    FUNCTION = "function"
-    TOOL = "tool"
-    DEVELOPER = "developer"
-    SYSTEM = "system"
-
-
-class ChatCompletion(BaseModel):
-    sender: ChatCompletionSender
-    content: str
-    image_uri: Optional[str] = None
-    function_call_request: Optional[FunctionCallRequest] = None
-    function_call_response: Optional[FunctionCallResponse] = None
-    tool_call_requests: Optional[List[ToolCallRequest]] = None
-    tool_call_responses: Optional[List[ToolCallResponse]] = None
-
-    @classmethod
-    def from_chat_message(cls, chat_message: ChatMessage):
-        # TODO: Bot messages currently store tool-call metadata in content_parts
-        # but never include a text content_part for the final answer (text lives
-        # only in message.content). The `or chat_message.content` fallback below
-        # works around this. A proper fix would have to_chat_message() (and
-        # potentially intermediate LLM completions) emit text content_parts so
-        # the join is self-sufficient.
-        content = (
-            "".join([part.text for part in chat_message.content_parts if part.text])
-            if chat_message.content_parts
-            else chat_message.content
-        ) or chat_message.content
-        return cls(
-            sender=ChatCompletionSender(chat_message.sender),
-            content=content,
-            image_uri=chat_message.image_uri,
-            function_call_request=chat_message.function_call_request,
-            function_call_response=(
-                FunctionCallResponse(
-                    name=chat_message.function_call_response.name,
-                    response=chat_message.function_call_response.result,
-                )
-                if chat_message.function_call_response
-                else None
-            ),
-        )
-
-    if PYDANTIC_V2:
-        model_config = ConfigDict(from_attributes=True)
-    else:
-
-        class Config:
-            orm_mode = True
-
-
-class ChatResponse(BaseModel):
-    error: Optional[Exception] = None
-    chat_completion: Optional[ChatCompletion] = None
-    tool_events: List[ContentPartTool] = []
-
-    if PYDANTIC_V2:
-        model_config = ConfigDict(arbitrary_types_allowed=True)
-    else:
-
-        class Config:
-            arbitrary_types_allowed = True
-
-    def to_chat_message(self) -> Optional[ChatMessage]:
-        tool_content_parts = [
-            ContentPart(type="tool", tool=event) for event in self.tool_events
-        ]
-
-        if self.chat_completion is None:
-            if not tool_content_parts:
-                return None
-            return ChatMessage(
-                sender=AgentChatMessageSender.BOT,
-                content="",
-                content_parts=tool_content_parts,
-            )
-
-        if self.chat_completion.sender == ChatCompletionSender.TOOL:
-            if not tool_content_parts:
-                return None
-            return ChatMessage(
-                sender=AgentChatMessageSender.BOT,
-                content=self.chat_completion.content,
-                content_parts=tool_content_parts,
-            )
-
-        message = ChatMessage.model_validate(self.chat_completion)
-        if tool_content_parts:
-            message.content_parts = tool_content_parts
-        return message
-
-
-def parse_chat_message(message: Union[ChatMessage, ChatCompletion]) -> PcChatMessage:
-    # TODO: same content_parts workaround as ChatCompletion.from_chat_message
-    return PcChatMessage(
-        sender=ChatMessageSender(message.sender),
-        content=(
-            "".join([part.text for part in message.content_parts if part.text])
-            if isinstance(message, ChatMessage) and message.content_parts
-            else message.content
-        )
-        or message.content,
-        image_uri=message.image_uri,
-        function_call_request=(
-            PcFunctionCallRequest(
-                function_name=message.function_call_request.name,
-                function_params=(message.function_call_request.params),
-            )
-            if message.function_call_request
-            else None
-        ),
-        function_call_response=(
-            PcFunctionCallResponse(
-                function_name=message.function_call_response.name,
-                function_response=(message.function_call_response.response),
-            )
-            if isinstance(message, ChatCompletion) and message.function_call_response
-            else None
-        ),
-        tool_call_requests=(
-            [
-                PcToolCallRequest(
-                    id=tcr.id,
-                    function_call_request=PcFunctionCallRequest(
-                        function_name=tcr.function_call_request.name,
-                        function_params=tcr.function_call_request.params,
-                    ),
-                )
-                for tcr in message.tool_call_requests
-            ]
-            if isinstance(message, ChatCompletion) and message.tool_call_requests
-            else None
-        ),
-        tool_call_responses=(
-            [
-                PcToolCallResponse(
-                    id=tool_call_response.id,
-                    tool_response=tool_call_response.response,
-                )
-                for tool_call_response in message.tool_call_responses
-            ]
-            if isinstance(message, ChatCompletion) and message.tool_call_responses
-            else None
-        ),
-    )
-
-
-ShouldReturnToUser = bool
-
-
-def _parse_result_dict(exec_response: Any) -> Optional[dict]:
-    if isinstance(exec_response, dict):
-        return exec_response
-    if isinstance(exec_response, str):
-        try:
-            return json.loads(exec_response)
-        except (json.JSONDecodeError, ValueError):
-            return None
-    return None
-
-
-async def execute_tool_call_request(
-    tools_registry: ToolsRegistry,
-    tool_call_requests: Optional[List[ToolCallRequest]] = None,
-    tool_choice: Optional[str] = None,
-    log_fn: Optional[Callable] = None,
-    span: Optional[Span] = None,
-    concurrent_tool_execution: bool = False,
-) -> Tuple[Optional[ChatCompletion], ShouldReturnToUser]:
-
-    tool_completion = None
-    should_return_to_user = False
-
-    async for event in execute_tool_call_request_streaming(
-        tools_registry=tools_registry,
-        tool_call_requests=tool_call_requests,
-        tool_choice=tool_choice,
-        log_fn=log_fn,
-        span=span,
-        concurrent_tool_execution=concurrent_tool_execution,
-    ):
-        # Ignore ContentPartTool events in non-streaming mode
-        if isinstance(event, tuple):
-            tool_completion, should_return_to_user = event
-            return tool_completion, should_return_to_user
-
-    return tool_completion, should_return_to_user
-
-
-async def execute_tool_call_request_streaming(  # noqa: C901
-    tools_registry: ToolsRegistry,
-    tool_call_requests: Optional[List[ToolCallRequest]] = None,
-    tool_choice: Optional[str] = None,
-    log_fn: Optional[Callable] = None,
-    span: Optional[Span] = None,
-    concurrent_tool_execution: bool = False,
-) -> AsyncIterator[Union[ContentPartTool, Tuple[Optional[ChatCompletion], bool]]]:
-    if tool_choice and tool_choice not in ("auto", "none") and not tool_call_requests:
-        if log_fn:
-            log_fn(
-                {f"Error: tool_choice set to {tool_choice} but no tools were called"}
-            )
-        if tool_choice == "required":
-            available_tools = ", ".join(tools_registry.tools_index.keys())
-            yield (
-                ChatCompletion(
-                    sender=ChatCompletionSender.DEVELOPER,
-                    content="You must use a tool in your response. "
-                    f"The available tools are: {available_tools}",
-                ),
-                False,
-            )
-            return
-
-        yield (
-            ChatCompletion(
-                sender=ChatCompletionSender.DEVELOPER,
-                content=f"You must use the '{tool_choice}' tool to respond. "
-                f"Please call '{tool_choice}'.",
-            ),
-            False,
-        )
-        return
-
-    if not tool_call_requests:
-        yield (None, False)
-        return
-
-    if log_fn:
-        log_fn({"Tool Call Requests": tool_call_requests})
-
-    # Pre-compute metadata for each tool call (streaming config, visible
-    # params, spans) and yield all "running" events before execution starts.
-    tool_metas: List[Dict[str, Any]] = []
-    for tcr in tool_call_requests:
-        tool_call_id = tcr.id
-        func = tcr.function_call_request
-        tool_name = func.name
-        tool_params = func.params
-
-        tool = tools_registry.tools_index.get(tool_name)
-        streaming_config = tool.streaming_config if tool else None
-
-        visible_params = (
-            apply_transform(tool_params, streaming_config.params_transform)
-            if streaming_config
-            else tool_params
-        )
-        param_defaults = tool.get_parameter_defaults() if tool else None
-
-        new_span = (
-            span.new(
-                name=tool_name,
-                attributes={
-                    "metadata": {"tool_call_id": tool_call_id},
-                    "input": tool_params or {},
-                },
-            )
-            if span
-            else None
-        )
-
-        tool_metas.append(
-            {
-                "tcr": tcr,
-                "tool_name": tool_name,
-                "tool_params": tool_params,
-                "streaming_config": streaming_config,
-                "visible_params": visible_params,
-                "param_defaults": param_defaults,
-                "span": new_span,
-            }
-        )
-
-        if streaming_config is not None:
-            yield ContentPartTool(
-                tool_call_id=tool_call_id,
-                name=tool_name,
-                params=visible_params,
-                display_text=format_display_text(
-                    streaming_config.running_text,
-                    tool_params,
-                    defaults=param_defaults,
-                ),
-                status="running",
-            )
-
-    async def _execute_one(meta: Dict[str, Any]) -> Dict[str, Any]:
-        tcr = meta["tcr"]
-        tool_name = meta["tool_name"]
-        tool_params = meta["tool_params"]
-        t_span = meta["span"]
-        try:
-            if (
-                tool_choice
-                and tool_choice not in ("auto", "none", "required")
-                and tool_name != tool_choice
-            ):
-                raise Exception(
-                    f"Error: tool_choice set to {tool_choice} "
-                    f"but {tool_name} was called. "
-                    f"{tool_choice} must be used."
-                )
-
-            exec_response = await tools_registry.execute(
-                name=tool_name, params=tool_params
-            )
-            tool_response = str(exec_response)
-            if t_span:
-                t_span.end(attributes={"output": tool_response})
-            return {
-                "id": tcr.id,
-                "response": tool_response,
-                "exec_response": exec_response,
-                "error": None,
-            }
-        except ValueError as ve:
-            err = str(ve)
-            if t_span:
-                t_span.end(attributes={"output": err})
-            return {
-                "id": tcr.id,
-                "response": err,
-                "exec_response": None,
-                "error": "value_error",
-            }
-        except Exception as e:
-            err = str(e)
-            if log_fn:
-                log_fn({"Error": err})
-            if t_span:
-                t_span.end(attributes={"output": err})
-            return {
-                "id": tcr.id,
-                "response": err,
-                "exec_response": None,
-                "error": "exception",
-            }
-
-    results: Dict[int, Dict[str, Any]] = {}
-
-    if concurrent_tool_execution:
-        # Execute all tool calls concurrently, yielding streaming events as
-        # each one completes. This keeps the websocket alive during
-        # long-running batches like sub-agent delegations.
-        done_queue: asyncio.Queue[Tuple[int, Dict[str, Any]]] = asyncio.Queue()
-
-        async def _execute_and_enqueue(idx: int, meta: Dict[str, Any]) -> None:
-            result = await _execute_one(meta)
-            await done_queue.put((idx, result))
-
-        tasks = [
-            asyncio.create_task(_execute_and_enqueue(i, meta))
-            for i, meta in enumerate(tool_metas)
-        ]
-
-        try:
-            for _ in range(len(tasks)):
-                idx, result = await done_queue.get()
-                results[idx] = result
-                meta = tool_metas[idx]
-                tcr = meta["tcr"]
-                streaming_config = meta["streaming_config"]
-
-                if result["error"]:
-                    if streaming_config is not None:
-                        yield ContentPartTool(
-                            tool_call_id=tcr.id,
-                            name=meta["tool_name"],
-                            params=meta["visible_params"],
-                            display_text=None,
-                            status="error",
-                        )
-                elif streaming_config is not None:
-                    completed_text = streaming_config.completed_text or (
-                        streaming_config.running_text
-                    )
-                    result_dict = _parse_result_dict(result["exec_response"])
-                    visible_response = apply_transform(
-                        result_dict, streaming_config.response_transform
-                    )
-                    yield ContentPartTool(
-                        tool_call_id=tcr.id,
-                        name=meta["tool_name"],
-                        params=meta["visible_params"],
-                        response=visible_response,
-                        display_text=format_display_text(
-                            completed_text,
-                            meta["tool_params"],
-                            result_dict,
-                            defaults=meta["param_defaults"],
-                        ),
-                        status="completed",
-                    )
-        except (asyncio.CancelledError, GeneratorExit):
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            raise
-    else:
-        # Execute tool calls sequentially.
-        for idx, meta in enumerate(tool_metas):
-            result = await _execute_one(meta)
-            results[idx] = result
-            tcr = meta["tcr"]
-            streaming_config = meta["streaming_config"]
-
-            if result["error"]:
-                if streaming_config is not None:
-                    yield ContentPartTool(
-                        tool_call_id=tcr.id,
-                        name=meta["tool_name"],
-                        params=meta["visible_params"],
-                        display_text=None,
-                        status="error",
-                    )
-            elif streaming_config is not None:
-                completed_text = streaming_config.completed_text or (
-                    streaming_config.running_text
-                )
-                result_dict = _parse_result_dict(result["exec_response"])
-                visible_response = apply_transform(
-                    result_dict, streaming_config.response_transform
-                )
-                yield ContentPartTool(
-                    tool_call_id=tcr.id,
-                    name=meta["tool_name"],
-                    params=meta["visible_params"],
-                    response=visible_response,
-                    display_text=format_display_text(
-                        completed_text,
-                        meta["tool_params"],
-                        result_dict,
-                        defaults=meta["param_defaults"],
-                    ),
-                    status="completed",
-                )
-
-    # All tasks done. Check for ChatCompletion short-circuit, collect outputs.
-    tool_outputs: List = []
-    for idx, meta in enumerate(tool_metas):
-        result = results[idx]
-        if isinstance(result.get("exec_response"), ChatCompletion):
-            yield (result["exec_response"], True)
-            return
-        tool_outputs.append({"id": result["id"], "response": result["response"]})
-
-    yield (
-        ChatCompletion(
-            sender=ChatCompletionSender.TOOL,
-            content="",
-            tool_call_responses=[
-                ToolCallResponse(
-                    id=tool_output["id"],
-                    response=tool_output["response"],
-                )
-                for tool_output in tool_outputs
-            ],
-        ),
-        False,
-    )
+__all__ = [
+    "ChatCompletion",
+    "ChatCompletionSender",
+    "ChatResponse",
+    "FunctionCallResponse",
+    "MAX_NESTING_FALLBACK_BOT_MESSAGE",
+    "MAX_NESTING_FINAL_TURN_INSTRUCTION",
+    "ToolCallRequest",
+    "ToolCallResponse",
+    "ResumableZAVChatCompletionClient",
+    "ResumableZAVChatCompletionClientFactory",
+    "ZAVChatCompletionClient",
+    "ZAVChatCompletionClientFactory",
+    "parse_chat_message",
+]
 
 
 class ZAVChatCompletionClient:
@@ -540,11 +67,13 @@ class ZAVChatCompletionClient:
         self,
         chat_completion_client: ChatCompletionClient,
         context_window_manager: ContextWindowManager,
+        max_nesting_level: int,
         span: Optional[Span] = None,
     ) -> None:
         self.__chat_completion_client = chat_completion_client
         self.__span = span
         self.__context_window_manager = context_window_manager
+        self.__max_nesting_level = max_nesting_level
 
     @overload
     async def complete(  # type: ignore
@@ -559,16 +88,19 @@ class ZAVChatCompletionClient:
         stream: Literal[False] = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
+        stream_tool_events: Optional[bool] = None,
+        stream_tool_progress: bool = False,
+        preserve_streamed_content_parts: bool = False,
         log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
+        max_nesting_level: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
         concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
-    ) -> ChatResponse: ...
+    ) -> ChatResponse:
+        pass
 
     @overload
     async def complete(
@@ -583,16 +115,19 @@ class ZAVChatCompletionClient:
         stream: Literal[True] = True,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
+        stream_tool_events: Optional[bool] = None,
+        stream_tool_progress: bool = False,
+        preserve_streamed_content_parts: bool = False,
         log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
+        max_nesting_level: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
         concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
-    ) -> AsyncIterator[ChatResponse]: ...
+    ) -> AsyncIterator[ChatResponse]:
+        pass
 
     @overload
     async def complete(
@@ -607,32 +142,11 @@ class ZAVChatCompletionClient:
         stream: bool = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
+        stream_tool_events: Optional[bool] = None,
+        stream_tool_progress: bool = False,
+        preserve_streamed_content_parts: bool = False,
         log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
-        reasoning_effort: Optional[str] = None,
-        logprobs: Optional[bool] = None,
-        parallel_tool_calls: Optional[bool] = None,
-        concurrent_tool_execution: bool = False,
-        seed: Optional[int] = None,
-        verbosity: Optional[str] = None,
-    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]: ...
-
-    async def complete(
-        self,
-        messages: Optional[List[ChatMessage]] = None,
-        completions: Optional[List[ChatCompletion]] = None,
-        max_tokens: Optional[int] = None,
-        bot_setup_description: Optional[str] = None,
-        functions: Optional[List[Dict]] = None,
-        tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
-        tool_choice: Optional[str] = None,
-        stream: Union[Literal[True, False], bool] = False,
-        execute_tools: bool = True,
-        stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
-        log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 20,
+        max_nesting_level: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
@@ -640,462 +154,228 @@ class ZAVChatCompletionClient:
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
-        if max_nesting_level == 0:
-            error_response = ChatResponse(
-                error=Exception("Max nesting level reached."),
-                chat_completion=None,
-            )
-            if stream:
+        pass
 
-                async def stream_error_response():
-                    yield error_response
-
-                return stream_error_response()
-            else:
-                return error_response
-        if isinstance(tools, ToolsRegistry):
-            tools_dict: Optional[List[Dict]] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.get_parameters_spec(),
-                    },
-                }
-                for tool in tools.tools_index.values()
-            ]
-        else:
-            tools_dict = tools
-
-        pc_messages = (
-            [parse_chat_message(message) for message in messages]
-            if messages is not None
-            else (
-                [parse_chat_message(completion) for completion in completions]
-                if completions is not None
-                else []
-            )
-        )
-
-        if self.__context_window_manager.needs_compaction(
-            pc_messages, bot_setup_description
-        ):
-            pc_messages = await self.__context_window_manager.compact(
-                pc_messages, bot_setup_description
-            )
-
-        retrieval_tools = self.__context_window_manager.get_tools()
-        if retrieval_tools and isinstance(tools, ToolsRegistry):
-            new_tools = [t for t in retrieval_tools if t.name not in tools.tools_index]
-            if new_tools:
-                tools.extend(new_tools)
-                if tools_dict is not None:
-                    tools_dict.extend(
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": tool.name,
-                                "description": tool.description,
-                                "parameters": tool.get_parameters_spec(),
-                            },
-                        }
-                        for tool in new_tools
-                    )
-
-        req = ChatClientRequest(
-            conversation=BotConversation(
-                bot_setup_description=bot_setup_description,
-                messages=pc_messages,
-            ),
-            max_tokens=max_tokens,
-            **({"functions": functions} if functions is not None else {}),
-            **({"tools": tools_dict} if tools_dict is not None else {}),
-            **({"tool_choice": tool_choice} if tool_choice is not None else {}),
-            **({"logprobs": logprobs} if logprobs is not None else {}),
-            **({"seed": seed} if seed is not None else {}),
-            **(
-                {"parallel_tool_calls": parallel_tool_calls}
-                if parallel_tool_calls is not None
-                else {}
-            ),
-            **(
-                {"reasoning_effort": reasoning_effort}
-                if reasoning_effort is not None
-                else {}
-            ),
-            **({"verbosity": verbosity} if verbosity is not None else {}),
-        )
-
-        chat_response = await self.__chat_completion_client.complete(
-            request=req, stream=stream
-        )
-        if isinstance(chat_response, AsyncIterator):
-            tool_events_by_id: Dict[str, ContentPartTool] = {}
-
-            async def stream_response_chunks(chat_response):
-                async for chat_response_chunk in chat_response:
-                    response = self.__convert(chat_response_chunk)
-                    if stream_tool_calls:
-                        yield ChatResponse(
-                            error=response.error,
-                            chat_completion=response.chat_completion,
-                            tool_events=list(tool_events_by_id.values()),
-                        )
-
-                    tool_completion: Optional[ChatCompletion] = None
-                    should_return_to_user = False
-
-                    if (
-                        response.chat_completion
-                        and execute_tools
-                        and isinstance(tools, ToolsRegistry)
-                        and response.chat_completion.tool_call_requests
-                    ):
-                        if stream_tool_events:
-                            async for event in execute_tool_call_request_streaming(
-                                tools_registry=tools,
-                                tool_call_requests=(
-                                    response.chat_completion.tool_call_requests
-                                ),
-                                tool_choice=tool_choice,
-                                log_fn=log_fn,
-                                span=self.__span,
-                                concurrent_tool_execution=concurrent_tool_execution,
-                            ):
-                                if isinstance(event, ContentPartTool):
-                                    tool_events_by_id[event.tool_call_id] = event
-                                    yield ChatResponse(
-                                        tool_events=list(tool_events_by_id.values())
-                                    )
-                                else:
-                                    tool_completion, should_return_to_user = event
-                        else:
-                            tool_completion, should_return_to_user = (
-                                await execute_tool_call_request(
-                                    tools_registry=tools,
-                                    tool_call_requests=(
-                                        response.chat_completion.tool_call_requests
-                                    ),
-                                    tool_choice=tool_choice,
-                                    log_fn=log_fn,
-                                    span=self.__span,
-                                    concurrent_tool_execution=concurrent_tool_execution,
-                                )
-                            )
-
-                    should_yield = stream_tool_calls or should_return_to_user
-                    if tool_completion and should_yield:
-                        # Only yield the TOOL completion to consumers if there
-                        # are tool_events to display (i.e. the tool was
-                        # @streamable). Non-streamable tool completions are
-                        # internal bookkeeping — they get fed back to the LLM
-                        # via __parse_inner_response but have nothing to show
-                        # the user, so yielding them would produce a None from
-                        # to_chat_message().
-                        # Exception: if should_return_to_user is True, the tool
-                        # returned a ChatCompletion meant as the final response
-                        # (e.g. with a function_call_request for the frontend),
-                        # so it must always be yielded.
-                        if tool_events_by_id or should_return_to_user:
-                            yield ChatResponse(
-                                error=None,
-                                chat_completion=tool_completion,
-                                tool_events=list(tool_events_by_id.values()),
-                            )
-
-                    if should_return_to_user:
-                        break
-
-                    inner_response_iterator = await self.__parse_inner_response(
-                        response=response,
-                        messages=messages,
-                        completions=completions,
-                        tool_completion=tool_completion,
-                        max_tokens=max_tokens,
-                        bot_setup_description=bot_setup_description,
-                        tools=tools,
-                        tool_choice=tool_choice,
-                        stream=True,
-                        execute_tools=execute_tools,
-                        stream_tool_calls=stream_tool_calls,
-                        stream_tool_events=stream_tool_events,
-                        log_fn=log_fn,
-                        max_nesting_level=max_nesting_level,
-                        reasoning_effort=reasoning_effort,
-                        logprobs=logprobs,
-                        parallel_tool_calls=parallel_tool_calls,
-                        concurrent_tool_execution=concurrent_tool_execution,
-                        seed=seed,
-                        verbosity=verbosity,
-                    )
-                    if inner_response_iterator:
-                        async for inner_response in inner_response_iterator:
-                            # Merge tool events from inner responses
-                            if inner_response.tool_events:
-                                for te in inner_response.tool_events:
-                                    tool_events_by_id[te.tool_call_id] = te
-                            yield ChatResponse(
-                                error=inner_response.error,
-                                chat_completion=inner_response.chat_completion,
-                                tool_events=list(tool_events_by_id.values()),
-                            )
-                    else:
-                        yield ChatResponse(
-                            error=response.error,
-                            chat_completion=response.chat_completion,
-                            tool_events=list(tool_events_by_id.values()),
-                        )
-
-            return stream_response_chunks(chat_response)
-        else:
-            response = self.__convert(chat_response)
-            tool_completion, should_return_to_user = (
-                await execute_tool_call_request(
-                    tools_registry=tools,
-                    tool_call_requests=(response.chat_completion.tool_call_requests),
-                    tool_choice=tool_choice,
-                    log_fn=log_fn,
-                    span=self.__span,
-                    concurrent_tool_execution=concurrent_tool_execution,
-                )
-                if (
-                    response.chat_completion
-                    and execute_tools
-                    and isinstance(tools, ToolsRegistry)
-                )
-                else (None, False)
-            )
-            if should_return_to_user:
-                return ChatResponse(
-                    error=None,
-                    chat_completion=tool_completion,
-                )
-            inner_response = await self.__parse_inner_response(
-                response=response,
-                messages=messages,
-                completions=completions,
-                tool_completion=tool_completion,
-                max_tokens=max_tokens,
-                bot_setup_description=bot_setup_description,
-                tools=tools,
-                tool_choice=tool_choice,
-                stream=False,
-                execute_tools=execute_tools,
-                stream_tool_calls=stream_tool_calls,
-                stream_tool_events=stream_tool_events,
-                log_fn=log_fn,
-                max_nesting_level=max_nesting_level,
-                reasoning_effort=reasoning_effort,
-                logprobs=logprobs,
-                parallel_tool_calls=parallel_tool_calls,
-                concurrent_tool_execution=concurrent_tool_execution,
-                seed=seed,
-                verbosity=verbosity,
-            )
-            if inner_response:
-                return inner_response
-            else:
-                return response
-
-    def __convert(self, chat_response) -> ChatResponse:
-        chat_response_message = chat_response.chat_message
-        chat_completion = (
-            ChatCompletion(
-                sender=ChatCompletionSender(chat_response_message.sender),
-                content=chat_response_message.content,
-                image_uri=chat_response_message.image_uri,
-                function_call_request=(
-                    FunctionCallRequest(
-                        name=function_call_request.function_name,
-                        params=(function_call_request.function_params),
-                    )
-                    if (
-                        function_call_request := (
-                            chat_response_message.function_call_request
-                        )
-                    )
-                    else None
-                ),
-                function_call_response=(
-                    FunctionCallResponse(
-                        name=function_call_response.function_name,
-                        response=function_call_response.function_response,
-                    )
-                    if (
-                        function_call_response := (
-                            chat_response_message.function_call_response
-                        )
-                    )
-                    else None
-                ),
-                tool_call_requests=(
-                    [
-                        ToolCallRequest(
-                            id=tcr.id,
-                            function_call_request=FunctionCallRequest(
-                                name=tcr.function_call_request.function_name,
-                                params=tcr.function_call_request.function_params,
-                            ),
-                        )
-                        for tcr in tool_call_requests
-                    ]
-                    if (tool_call_requests := chat_response_message.tool_call_requests)
-                    else None
-                ),
-                tool_call_responses=(
-                    [
-                        ToolCallResponse(
-                            id=tool_call_response.id,
-                            response=tool_call_response.tool_response,
-                        )
-                        for tool_call_response in tool_call_responses
-                    ]
-                    if (
-                        tool_call_responses := chat_response_message.tool_call_responses
-                    )
-                    else None
-                ),
-            )
-            if chat_response_message
-            else None
-        )
-        return ChatResponse(
-            error=chat_response.error,
-            chat_completion=chat_completion,
-        )
-
-    @overload
-    async def __parse_inner_response(  # type: ignore
+    async def complete(
         self,
-        response: ChatResponse,
         messages: Optional[List[ChatMessage]] = None,
         completions: Optional[List[ChatCompletion]] = None,
-        tool_completion: Optional[ChatCompletion] = None,
         max_tokens: Optional[int] = None,
         bot_setup_description: Optional[str] = None,
-        tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
-        tool_choice: Optional[str] = None,
-        stream: Literal[False] = False,
-        execute_tools: bool = True,
-        stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
-        log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
-        reasoning_effort: Optional[str] = None,
-        logprobs: Optional[bool] = None,
-        parallel_tool_calls: Optional[bool] = None,
-        concurrent_tool_execution: bool = False,
-        seed: Optional[int] = None,
-        verbosity: Optional[str] = None,
-    ) -> Optional[ChatResponse]: ...
-
-    @overload
-    async def __parse_inner_response(
-        self,
-        response: ChatResponse,
-        messages: Optional[List[ChatMessage]] = None,
-        completions: Optional[List[ChatCompletion]] = None,
-        tool_completion: Optional[ChatCompletion] = None,
-        max_tokens: Optional[int] = None,
-        bot_setup_description: Optional[str] = None,
-        tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
-        tool_choice: Optional[str] = None,
-        stream: Literal[True] = True,
-        execute_tools: bool = True,
-        stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
-        log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
-        reasoning_effort: Optional[str] = None,
-        logprobs: Optional[bool] = None,
-        parallel_tool_calls: Optional[bool] = None,
-        concurrent_tool_execution: bool = False,
-        seed: Optional[int] = None,
-        verbosity: Optional[str] = None,
-    ) -> Optional[AsyncIterator[ChatResponse]]: ...
-
-    @overload
-    async def __parse_inner_response(
-        self,
-        response: ChatResponse,
-        messages: Optional[List[ChatMessage]] = None,
-        completions: Optional[List[ChatCompletion]] = None,
-        tool_completion: Optional[ChatCompletion] = None,
-        max_tokens: Optional[int] = None,
-        bot_setup_description: Optional[str] = None,
-        tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
-        tool_choice: Optional[str] = None,
-        stream: bool = False,
-        execute_tools: bool = True,
-        stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
-        log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
-        reasoning_effort: Optional[str] = None,
-        logprobs: Optional[bool] = None,
-        parallel_tool_calls: Optional[bool] = None,
-        concurrent_tool_execution: bool = False,
-        seed: Optional[int] = None,
-        verbosity: Optional[str] = None,
-    ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]: ...
-
-    async def __parse_inner_response(
-        self,
-        response: ChatResponse,
-        messages: Optional[List[ChatMessage]] = None,
-        completions: Optional[List[ChatCompletion]] = None,
-        tool_completion: Optional[ChatCompletion] = None,
-        max_tokens: Optional[int] = None,
-        bot_setup_description: Optional[str] = None,
+        functions: Optional[List[Dict]] = None,
         tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
         tool_choice: Optional[str] = None,
         stream: Union[Literal[True, False], bool] = False,
         execute_tools: bool = True,
         stream_tool_calls: bool = False,
-        stream_tool_events: bool = False,
+        stream_tool_events: Optional[bool] = None,
+        stream_tool_progress: bool = False,
+        preserve_streamed_content_parts: bool = False,
         log_fn: Optional[Callable] = None,
-        max_nesting_level: int = 10,
+        max_nesting_level: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
         parallel_tool_calls: Optional[bool] = None,
         concurrent_tool_execution: bool = False,
         seed: Optional[int] = None,
         verbosity: Optional[str] = None,
-    ) -> Optional[Union[AsyncIterator[ChatResponse], ChatResponse]]:
+    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
+        request = self.build_request(
+            messages=messages,
+            completions=completions,
+            max_tokens=max_tokens,
+            bot_setup_description=bot_setup_description,
+            functions=functions,
+            tools=tools,
+            tool_choice=tool_choice,
+            execute_tools=execute_tools,
+            stream_tool_calls=stream_tool_calls,
+            stream_tool_events=stream_tool_events,
+            stream_tool_progress=stream_tool_progress,
+            preserve_streamed_content_parts=preserve_streamed_content_parts,
+            log_fn=log_fn,
+            max_nesting_level=max_nesting_level,
+            reasoning_effort=reasoning_effort,
+            logprobs=logprobs,
+            parallel_tool_calls=parallel_tool_calls,
+            concurrent_tool_execution=concurrent_tool_execution,
+            seed=seed,
+            verbosity=verbosity,
+        )
+        runner = ChatTurnRunner(
+            chat_completion_client=self.__chat_completion_client,
+            request_builder=ChatRequestBuilder(self.__context_window_manager),
+            span=self.__span,
+        )
+        if stream:
+            return runner.run_streaming(request)
+        return await runner.run(request)
 
-        if tool_completion and response.chat_completion:
-            prior_completions = (
-                [ChatCompletion.from_chat_message(message) for message in messages]
-                if messages
-                else completions or []
-            )
-            all_completions = prior_completions + [
-                response.chat_completion,
-                tool_completion,
+    def build_request(
+        self,
+        messages: Optional[List[ChatMessage]] = None,
+        completions: Optional[List[ChatCompletion]] = None,
+        max_tokens: Optional[int] = None,
+        bot_setup_description: Optional[str] = None,
+        functions: Optional[List[Dict]] = None,
+        tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
+        tool_choice: Optional[str] = None,
+        execute_tools: bool = True,
+        stream_tool_calls: bool = False,
+        stream_tool_events: Optional[bool] = None,
+        stream_tool_progress: bool = False,
+        preserve_streamed_content_parts: bool = False,
+        log_fn: Optional[Callable] = None,
+        max_nesting_level: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
+    ) -> ChatTurnRequest:
+        return ChatTurnRequest(
+            messages=messages,
+            completions=completions,
+            max_tokens=max_tokens,
+            bot_setup_description=bot_setup_description,
+            functions=functions,
+            tools=tools,
+            tool_choice=tool_choice,
+            execute_tools=execute_tools,
+            stream_tool_calls=stream_tool_calls,
+            stream_tool_progress=self.__resolve_stream_tool_progress(
+                stream_tool_progress,
+                stream_tool_events,
+            ),
+            preserve_streamed_content_parts=preserve_streamed_content_parts,
+            log_fn=log_fn,
+            max_nesting_level=(
+                self.__max_nesting_level
+                if max_nesting_level is None
+                else max_nesting_level
+            ),
+            reasoning_effort=reasoning_effort,
+            logprobs=logprobs,
+            parallel_tool_calls=parallel_tool_calls,
+            concurrent_tool_execution=concurrent_tool_execution,
+            seed=seed,
+            verbosity=verbosity,
+        )
+
+    def __resolve_stream_tool_progress(
+        self,
+        stream_tool_progress: bool,
+        stream_tool_events: Optional[bool],
+    ) -> bool:
+        if stream_tool_events is None:
+            return stream_tool_progress
+        warnings.warn(
+            STREAM_TOOL_EVENTS_DEPRECATION_MESSAGE,
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return stream_tool_progress or stream_tool_events
+
+
+class ResumableZAVChatCompletionClient(ResumableAgentDependency):
+    state_key = "zav_chat_completion_client"
+    # Its restored state is the model transcript (the runner's chat_completions),
+    # i.e. the conversation itself — so a resumed turn needs only the new message,
+    # and the handler must not re-feed it the full stored transcript.
+    restores_conversation = True
+
+    def __init__(self, client: ZAVChatCompletionClient, runner: ChatTurnRunner) -> None:
+        self.__client = client
+        self.__runner = runner
+        self.__dumped_completion_count: Optional[int] = None
+        self.__dumped_state: Optional[Dict[str, Any]] = None
+
+    async def dump(self) -> Dict[str, Any]:
+        # The transcript is append-only within a turn, so the completion count is a
+        # faithful change signal: an unchanged count means unchanged content. Reuse
+        # the previous serialization instead of re-serializing on every checkpoint.
+        completions = self.__runner.state.chat_completions
+        if self.__dumped_state is not None and self.__dumped_completion_count == len(
+            completions
+        ):
+            return self.__dumped_state
+        self.__dumped_state = {
+            "chat_completions": [
+                json.loads(chat_completion.json()) for chat_completion in completions
             ]
-            inner_response = await self.complete(
-                completions=all_completions,
-                max_tokens=max_tokens,
-                bot_setup_description=bot_setup_description,
-                tools=tools,
-                tool_choice=tool_choice if tool_choice != "required" else "auto",
-                stream=stream,
-                execute_tools=execute_tools,
-                stream_tool_calls=stream_tool_calls,
-                stream_tool_events=stream_tool_events,
-                log_fn=log_fn,
-                max_nesting_level=max_nesting_level - 1,
-                reasoning_effort=reasoning_effort,
-                logprobs=logprobs,
-                parallel_tool_calls=parallel_tool_calls,
-                concurrent_tool_execution=concurrent_tool_execution,
-                seed=seed,
-                verbosity=verbosity,
-            )
-            return inner_response
-        else:
-            return None
+        }
+        self.__dumped_completion_count = len(completions)
+        return self.__dumped_state
+
+    async def load(self, state: Dict[str, Any]) -> None:
+        self.__runner.restore(
+            [
+                ChatCompletion.parse_obj(chat_completion_state)
+                for chat_completion_state in state.get("chat_completions", [])
+            ]
+        )
+        self.__dumped_completion_count = None
+        self.__dumped_state = None
+
+    @property
+    def is_resumed(self) -> bool:
+        # True once a prior transcript has been restored — i.e. this is a
+        # continued/resumed stateful turn rather than the first turn. Lets a
+        # caller seed turn-invariant context (e.g. the global conversation
+        # context) into the transcript only on the first turn instead of
+        # re-appending it on every turn.
+        return len(self.__runner.state.chat_completions) > 0
+
+    async def complete(
+        self,
+        messages: Optional[List[ChatMessage]] = None,
+        completions: Optional[List[ChatCompletion]] = None,
+        max_tokens: Optional[int] = None,
+        bot_setup_description: Optional[str] = None,
+        functions: Optional[List[Dict]] = None,
+        tools: Optional[Union[ToolsRegistry, List[Dict]]] = None,
+        tool_choice: Optional[str] = None,
+        stream: Union[Literal[True, False], bool] = False,
+        execute_tools: bool = True,
+        stream_tool_calls: bool = False,
+        stream_tool_events: Optional[bool] = None,
+        stream_tool_progress: bool = False,
+        preserve_streamed_content_parts: bool = False,
+        log_fn: Optional[Callable] = None,
+        max_nesting_level: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
+        logprobs: Optional[bool] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        concurrent_tool_execution: bool = False,
+        seed: Optional[int] = None,
+        verbosity: Optional[str] = None,
+    ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
+        request = self.__client.build_request(
+            messages=messages,
+            completions=completions,
+            max_tokens=max_tokens,
+            bot_setup_description=bot_setup_description,
+            functions=functions,
+            tools=tools,
+            tool_choice=tool_choice,
+            execute_tools=execute_tools,
+            stream_tool_calls=stream_tool_calls,
+            stream_tool_events=stream_tool_events,
+            stream_tool_progress=stream_tool_progress,
+            preserve_streamed_content_parts=preserve_streamed_content_parts,
+            log_fn=log_fn,
+            max_nesting_level=max_nesting_level,
+            reasoning_effort=reasoning_effort,
+            logprobs=logprobs,
+            parallel_tool_calls=parallel_tool_calls,
+            concurrent_tool_execution=concurrent_tool_execution,
+            seed=seed,
+            verbosity=verbosity,
+        )
+        if stream:
+            return self.__runner.run_streaming(request)
+        return await self.__runner.run(request)
 
 
 class ZAVChatCompletionClientFactory(AgentDependencyFactory):
@@ -1104,11 +384,37 @@ class ZAVChatCompletionClientFactory(AgentDependencyFactory):
         cls,
         config: LLMClientConfiguration,
         context_window_manager: ContextWindowManager,
+        max_nesting_level: int = 20,
         span: Optional[Span] = None,
     ) -> ZAVChatCompletionClient:
         chat_completion_client = ChatClientFactory.create(config, span=span)
         return ZAVChatCompletionClient(
             chat_completion_client,
             context_window_manager=context_window_manager,
+            max_nesting_level=max_nesting_level,
             span=span,
         )
+
+
+class ResumableZAVChatCompletionClientFactory(AgentDependencyFactory):
+    @classmethod
+    def create(
+        cls,
+        config: LLMClientConfiguration,
+        context_window_manager: ContextWindowManager,
+        max_nesting_level: int = 20,
+        span: Optional[Span] = None,
+    ) -> ResumableZAVChatCompletionClient:
+        chat_completion_client = ChatClientFactory.create(config, span=span)
+        client = ZAVChatCompletionClient(
+            chat_completion_client,
+            context_window_manager=context_window_manager,
+            max_nesting_level=max_nesting_level,
+            span=span,
+        )
+        runner = ChatTurnRunner(
+            chat_completion_client=chat_completion_client,
+            request_builder=ChatRequestBuilder(context_window_manager),
+            span=span,
+        )
+        return ResumableZAVChatCompletionClient(client, runner)

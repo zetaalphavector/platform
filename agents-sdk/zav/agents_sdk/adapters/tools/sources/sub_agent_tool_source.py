@@ -3,20 +3,26 @@ from typing import List, Optional
 from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
-from zav.agents_sdk.domain.agent_creator import AgentCreator, run_sub_agent
+from zav.agents_sdk.domain.agent_creator import (
+    AgentCreator,
+    SubAgentToolResult,
+    run_sub_agent,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
 
 _MINIMAL_TASK_TOOL_DESCRIPTION = """\
 Launch an isolated sub-agent to perform a focused, well-scoped unit of work. \
 The sub-agent runs in a fresh context with no access to your conversation \
-history. It executes autonomously and returns a single text result.\
+history. It executes autonomously and returns a single text result as this \
+tool's response.\
 """
 
 _VERBOSE_TASK_TOOL_DESCRIPTION = """\
 Launch an isolated sub-agent to perform a focused, well-scoped unit of work. \
 The sub-agent runs in a fresh context with no access to your conversation \
-history. It executes autonomously and returns a single text result.
+history. It executes autonomously and returns a single text result as this \
+tool's response.
 
 CRITICAL — Task granularity:
 - Each task should be a SMALL, FOCUSED unit of work — not a restatement of \
@@ -38,8 +44,8 @@ conversation.
 Keep it simple — avoid JSON unless necessary.
 4. If code must be quoted, cap it (e.g., "≤10 lines total"). \
 Avoid returning raw diffs or patches unless explicitly requested.
-5. The user CANNOT see the sub-agent's output — you must relay the result \
-yourself.
+5. Use the returned text result to answer the user; it may also be visible in \
+the task tool UI when the chat frontend renders tool details.
 
 Performance:
 - Launch multiple task calls in a single response to run them concurrently.
@@ -63,7 +69,7 @@ _MINIMAL_TASK_SYSTEM_PROMPT = """\
 
 You have access to a `task` tool that launches an isolated sub-agent for focused \
 work. The sub-agent runs in a fresh context — it cannot see your conversation \
-history — and returns a single text result.\
+history — and returns a single text result as this tool's response.\
 """
 
 _VERBOSE_TASK_SYSTEM_PROMPT = """\
@@ -71,7 +77,7 @@ _VERBOSE_TASK_SYSTEM_PROMPT = """\
 
 You have access to a `task` tool that launches an isolated sub-agent for focused \
 work. The sub-agent runs in a fresh context — it cannot see your conversation \
-history — and returns a single text result.
+history — and returns a single text result as this tool's response.
 
 You are the ORCHESTRATOR. Sub-agents are WORKERS. Follow this pattern:
 1. Gather data yourself (list items, fetch metadata, identify what needs processing).
@@ -167,10 +173,14 @@ class SubAgentToolSource(ToolsSource):
         return [self.__build_task_tool()]
 
     def __build_task_tool(self) -> Tool:
-        async def execute(prompt: str, description: str) -> str:
-            return await run_sub_agent(
+        async def execute(prompt: str, description: str) -> SubAgentToolResult:
+            child = await run_sub_agent(
                 agent_creator=self.__agent_creator,
                 prompt=prompt,
+            )
+            return SubAgentToolResult(
+                text=child.content or "Sub-agent completed but produced no output.",
+                content_parts=child.content_parts or [],
             )
 
         if self.__tool_description is not None:

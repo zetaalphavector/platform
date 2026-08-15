@@ -1,4 +1,3 @@
-import base64
 import gc
 import io
 import re
@@ -15,14 +14,11 @@ from zav.logging import logger
 from zav.pydantic_compat import BaseModel, model_validator
 
 from zav.agents_sdk.adapters.async_wrapper import asyncify
-from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
-    ChatCompletion,
-    ChatCompletionSender,
-)
 from zav.agents_sdk.adapters.retrievers.zav_retriever import ZAVRetriever
+from zav.agents_sdk.adapters.tools.sources.plotting import create_plot_image_uri
 from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.tools import Tool, hide, streamable
+from zav.agents_sdk.domain.tools import Tool, exclude_fields, hide, streamable
 
 matplotlib.use("Agg")
 
@@ -81,7 +77,8 @@ tools over searching inside the document.
 then use the other dataframe tools to explore and analyze it.
 - Supported content types: Excel (.xlsx), CSV (.csv).
 - You can chain operations: load → schema → filter → aggregate → plot.
-- For plotting, the tools return images directly in the response.\
+- For plotting, the rendered image is shown to the user in the conversation; \
+you receive a text confirmation, so continue your answer after plotting.\
 """
 
 
@@ -304,31 +301,6 @@ class DataFrameToolsSource(ToolsSource):
         if not self.enabled:
             return ""
         return _SYSTEM_PROMPT_SECTION
-
-    async def __create_plot_image(self, fig) -> Dict[str, Any]:
-        try:
-            buffer = io.BytesIO()
-            await asyncify(fig.savefig)(
-                buffer,
-                format="png",
-                bbox_inches="tight",
-                dpi=100,
-                facecolor="white",
-            )
-            buffer.seek(0)
-            image_bytes = buffer.getvalue()
-            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-            plt.close(fig)
-            buffer.close()
-            gc.collect()
-            return {
-                "image_base64": image_base64,
-                "image_format": "png",
-                "image_size_bytes": len(image_bytes),
-            }
-        except Exception as e:
-            plt.close(fig)
-            raise e
 
     async def __get_document_content_bytes(self, document_id: str) -> Optional[bytes]:
         long_document_id = document_id.split("_")[0]
@@ -1425,7 +1397,7 @@ class DataFrameToolsSource(ToolsSource):
             "Created {{ plot_type }} plot" " from '{{ input_dataframe_name }}'."
         ),
         params_transform=hide,
-        response_transform=hide,
+        llm_response_transform=exclude_fields("image_uri"),
     )
     async def create_basic_plot(  # noqa: C901
         self,
@@ -1436,7 +1408,7 @@ class DataFrameToolsSource(ToolsSource):
         title: Optional[str] = None,
         figure_size: tuple = (10, 6),
         color: Optional[str] = None,
-    ) -> Union[Dict[str, Any], ChatCompletion]:
+    ) -> Dict[str, Any]:
         """Create a basic plot from DataFrame data.
 
         Args:
@@ -1449,7 +1421,7 @@ class DataFrameToolsSource(ToolsSource):
             color: Plot color.
 
         Returns:
-            ChatCompletion with base64 PNG image, or error dict.
+            Dict with the plot description, or an error dict.
         """
         try:
             df = self.__dataframes.get(input_dataframe_name)
@@ -1538,7 +1510,7 @@ class DataFrameToolsSource(ToolsSource):
             if title:
                 ax.set_title(title)
             plt.tight_layout()
-            image_result = await self.__create_plot_image(fig)
+            image_uri = await create_plot_image_uri(fig)
             plot_description = f"Created {plot_type} plot"
             if plot_type == "histogram":
                 plot_description += f" showing distribution of '{x_column}'"
@@ -1546,11 +1518,11 @@ class DataFrameToolsSource(ToolsSource):
                 plot_description += f" with '{x_column}' vs '{y_column}'"
             if title:
                 plot_description += f" (titled: {title})"
-            return ChatCompletion(
-                sender=ChatCompletionSender.BOT,
-                content=plot_description,
-                image_uri=("data:image/png;base64," f"{image_result['image_base64']}"),
-            )
+            return {
+                "status": "ok",
+                "description": plot_description,
+                "image_uri": image_uri,
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -1560,7 +1532,7 @@ class DataFrameToolsSource(ToolsSource):
             "Created {{ plot_type }} plot" " from '{{ input_dataframe_name }}'."
         ),
         params_transform=hide,
-        response_transform=hide,
+        llm_response_transform=exclude_fields("image_uri"),
     )
     async def create_multi_series_plot(  # noqa: C901
         self,
@@ -1572,7 +1544,7 @@ class DataFrameToolsSource(ToolsSource):
         figure_size: tuple = (10, 6),
         colors: Optional[List[str]] = None,
         legend: bool = True,
-    ) -> Union[Dict[str, Any], ChatCompletion]:
+    ) -> Dict[str, Any]:
         """Create a multi-series plot with multiple y-columns.
 
         Args:
@@ -1586,7 +1558,7 @@ class DataFrameToolsSource(ToolsSource):
             legend: Whether to show legend.
 
         Returns:
-            ChatCompletion with base64 PNG image, or error dict.
+            Dict with the plot description, or an error dict.
         """
         try:
             df = self.__dataframes.get(input_dataframe_name)
@@ -1705,7 +1677,7 @@ class DataFrameToolsSource(ToolsSource):
             if legend and len(y_columns) > 1:
                 ax.legend()
             plt.tight_layout()
-            image_result = await self.__create_plot_image(fig)
+            image_uri = await create_plot_image_uri(fig)
             y_cols_str = ", ".join(y_columns)
             plot_description = (
                 f"Created multi-series {plot_type} plot"
@@ -1713,11 +1685,11 @@ class DataFrameToolsSource(ToolsSource):
             )
             if title:
                 plot_description += f" (titled: {title})"
-            return ChatCompletion(
-                sender=ChatCompletionSender.BOT,
-                content=plot_description,
-                image_uri=("data:image/png;base64," f"{image_result['image_base64']}"),
-            )
+            return {
+                "status": "ok",
+                "description": plot_description,
+                "image_uri": image_uri,
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -1728,7 +1700,7 @@ class DataFrameToolsSource(ToolsSource):
             " for '{{ column }}' in '{{ input_dataframe_name }}'."
         ),
         params_transform=hide,
-        response_transform=hide,
+        llm_response_transform=exclude_fields("image_uri"),
     )
     async def create_distribution_plot(
         self,
@@ -1738,7 +1710,7 @@ class DataFrameToolsSource(ToolsSource):
         bins: Optional[int] = 30,
         title: Optional[str] = None,
         figure_size: tuple = (8, 6),
-    ) -> Union[Dict[str, Any], ChatCompletion]:
+    ) -> Dict[str, Any]:
         """Create a distribution plot for a single column.
 
         Args:
@@ -1750,7 +1722,7 @@ class DataFrameToolsSource(ToolsSource):
             figure_size: (width, height). Default (8, 6).
 
         Returns:
-            ChatCompletion with base64 PNG image, or error dict.
+            Dict with the plot description, or an error dict.
         """
         try:
             df = self.__dataframes.get(input_dataframe_name)
@@ -1801,17 +1773,17 @@ class DataFrameToolsSource(ToolsSource):
             else:
                 ax.set_title(f"{plot_type.title()} of {column}")
             plt.tight_layout()
-            image_result = await self.__create_plot_image(fig)
+            image_uri = await create_plot_image_uri(fig)
             plot_description = (
                 f"Created {plot_type} distribution plot" f" for '{column}'"
             )
             if title:
                 plot_description += f" (titled: {title})"
-            return ChatCompletion(
-                sender=ChatCompletionSender.BOT,
-                content=plot_description,
-                image_uri=("data:image/png;base64," f"{image_result['image_base64']}"),
-            )
+            return {
+                "status": "ok",
+                "description": plot_description,
+                "image_uri": image_uri,
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -1819,7 +1791,7 @@ class DataFrameToolsSource(ToolsSource):
         running_text="Creating time series plot from '{{ input_dataframe_name }}'...",
         completed_text="Created time series plot from '{{ input_dataframe_name }}'.",
         params_transform=hide,
-        response_transform=hide,
+        llm_response_transform=exclude_fields("image_uri"),
     )
     async def create_time_series_plot(
         self,
@@ -1829,7 +1801,7 @@ class DataFrameToolsSource(ToolsSource):
         title: Optional[str] = None,
         figure_size: tuple = (12, 6),
         resample_frequency: Optional[str] = None,
-    ) -> Union[Dict[str, Any], ChatCompletion]:
+    ) -> Dict[str, Any]:
         """Create a time series line plot.
 
         Args:
@@ -1841,7 +1813,7 @@ class DataFrameToolsSource(ToolsSource):
             resample_frequency: Resample freq (e.g. "D", "W", "M").
 
         Returns:
-            ChatCompletion with base64 PNG image, or error dict.
+            Dict with the plot description, or an error dict.
         """
         try:
             df = self.__dataframes.get(input_dataframe_name)
@@ -1907,18 +1879,18 @@ class DataFrameToolsSource(ToolsSource):
                 ax.legend()
             fig.autofmt_xdate()
             plt.tight_layout()
-            image_result = await self.__create_plot_image(fig)
+            image_uri = await create_plot_image_uri(fig)
             columns_str = ", ".join(value_columns)
             plot_description = (
                 f"Created time series plot of" f" '{columns_str}' over '{date_column}'"
             )
             if title:
                 plot_description += f" (titled: {title})"
-            return ChatCompletion(
-                sender=ChatCompletionSender.BOT,
-                content=plot_description,
-                image_uri=("data:image/png;base64," f"{image_result['image_base64']}"),
-            )
+            return {
+                "status": "ok",
+                "description": plot_description,
+                "image_uri": image_uri,
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -1926,7 +1898,7 @@ class DataFrameToolsSource(ToolsSource):
         running_text="Creating correlation heatmap for '{{ input_dataframe_name }}'...",
         completed_text="Created correlation heatmap for '{{ input_dataframe_name }}'.",
         params_transform=hide,
-        response_transform=hide,
+        llm_response_transform=exclude_fields("image_uri"),
     )
     async def create_correlation_heatmap(
         self,
@@ -1935,7 +1907,7 @@ class DataFrameToolsSource(ToolsSource):
         color_scheme: str = "coolwarm",
         figure_size: tuple = (10, 8),
         show_values: bool = True,
-    ) -> Union[Dict[str, Any], ChatCompletion]:
+    ) -> Dict[str, Any]:
         """Create a correlation heatmap for numeric columns.
 
         Args:
@@ -1946,7 +1918,7 @@ class DataFrameToolsSource(ToolsSource):
             show_values: Show values in cells.
 
         Returns:
-            ChatCompletion with base64 PNG image, or error dict.
+            Dict with the plot description, or an error dict.
         """
         try:
             df = self.__dataframes.get(input_dataframe_name)
@@ -2000,14 +1972,14 @@ class DataFrameToolsSource(ToolsSource):
             )
             ax.set_title("Correlation Heatmap")
             plt.tight_layout()
-            image_result = await self.__create_plot_image(fig)
+            image_uri = await create_plot_image_uri(fig)
             cols_str = ", ".join(numeric_cols)
             plot_description = "Created correlation heatmap for columns:" f" {cols_str}"
-            return ChatCompletion(
-                sender=ChatCompletionSender.BOT,
-                content=plot_description,
-                image_uri=("data:image/png;base64," f"{image_result['image_base64']}"),
-            )
+            return {
+                "status": "ok",
+                "description": plot_description,
+                "image_uri": image_uri,
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 

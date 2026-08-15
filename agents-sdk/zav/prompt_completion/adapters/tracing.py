@@ -6,9 +6,10 @@ from zav.llm_tracing import Span
 def create_span(
     messages: List[Dict[str, Any]],
     model_name: str,
-    model_temperature: float,
-    max_tokens: int,
+    model_temperature: Optional[float],
+    max_tokens: Optional[int],
     stream: bool,
+    api_endpoint: Optional[str] = None,
     json_output: Optional[bool] = None,
     tools_dict: Optional[Dict[str, Any]] = None,
     functions_dict: Optional[Dict[str, Any]] = None,
@@ -20,6 +21,7 @@ def create_span(
             name="chat-completion",
             attributes={
                 "observation_type": "generation",
+                **({"api_endpoint": api_endpoint} if api_endpoint is not None else {}),
                 "model": model_name,
                 "input": {
                     "messages": messages,
@@ -48,6 +50,7 @@ def end_span(
     role: Optional[str] = None,
     function_call: Optional[Any] = None,
     log_probs: Optional[List[Any]] = None,
+    reasoning_summary: Optional[str] = None,
 ):
     if span:
         span.end(
@@ -66,6 +69,11 @@ def end_span(
                         else {}
                     ),
                     **({"log_probs": log_probs} if log_probs else {}),
+                    **(
+                        {"reasoning_summary": reasoning_summary}
+                        if reasoning_summary
+                        else {}
+                    ),
                 },
                 **usage,
             }

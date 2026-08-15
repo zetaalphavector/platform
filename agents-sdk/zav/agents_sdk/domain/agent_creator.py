@@ -1,9 +1,20 @@
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from zav.pydantic_compat import BaseModel, Field
+
 from zav.agents_sdk.domain.chat_agent import ChatAgent
-from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
+from zav.agents_sdk.domain.chat_message import (
+    ChatMessage,
+    ChatMessageSender,
+    ContentPart,
+)
 from zav.agents_sdk.domain.chat_request import ConversationContext
 from zav.agents_sdk.domain.tools import Tool
+
+
+class SubAgentToolResult(BaseModel):
+    text: str
+    content_parts: List[ContentPart] = Field(default_factory=list)
 
 
 class AgentCreator:
@@ -53,7 +64,7 @@ async def run_sub_agent(
     prompt: str,
     target_identifier: Optional[str] = None,
     bot_params: Optional[Dict[str, Any]] = None,
-) -> str:
+) -> ChatMessage:
     agent = await agent_creator.create(
         agent_identifier=target_identifier,
         bot_params=bot_params,
@@ -65,7 +76,10 @@ async def run_sub_agent(
 
     result = await agent.execute(conversation)
 
-    if result and result.content:
-        return result.content
+    if result is not None:
+        return result
 
-    return "Sub-agent completed but produced no output."
+    return ChatMessage(
+        sender=ChatMessageSender.BOT,
+        content="Sub-agent completed but produced no output.",
+    )

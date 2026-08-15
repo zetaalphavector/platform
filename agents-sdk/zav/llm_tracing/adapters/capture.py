@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from zav.llm_tracing.trace import Span, TracingBackend
+from zav.llm_tracing.trace_cleanup import TraceCleanupService
+from zav.llm_tracing.trace_cleanup_service_factory import TraceCleanupServiceFactory
 from zav.llm_tracing.tracing_backend_factory import TracingBackendFactory
 from zav.llm_tracing.tracing_configuration import CaptureConfiguration
 
@@ -27,3 +29,12 @@ class CaptureTracingBackend(TracingBackend):
 
     def handle_event(self, span: Span):
         self.__store.append_event(span)
+
+
+@TraceCleanupServiceFactory.register("capture")
+class CaptureTraceCleanupService(TraceCleanupService):
+    def __init__(self, vendor_configuration: CaptureConfiguration):
+        self.__store = vendor_configuration.store
+
+    async def delete_session_traces(self, session_id: str) -> None:
+        return

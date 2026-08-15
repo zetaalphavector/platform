@@ -463,7 +463,6 @@ if sel_existing_eval:  # noqa
         store_eval_file_content(eval_file_content)
 
         eval_llm_client_config = llm_config.model_copy(deep=True)
-        eval_llm_client_config.model_configuration.json_output = True
         chat_completion_client = ChatClientFactory.create(eval_llm_client_config)
         eval_llm_provider = ZAVRageloLLMProvider(
             chat_completion_client,

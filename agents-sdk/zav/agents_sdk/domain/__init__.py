@@ -8,5 +8,6 @@ from zav.agents_sdk.domain.chat_message import (
     FunctionSpec,
 )
 from zav.agents_sdk.domain.chat_request import ChatRequest, ConversationContext
+from zav.agents_sdk.domain.mcp_oauth import MCPOAuthCallbackResult
 from zav.agents_sdk.domain.request_headers import RequestHeaders
 from zav.agents_sdk.domain.table import Table

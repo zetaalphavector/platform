@@ -145,6 +145,7 @@ class AnthropicChatClient(ChatCompletionClient):
         self.__model_temperature = model_configuration.temperature
         self.__max_tokens = model_configuration.max_tokens
         self.__span = span
+        self.__prompt_cache = model_configuration.prompt_cache
 
     def __messages_from(
         self,
@@ -341,6 +342,7 @@ class AnthropicChatClient(ChatCompletionClient):
             "temperature": self.__model_temperature,
             "stream": stream,
             **({"system": system_prompt} if system_prompt else {}),  # type: ignore
+            **({"cache_control": {"type": "ephemeral"}} if self.__prompt_cache else {}),
             **tools_dict,
         }
 

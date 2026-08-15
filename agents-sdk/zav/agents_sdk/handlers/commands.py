@@ -11,13 +11,25 @@ def generate_message_id() -> str:
     return str(uuid.uuid4())
 
 
+def generate_session_id() -> str:
+    return str(uuid.uuid4())
+
+
 @dataclass
 class CreateChatResponse(Command):
     tenant: str
     request_headers: RequestHeaders
     chat_request: ChatRequest
     index_id: Optional[str] = None
+    # message_id names this turn; session_id names the conversation. Both are
+    # always assigned: a client-supplied session id keeps the conversation's
+    # traces (and, when stateful, its persisted state) attached to prior
+    # turns, while a freshly minted one names a new conversation the client
+    # can echo on its next request.
     message_id: str = field(default_factory=generate_message_id)
+    session_id: str = field(default_factory=generate_session_id)
+    stateful: bool = False
+    resume: bool = False
 
 
 @dataclass
@@ -26,19 +38,7 @@ class CreateChatStream(CreateChatResponse):
 
 
 @dataclass
-class CreateBufferedChatStream(CreateChatStream):
-    pass
-
-
-@dataclass
-class GetChatStreamBuffer(Command):
-    message_id: str
-    tenant: str
-    requester_uuid: Optional[str] = None
-
-
-@dataclass
-class CancelChatStream(Command):
-    message_id: str
-    tenant: str
-    requester_uuid: Optional[str] = None
+class HandleMCPOAuthCallback(Command):
+    state: str
+    code: Optional[str] = None
+    error: Optional[str] = None

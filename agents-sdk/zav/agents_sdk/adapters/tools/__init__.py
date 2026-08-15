@@ -12,12 +12,30 @@ from zav.agents_sdk.adapters.tools.sources.index_tools_source import (
     IndexToolsSource,
     IndexToolsSourceConfiguration,
     IndexToolsSourceFactory,
+    MetadataFieldConfig,
     extract_hit_metadata,
+)
+from zav.agents_sdk.adapters.tools.sources.note_tools_source import (
+    NoteToolsFactory,
+    NoteToolsSource,
+    NoteToolsSourceConfiguration,
+)
+from zav.agents_sdk.adapters.tools.sources.onboarding_tools_source import (
+    OnboardingStep,
+    OnboardingToolsSource,
+    OnboardingToolsSourceConfiguration,
+    OnboardingToolsSourceFactory,
 )
 from zav.agents_sdk.adapters.tools.sources.platform_docs_tools_source import (
     PlatformDocsToolsSource,
     PlatformDocsToolsSourceConfiguration,
     PlatformDocsToolsSourceFactory,
+)
+from zav.agents_sdk.adapters.tools.sources.plot_tools_source import (
+    PlotSeries,
+    PlotToolsSource,
+    PlotToolsSourceConfiguration,
+    PlotToolsSourceFactory,
 )
 from zav.agents_sdk.adapters.tools.sources.sub_agent_tool_source import (
     SubAgentToolSource,
@@ -56,10 +74,13 @@ AgentDependencyRegistry.register(ToolsProviderFactory)
 AgentDependencyRegistry.register(DataFrameToolsSourceFactory)
 AgentDependencyRegistry.register(DocumentToolsFactory)
 AgentDependencyRegistry.register(IndexToolsSourceFactory)
+AgentDependencyRegistry.register(NoteToolsFactory)
 AgentDependencyRegistry.register(TagToolsFactory)
 AgentDependencyRegistry.register(UserDocumentToolsSourceFactory)
 AgentDependencyRegistry.register(WebToolsSourceFactory)
+AgentDependencyRegistry.register(OnboardingToolsSourceFactory)
 AgentDependencyRegistry.register(PlatformDocsToolsSourceFactory)
+AgentDependencyRegistry.register(PlotToolsSourceFactory)
 AgentDependencyRegistry.register(SubAgentToolSourceFactory)
 
 try:
@@ -103,7 +124,19 @@ __all__ = [
     "IndexToolsSource",
     "IndexToolsSourceConfiguration",
     "IndexToolsSourceFactory",
+    "MetadataFieldConfig",
+    "NoteToolsSource",
+    "NoteToolsSourceConfiguration",
+    "NoteToolsFactory",
     "LLMExtractor",
+    "OnboardingStep",
+    "OnboardingToolsSource",
+    "OnboardingToolsSourceConfiguration",
+    "OnboardingToolsSourceFactory",
+    "PlotSeries",
+    "PlotToolsSource",
+    "PlotToolsSourceConfiguration",
+    "PlotToolsSourceFactory",
     "SubAgentToolSource",
     "SubAgentToolSourceConfiguration",
     "SubAgentToolSourceFactory",
