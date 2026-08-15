@@ -22,6 +22,7 @@ from zav.llm_domain import (
     LLMModelType,
     LLMProviderName,
     OpenAIConfiguration,
+    ToolChoiceNoneHandling,
 )
 from zav.llm_tracing import Span, now
 from zav.logging import logger
@@ -398,6 +399,7 @@ class OpenAiChatClient(ChatCompletionClient):
         self.__parallel_tool_calls = model_configuration.parallel_tool_calls
         self.__reasoning_effort = model_configuration.reasoning_effort
         self.__verbosity = model_configuration.verbosity
+        self.__tool_choice_none_handling = model_configuration.tool_choice_none_handling
         self.__span = span
 
     @overload
@@ -434,11 +436,16 @@ class OpenAiChatClient(ChatCompletionClient):
                 if (functions := request.get("functions")) is not None
                 else {}
             )
+            tool_choice = request.get("tool_choice")
+            exclude_tools = (
+                self.__tool_choice_none_handling == ToolChoiceNoneHandling.OMIT_TOOLS
+                and tool_choice == "none"
+            )
             tools_dict: Dict = (
                 {
                     "tools": [cast(ChatCompletionToolParam, tool) for tool in tools],
                 }
-                if (tools := request.get("tools"))
+                if (tools := request.get("tools")) and not exclude_tools
                 else {}
             )
 
@@ -448,6 +455,7 @@ class OpenAiChatClient(ChatCompletionClient):
                 tools_dict=tools_dict,
                 model_name=self.__model_name,
                 model_temperature=self.__model_temperature,
+                api_endpoint="chat.completions",
                 span=self.__span,
                 max_tokens=request.get("max_tokens") or self.__max_tokens,
                 json_output=self.__json_output,
@@ -460,11 +468,8 @@ class OpenAiChatClient(ChatCompletionClient):
                         type="function",
                         function=ToolChoiceFunction(name=tool_choice),
                     )
-                    if (
-                        (tool_choice := request.get("tool_choice"))
-                        and tool_choice not in ["auto", "none", "required"]
-                    )
-                    else request.get("tool_choice", "auto")
+                    if tool_choice and tool_choice not in ["auto", "none", "required"]
+                    else tool_choice or "auto"
                 )
             kwargs = {
                 "model": self.__model_name,
@@ -486,7 +491,7 @@ class OpenAiChatClient(ChatCompletionClient):
                 parallel_tool_calls := request.get(
                     "parallel_tool_calls", self.__parallel_tool_calls
                 )
-            ) is not None:
+            ) is not None and tools_dict:
                 kwargs["parallel_tool_calls"] = parallel_tool_calls
             if (
                 reasoning_effort := request.get(
@@ -1067,7 +1072,7 @@ class OpenAiChatClient(ChatCompletionClient):
 
 @PromptClientFactory.register(LLMProviderName.OPENAI, LLMModelType.CHAT)
 class OpenAiChatClient2PromptClientAdapter(PromptCompletionClient):
-    def __init__(self, chat_client: OpenAiChatClient):
+    def __init__(self, chat_client: ChatCompletionClient):
         self.__chat_client = chat_client
 
     async def complete(

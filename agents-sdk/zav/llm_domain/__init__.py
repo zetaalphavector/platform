@@ -9,6 +9,7 @@ from zav.llm_domain.llm_client_configuration import (
     LLMProviderName,
     LLMVendorConfiguration,
     OpenAIConfiguration,
+    ToolChoiceNoneHandling,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "LLMProviderName",
     "LLMVendorConfiguration",
     "OpenAIConfiguration",
+    "ToolChoiceNoneHandling",
 ]

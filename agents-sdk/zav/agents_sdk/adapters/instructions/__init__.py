@@ -20,6 +20,11 @@ from zav.agents_sdk.adapters.instructions.sources.datetime_instruction_source im
     DateTimeInstructionSourceConfiguration,
     DateTimeInstructionSourceFactory,
 )
+from zav.agents_sdk.adapters.instructions.sources.disk_instruction_source import (
+    DiskInstructionSource,
+    DiskInstructionSourceConfiguration,
+    DiskInstructionSourceFactory,
+)
 from zav.agents_sdk.adapters.instructions.sources.in_memory_instruction_source import (
     InMemoryInstructionDefinition,
     InMemoryInstructionSource,
@@ -30,11 +35,6 @@ from zav.agents_sdk.adapters.instructions.sources.index_explorer_instruction_sou
     IndexExplorerInstructionSource,
     IndexExplorerInstructionSourceConfiguration,
     IndexExplorerInstructionSourceFactory,
-)
-from zav.agents_sdk.adapters.instructions.sources.onboarding_instruction_source import (
-    OnboardingInstructionSource,
-    OnboardingInstructionSourceConfiguration,
-    OnboardingInstructionSourceFactory,
 )
 from zav.agents_sdk.adapters.instructions.sources.platform_docs_instruction_source import (
     PlatformDocsInstructionSource,
@@ -51,9 +51,9 @@ from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
 AgentDependencyRegistry.register(InstructionsProviderFactory)
 AgentDependencyRegistry.register(CitationInstructionSourceFactory)
 AgentDependencyRegistry.register(DateTimeInstructionSourceFactory)
+AgentDependencyRegistry.register(DiskInstructionSourceFactory)
 AgentDependencyRegistry.register(IndexExplorerInstructionSourceFactory)
 AgentDependencyRegistry.register(InMemoryInstructionSourceFactory)
-AgentDependencyRegistry.register(OnboardingInstructionSourceFactory)
 AgentDependencyRegistry.register(PlatformDocsInstructionSourceFactory)
 AgentDependencyRegistry.register(UserInstructionSourceFactory)
 
@@ -66,6 +66,9 @@ __all__ = [
     "DateTimeInstructionSource",
     "DateTimeInstructionSourceConfiguration",
     "DateTimeInstructionSourceFactory",
+    "DiskInstructionSource",
+    "DiskInstructionSourceConfiguration",
+    "DiskInstructionSourceFactory",
     "IndexExplorerInstructionSource",
     "IndexExplorerInstructionSourceConfiguration",
     "IndexExplorerInstructionSourceFactory",
@@ -78,9 +81,6 @@ __all__ = [
     "InstructionsProvider",
     "InstructionsProviderConfiguration",
     "InstructionsProviderFactory",
-    "OnboardingInstructionSource",
-    "OnboardingInstructionSourceConfiguration",
-    "OnboardingInstructionSourceFactory",
     "PlatformDocsInstructionSource",
     "PlatformDocsInstructionSourceConfiguration",
     "PlatformDocsInstructionSourceFactory",

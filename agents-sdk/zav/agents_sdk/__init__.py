@@ -18,6 +18,19 @@ if TYPE_CHECKING:
         LocalAgentSetupRetriever,
     )
     from zav.agents_sdk.adapters.event_publishers import AbstractEventPublisher
+    from zav.agents_sdk.adapters.mcp import (
+        LocalFileMCPOAuthIntegrationStoreConfiguration,
+        LocalFileMCPOAuthIntegrationStoreFactory,
+        MCPOAuthConnectionState,
+        MCPOAuthIntegrationStore,
+        MCPOAuthIntegrationStoreFactory,
+        MCPOAuthPendingAuthorization,
+        MCPOAuthTokenClient,
+        MCPOAuthTokenExchangeError,
+        PersistentTokenStorage,
+        get_local_file_mcp_oauth_integration_store,
+        get_mcp_oauth_token_client,
+    )
     from zav.agents_sdk.domain.agent_code_bundle import AgentCodeBundle
     from zav.agents_sdk.domain.agent_creator import AgentCreator
     from zav.agents_sdk.domain.agent_dependency import (
@@ -25,6 +38,7 @@ if TYPE_CHECKING:
         AgentDependencyRegistry,
         AgentDependencyRegistryProtocol,
         DependencyGroup,
+        ResumableAgentDependency,
     )
     from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
     from zav.agents_sdk.domain.agent_setup_retriever import (
@@ -41,6 +55,8 @@ if TYPE_CHECKING:
         ChatAgentClassRegistry,
         ChatAgentClassRegistryProtocol,
     )
+    from zav.agents_sdk.domain.chat_agent_state_store import ChatAgentStateStore
+    from zav.agents_sdk.domain.chat_conversation_store import ChatConversationStore
     from zav.agents_sdk.domain.chat_message import (
         ChatMessage,
         ChatMessageEvidence,
@@ -57,6 +73,13 @@ if TYPE_CHECKING:
         FunctionSpec,
         TagContext,
     )
+    from zav.agents_sdk.domain.chat_stream_recording_store import (
+        ChatStreamRecordingStore,
+    )
+    from zav.agents_sdk.domain.chat_stream_supervision_store import (
+        ChatStreamSupervisionStore,
+    )
+    from zav.agents_sdk.domain.mcp_oauth import MCPOAuthCallbackResult
     from zav.agents_sdk.domain.request_headers import RequestHeaders
     from zav.agents_sdk.domain.table import Table
     from zav.agents_sdk.domain.tools import (
@@ -111,10 +134,13 @@ __all__ = [
     "AgentDependencyRegistry",
     "AgentDependencyRegistryProtocol",
     "DependencyGroup",
+    "ResumableAgentDependency",
     "AgentSetup",
     "AgentSetupRetriever",
     "ChatAgent",
     "ChatAgentFactory",
+    "ChatAgentStateStore",
+    "ChatConversationStore",
     "ProcessorAgent",
     "StreamableChatAgent",
     "ChatAgentClassRegistry",
@@ -131,6 +157,18 @@ __all__ = [
     "setup_app",
     "AgentSetupRetrieverFromFile",
     "LocalAgentSetupRetriever",
+    "LocalFileMCPOAuthIntegrationStoreConfiguration",
+    "LocalFileMCPOAuthIntegrationStoreFactory",
+    "get_local_file_mcp_oauth_integration_store",
+    "MCPOAuthTokenClient",
+    "MCPOAuthTokenExchangeError",
+    "get_mcp_oauth_token_client",
+    "MCPOAuthConnectionState",
+    "MCPOAuthIntegrationStore",
+    "MCPOAuthPendingAuthorization",
+    "MCPOAuthCallbackResult",
+    "PersistentTokenStorage",
+    "MCPOAuthIntegrationStoreFactory",
     "RequestHeaders",
     "StreamableChatAgent",
     "Table",
@@ -145,4 +183,6 @@ __all__ = [
     "hide",
     "include_fields",
     "streamable",
+    "ChatStreamRecordingStore",
+    "ChatStreamSupervisionStore",
 ]

@@ -32,6 +32,37 @@ class CommandHandlerRegistry:
                 cls.registry[command] = handler
 
 
+class StreamCommandHandlerRegistry:
+    """Registry for streaming command handlers.
+
+    A streaming handler is an ``async def`` that returns an ``AsyncGenerator``.
+    It is invoked via ``MessageBus.handle_stream`` rather than ``handle``, and
+    its dependency ``AsyncExitStack`` is held open for the lifetime of the
+    generator iteration (see ``inject_dependencies_streaming``).
+    """
+
+    registry: Dict[Type[Command], Callable] = {}
+
+    @classmethod
+    def register(cls, command: Type[Command]) -> Callable:
+        def inner_wrapper(wrapped_function: Callable) -> Callable:
+            cls.registry[command] = wrapped_function
+            return wrapped_function
+
+        return inner_wrapper
+
+    @classmethod
+    def merge(cls, other_registry: Dict[Type[Command], Callable]) -> None:
+        for command, handler in other_registry.items():
+            existing_handler: Optional[Callable] = cls.registry.get(command)
+            if existing_handler is None:
+                cls.registry[command] = handler
+            elif getattr(existing_handler, "__name__", None) != getattr(
+                handler, "__name__", None
+            ):
+                cls.registry[command] = handler
+
+
 class EventHandlerRegistry:
 
     registry: Dict[Type[Event], List[Callable]] = {}

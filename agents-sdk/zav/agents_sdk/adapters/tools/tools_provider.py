@@ -1,3 +1,4 @@
+import inspect
 from typing import Any, Dict, List, Optional, Set
 
 from zav.logging import logger
@@ -49,6 +50,7 @@ class ToolsProvider:
         self.__exclude_tools = exclude_tools
         self.__resolved: Optional[Dict[str, List[Tool]]] = None
         self.__cached_active: Optional[List[ToolsSource]] = None
+        self.__cleaned_up = False
 
     async def get_tools(self) -> List[Tool]:
         if not self.__enabled:
@@ -98,6 +100,27 @@ class ToolsProvider:
                 name: [t.name for t in tools] for name, tools in resolved.items()
             },
         }
+
+    async def cleanup(self) -> None:
+        if self.__cleaned_up:
+            return
+
+        self.__cleaned_up = True
+        for source in self.__sources:
+            aclose = getattr(source, "aclose", None)
+            if not aclose or not callable(aclose):
+                continue
+            try:
+                result = aclose()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:
+                logger.warning(
+                    f"Error cleaning up tools source {source.source_name}: {e}"
+                )
+
+        self.__resolved = None
+        self.__cached_active = None
 
     def __active_sources(self) -> List[ToolsSource]:
         if self.__cached_active is not None:

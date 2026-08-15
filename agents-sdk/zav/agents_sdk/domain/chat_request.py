@@ -10,3 +10,4 @@ class ChatRequest(BaseModel):
     conversation: List[ChatMessage]
     conversation_context: Optional[ConversationContext] = None
     bot_params: Optional[Dict[str, Any]] = None
+    user_agent_id: Optional[str] = None

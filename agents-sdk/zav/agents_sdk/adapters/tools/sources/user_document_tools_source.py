@@ -1,3 +1,4 @@
+import base64
 from typing import Any, Dict, List, Optional
 
 from zav.api.errors import UnknownException
@@ -8,6 +9,8 @@ from zav.agents_sdk.adapters.agent_state.citation import CitationStore
 from zav.agents_sdk.adapters.tools.sources.index_tools_source import IndexToolsSource
 from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
 from zav.agents_sdk.adapters.user_documents.user_documents_service import (
+    UserDocumentCreateRequest,
+    UserDocumentMetadata,
     UserDocumentsService,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
@@ -46,6 +49,18 @@ class UserDocumentToolsSource(ToolsSource):
                 name="list_my_documents",
                 executable=self.list_my_documents,
             ),
+            Tool.from_callable(
+                name="create_my_document",
+                executable=self.create_my_document,
+            ),
+            Tool.from_callable(
+                name="update_my_document",
+                executable=self.update_my_document,
+            ),
+            Tool.from_callable(
+                name="delete_my_document",
+                executable=self.delete_my_document,
+            ),
         ]
 
     @streamable(
@@ -80,7 +95,7 @@ class UserDocumentToolsSource(ToolsSource):
 
     @streamable(
         running_text="Listing page {{ page }} of My Documents...",
-        completed_text="Listed {{ results|length }} document{{ 's' if results|length != 1 else '' }} from page {{ page }} of My Documents.",  # noqa: E501
+        completed_text="Listed {{ documents|length }} document{{ 's' if documents|length != 1 else '' }} from page {{ page }} of My Documents.",  # noqa: E501
         response_transform=hide,
     )
     async def list_my_documents(
@@ -142,6 +157,125 @@ class UserDocumentToolsSource(ToolsSource):
             "page": response.page,
             "page_size": response.page_size,
         }
+
+    @streamable(
+        running_text="Adding '{{ title }}' to My Documents...",
+        completed_text=(
+            "Indexed '{{ title }}' into My Documents (status: {{ status }})."
+        ),
+        params_transform=hide,
+        response_transform=hide,
+    )
+    async def create_my_document(
+        self,
+        title: str,
+        content: str,
+        source: Optional[str] = None,
+        authors: Optional[List[str]] = None,
+        year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Create and index a new private document from text content.
+
+        Use this to save text (a meeting summary, a pasted article, notes)
+        into the user's private "My Documents" so it becomes searchable via
+        the platform's retrieval pipeline. The document is private to the user.
+
+        Args:
+            title: The document title.
+            content: The full text to index (markdown or plain text).
+            source: Optional origin label (e.g. "Granola", "Manual").
+            authors: Optional list of author names.
+            year: Optional year associated with the document.
+
+        Returns:
+            Dict with 'document_id' (uri_hash), 'status', and 'title'.
+        """
+        base64_content = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        try:
+            document = await self.__user_documents_service.create_document(
+                UserDocumentCreateRequest(
+                    document_metadata=UserDocumentMetadata(
+                        title=title,
+                        source=source,
+                        authors=authors,
+                        year=year,
+                    ),
+                    content_file_name=f"{title}.md",
+                    base64_content=base64_content,
+                )
+            )
+        except Exception as e:
+            logger.exception(f"Error creating user document: {e}")
+            raise Exception(f"Could not create your document: {e}") from e
+        return {
+            "document_id": document.uri_hash,
+            "status": document.status.value if document.status else None,
+            "title": document.metadata.title,
+        }
+
+    @streamable(
+        running_text="Updating document metadata...",
+        completed_text="Document updated.",
+        params_transform=hide,
+        response_transform=hide,
+    )
+    async def update_my_document(
+        self,
+        document_id: str,
+        title: Optional[str] = None,
+        source: Optional[str] = None,
+        authors: Optional[List[str]] = None,
+        year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Update a private document's metadata (title, source, authors, year).
+
+        Only the fields you pass are changed. Use list_my_documents to find the
+        document_id (uri_hash).
+
+        Args:
+            document_id: The document ID (uri_hash) to update.
+            title: New title, if changing.
+            source: New source label, if changing.
+            authors: New list of author names, if changing.
+            year: New year, if changing.
+
+        Returns:
+            Dict confirming the update.
+        """
+        try:
+            await self.__user_documents_service.update_document(
+                document_id=document_id,
+                title=title,
+                source=source,
+                authors=authors,
+                year=year,
+            )
+        except Exception as e:
+            logger.exception(f"Error updating user document: {e}")
+            raise Exception(f"Could not update your document: {e}") from e
+        return {"status": "updated", "document_id": document_id}
+
+    @streamable(
+        running_text="Removing document...",
+        completed_text="Document removed from My Documents.",
+        params_transform=hide,
+        response_transform=hide,
+    )
+    async def delete_my_document(self, document_id: str) -> Dict[str, Any]:
+        """Delete a private document from the user's My Documents.
+
+        Args:
+            document_id: The document ID (uri_hash) to delete.
+
+        Returns:
+            Dict confirming the deletion.
+        """
+        try:
+            await self.__user_documents_service.delete_document(document_id)
+        except Exception as e:
+            logger.exception(f"Error deleting user document: {e}")
+            raise Exception(f"Could not delete your document: {e}") from e
+        return {"status": "deleted", "document_id": document_id}
 
     async def ensure_document_indexed(self, document_id: str) -> str:
         hit = self.__citation_store.get_hit_by_document_id(document_id)

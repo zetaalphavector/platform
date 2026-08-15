@@ -4,7 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from zav.common import mimetypes as _  # noqa: F401 — registers model/jt MIME fix
+from zav.api.errors import UnknownException
+from zav.common.mimetypes import register_mime_types
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, ConfigDict, Field
 from zav.user_documents_connector import ApiClient, Configuration
@@ -17,11 +18,16 @@ from zav.user_documents_connector.models import (
 from zav.user_documents_connector.models import (
     UserDocumentMetadata as ZavUserDocumentMetadata,
 )
+from zav.user_documents_connector.models import (
+    UserDocumentPatch,
+)
 
 from zav.agents_sdk.adapters.async_wrapper import asyncify
 from zav.agents_sdk.adapters.error_handling import handle_api_errors
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.request_headers import RequestHeaders
+
+register_mime_types()
 
 
 class UserDocumentAccessRight(str, Enum):
@@ -282,6 +288,94 @@ class UserDocumentsService:
             count=response_dict.get("count", 0),
             page=page,
             page_size=page_size,
+        )
+
+    async def __retrieve_document(self, document_id: str) -> UserDocument:
+        # The user-documents CRUD endpoints key on the document's own id, while
+        # the agent addresses documents by uri_hash everywhere else (search,
+        # read, list, tag). Normalize to the "_0" representation like tagging
+        # does, then resolve the uri_hash to the user document.
+        uri_hash = document_id.split("_")[0] + "_0"
+        user_tenants = self.__user_tenants(self.__tenant)
+        user_roles = self.__user_roles_from_request_headers()
+        requester_uuid = self.__request_headers.requester_uuid or ""
+        params = {
+            **({"index_id": self.__index_id} if self.__index_id else {}),
+        }
+        response = await asyncify(self.__user_documents.filter_user_documents)(
+            tenant=self.__tenant,
+            user_tenants=user_tenants,
+            requester_uuid=requester_uuid,
+            user_roles=user_roles,
+            uri_hash_in=[uri_hash],
+            page=1,
+            page_size=1,
+            **params,
+        )
+        if not response.results:
+            raise UnknownException(f"User document not found: {document_id}")
+        return _parse_user_document_item(response.results[0])
+
+    @handle_api_errors
+    async def update_document(
+        self,
+        document_id: str,
+        title: Optional[str] = None,
+        source: Optional[str] = None,
+        authors: Optional[List[str]] = None,
+        year: Optional[int] = None,
+    ) -> None:
+        # PATCH replaces document_metadata wholesale, so send the full existing
+        # metadata with the changed fields overlaid — the same load-modify-write
+        # the web edit form does — rather than only the changed field.
+        existing = await self.__retrieve_document(document_id)
+        metadata = existing.metadata
+        merged: Dict[str, Any] = {
+            "title": title if title is not None else metadata.title,
+            "source": source if source is not None else metadata.source,
+            "authors": authors if authors is not None else metadata.authors,
+            "year": year if year is not None else metadata.year,
+            "description": metadata.description,
+        }
+        metadata_kwargs = {k: v for k, v in merged.items() if v is not None}
+
+        user_tenants = self.__user_tenants(self.__tenant)
+        user_roles = self.__user_roles_from_request_headers()
+        requester_uuid = self.__request_headers.requester_uuid or ""
+        params = {
+            **({"index_id": self.__index_id} if self.__index_id else {}),
+        }
+        await asyncify(self.__user_documents.update_user_document)(
+            document_id=existing.id,
+            tenant=self.__tenant,
+            user_tenants=user_tenants,
+            requester_uuid=requester_uuid,
+            user_roles=user_roles,
+            user_document_patch=UserDocumentPatch(
+                document_metadata=ZavUserDocumentMetadata(**metadata_kwargs),
+            ),
+            **params,
+        )
+
+    @handle_api_errors
+    async def delete_document(
+        self,
+        document_id: str,
+    ) -> None:
+        existing = await self.__retrieve_document(document_id)
+        user_tenants = self.__user_tenants(self.__tenant)
+        user_roles = self.__user_roles_from_request_headers()
+        requester_uuid = self.__request_headers.requester_uuid or ""
+        params = {
+            **({"index_id": self.__index_id} if self.__index_id else {}),
+        }
+        await asyncify(self.__user_documents.delete_user_document)(
+            document_id=existing.id,
+            tenant=self.__tenant,
+            user_tenants=user_tenants,
+            requester_uuid=requester_uuid,
+            user_roles=user_roles,
+            **params,
         )
 
 

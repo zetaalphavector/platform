@@ -1,18 +1,21 @@
 import inspect
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, get_args
 
+from typing_extensions import TypeAlias
 from zav.common.nested_models import getpathattr
 from zav.logging import logger
-from zav.pydantic_compat import BaseModel, Field
+from zav.pydantic_compat import BaseModel, Field, model_validator
 
 from zav.agents_sdk.adapters.agent_state.citation import (
     CitationConfiguration,
+    CitationContextContribution,
     CitationStore,
 )
 from zav.agents_sdk.adapters.retrievers.zav_retriever import ZAVRetriever
 from zav.agents_sdk.adapters.tools.sources._filter_translator import FilterTranslator
 from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
+from zav.agents_sdk.domain.chat_message import CustomContextItem
 from zav.agents_sdk.domain.tools import Tool, hide, streamable
 
 _CONTENT_TYPE_FIELD = "custom_metadata.document_content_type"
@@ -30,6 +33,8 @@ _DEFAULT_SORT_FIELD_MAPPING = {
     "year": "year",
     "citations": "citations",
 }
+
+MetadataScope: TypeAlias = Literal["search", "listing"]
 
 
 def extract_hit_metadata(
@@ -66,6 +71,13 @@ class FilterHint(BaseModel):
     example_values: List[str] = Field(default_factory=list)
 
 
+class MetadataFieldConfig(BaseModel):
+    field: str
+    scopes: List[MetadataScope] = Field(
+        default_factory=lambda: list(get_args(MetadataScope))
+    )
+
+
 class IndexToolsSourceConfiguration(BaseModel):
     enabled: bool = False
     fe_base_url: str = "https://search.zeta-alpha.com"
@@ -74,8 +86,10 @@ class IndexToolsSourceConfiguration(BaseModel):
     default_retrieval_unit: Literal["document", "chunk"] = "chunk"
     default_retrieval_method: Literal["knn", "keyword", "mixed"] = "mixed"
     default_collapse_key: Optional[str] = None
-    metadata_fields: List[str] = Field(
-        default_factory=lambda: list(_DEFAULT_METADATA_FIELDS)
+    metadata_fields: List[MetadataFieldConfig] = Field(
+        default_factory=lambda: [
+            MetadataFieldConfig(field=f) for f in _DEFAULT_METADATA_FIELDS
+        ]
     )
     description_field: str = _DEFAULT_DESCRIPTION_FIELD
     description: str = ""
@@ -83,6 +97,41 @@ class IndexToolsSourceConfiguration(BaseModel):
     sort_field_mapping: Dict[str, str] = Field(
         default_factory=lambda: dict(_DEFAULT_SORT_FIELD_MAPPING)
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def __normalize_metadata_fields(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        # Migrate legacy detail_only_metadata_fields
+        legacy = values.pop("detail_only_metadata_fields", None)
+        if legacy:
+            existing = values.get("metadata_fields", list(_DEFAULT_METADATA_FIELDS))
+            for field_path in legacy:
+                existing.append({"field": field_path, "scopes": ["search"]})
+            values["metadata_fields"] = existing
+        # Normalize plain strings
+        raw_fields = values.get("metadata_fields")
+        if raw_fields is not None:
+            normalized = []
+            for f in raw_fields:
+                if isinstance(f, str):
+                    normalized.append({"field": f})
+                else:
+                    normalized.append(f)
+            values["metadata_fields"] = normalized
+        return values
+
+    def fields_for_scope(self, scope: MetadataScope) -> List[str]:
+        return [f.field for f in self.metadata_fields if scope in f.scopes]
+
+    @property
+    def listing_metadata_fields(self) -> List[str]:
+        return self.fields_for_scope("listing")
+
+    @property
+    def search_metadata_fields(self) -> List[str]:
+        return self.fields_for_scope("search")
 
 
 class IndexToolsSource(ToolsSource):
@@ -221,7 +270,7 @@ class IndexToolsSource(ToolsSource):
             )
         if not parts:
             return ""
-        return "\n\n".join(parts)
+        return "## Internal knowledge base\n\n" + "\n\n".join(parts)
 
     @streamable(
         running_text="Searching: {{ query }}...",
@@ -359,6 +408,7 @@ class IndexToolsSource(ToolsSource):
 
         return self.__format_hits(
             response.get("hits", []),
+            metadata_fields=self.__config.search_metadata_fields,
             index_type=response.get("index_type"),
             index_id=response.get("index_id"),
         )
@@ -421,7 +471,7 @@ class IndexToolsSource(ToolsSource):
             if organize_doc_id:
                 data = extract_hit_metadata(
                     hit,
-                    self.__config.metadata_fields,
+                    self.__config.listing_metadata_fields,
                     self.__config.description_field,
                 )
                 data["document_id"] = hit.get("id", "")
@@ -436,17 +486,124 @@ class IndexToolsSource(ToolsSource):
         hash_part = doc_id.rsplit("_", 1)[0] if "_" in doc_id else doc_id
         return hash_part[-8:]
 
+    def __register_internal_hit(
+        self,
+        context_hit: Dict[str, Any],
+        search_hit: Dict[str, Any],
+        short_id: Optional[str],
+        index_type: Optional[str],
+        index_id: Optional[str],
+    ) -> Optional[str]:
+        source_url = context_hit.get("source_url") or (
+            f"{self.__config.fe_base_url}{search_hit['document_url']}"
+        )
+        document_id: Optional[str] = search_hit.get("id") or context_hit.get(
+            "document_id"
+        )
+        if document_id:
+            document_id = str(document_id)
+
+        context_contribution = CitationContextContribution(
+            document_ids={document_id} if document_id else set(),
+        )
+        self.__citation_store.register_hit(
+            citation_key=source_url,
+            context_hit={**context_hit, "source_url": source_url},
+            search_hit=search_hit,
+            evidence_url=search_hit.get("document_hit_url") or source_url,
+            context_contribution=context_contribution,
+            short_id=short_id,
+            index_type=index_type,
+            index_id=index_id,
+        )
+        return source_url
+
+    def __register_federated_hit(
+        self,
+        context_hit: Dict[str, Any],
+        search_hit: Dict[str, Any],
+        short_id: Optional[str],
+        index_type: Optional[str],
+        index_id: Optional[str],
+    ) -> Optional[str]:
+        uri = search_hit.get("uri")
+        if not uri:
+            logger.warning(
+                "Skipping federated hit registration: missing 'uri' "
+                "(index_id=%s, hit_id=%s)",
+                index_id,
+                search_hit.get("id"),
+            )
+            return None
+        # Prefer upstream-provided ids, but fall back to the external `uri` so
+        # the hit remains citable when the federated source omits an id.
+        custom_document_id = str(
+            search_hit.get("id") or context_hit.get("document_id") or uri
+        )
+        metadata = context_hit.get("metadata", {})
+        content: Dict[str, Any] = {"url": uri}
+        if isinstance(metadata, dict):
+            if title := metadata.get("title"):
+                content["title"] = title
+            if source := metadata.get("source"):
+                content["source"] = source
+        if index_id:
+            content["search_engine"] = index_id
+        custom_item = CustomContextItem(document_id=custom_document_id, content=content)
+
+        context_contribution = CitationContextContribution(
+            custom_items=[custom_item],
+        )
+
+        self.__citation_store.register_hit(
+            citation_key=uri,
+            context_hit={**context_hit, "source_url": uri},
+            search_hit=search_hit,
+            evidence_url=uri,
+            context_contribution=context_contribution,
+            short_id=short_id,
+            index_type=index_type,
+            index_id=index_id,
+        )
+        return uri
+
+    def __register_search_hit_by_type(
+        self,
+        context_hit: Dict[str, Any],
+        search_hit: Dict[str, Any],
+        short_id: Optional[str],
+        index_type: Optional[str],
+        index_id: Optional[str],
+    ) -> Optional[str]:
+        if index_type == "federated":
+            return self.__register_federated_hit(
+                context_hit=context_hit,
+                search_hit=search_hit,
+                short_id=short_id,
+                index_type=index_type,
+                index_id=index_id,
+            )
+        return self.__register_internal_hit(
+            context_hit=context_hit,
+            search_hit=search_hit,
+            short_id=short_id,
+            index_type=index_type,
+            index_id=index_id,
+        )
+
     def __format_hits(
         self,
         hits: List[Dict[str, Any]],
+        metadata_fields: Optional[List[str]] = None,
         index_type: Optional[str] = None,
         index_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         results = []
+        fields = metadata_fields or self.__config.listing_metadata_fields
         for hit in hits:
             data = extract_hit_metadata(
                 hit,
-                self.__config.metadata_fields,
+                fields,
                 self.__config.description_field,
             )
             data["document_id"] = hit.get("id", "")
@@ -457,14 +614,16 @@ class IndexToolsSource(ToolsSource):
             if short_id:
                 data["short_id"] = short_id
 
-            self.__citation_store.register_hit(
-                source_url=source_url,
+            registered = self.__register_search_hit_by_type(
                 context_hit=data,
                 search_hit=hit,
                 short_id=short_id,
                 index_type=index_type,
                 index_id=index_id,
             )
+            if registered is None:
+                continue
+            data["source_url"] = registered
 
             results.append(data)
         return results
@@ -512,17 +671,19 @@ class IndexToolsSource(ToolsSource):
 
                         if source_url:
                             short_id = self.__compute_short_id(chunk_id)
-                            self.__citation_store.register_hit(
-                                source_url=source_url,
-                                context_hit={
-                                    "document_id": doc_id,
-                                    "page": page_number,
-                                },
+                            context_hit = {
+                                "document_id": doc_id,
+                                "page": page_number,
+                                "source_url": source_url,
+                            }
+                            registered = self.__register_search_hit_by_type(
+                                context_hit=context_hit,
                                 search_hit=hit,
                                 short_id=short_id,
                                 index_type=doc_hits_response.get("index_type"),
                                 index_id=doc_hits_response.get("index_id"),
                             )
+                            source_url = registered
 
                         pages_data[page_number] = {
                             **page_data,
@@ -611,32 +772,27 @@ class IndexToolsSource(ToolsSource):
             raise Exception(f"Could not perform search: {e}") from e
 
         results = []
+        metadata_fields = self.__config.search_metadata_fields
         for hit in response.get("hits", []):
             data = extract_hit_metadata(
                 hit,
-                self.__config.metadata_fields,
+                metadata_fields,
                 self.__config.description_field,
             )
             data["document_id"] = hit.get("id", "")
-            if index_type == "federated":
-                source_url = hit.get("uri", "")
-            else:
-                source_url = f"{self.__config.fe_base_url}{hit['document_url']}"
-            data["source_url"] = source_url
-
             short_id = self.__compute_short_id(hit.get("id", ""))
             if short_id:
                 data["short_id"] = short_id
-
-            self.__citation_store.register_hit(
-                source_url=source_url,
+            registered = self.__register_search_hit_by_type(
                 context_hit=data,
                 search_hit=hit,
                 short_id=short_id,
                 index_type=index_type,
                 index_id=index_id,
             )
-
+            if registered is None:
+                continue
+            data["source_url"] = registered
             results.append(data)
 
         facet_results = response.get("facet_results", [])
@@ -654,7 +810,8 @@ class IndexToolsSource(ToolsSource):
         ),
         completed_text=(
             "Found {{ results|length }}"
-            " document{{ 's' if results|length != 1 else '' }} about {{ query }}."
+            " document{{ 's' if results|length != 1 else '' }}"
+            "{{ ' about ' + query if query else '' }}."
         ),
         params_transform=hide,
         response_transform=hide,
@@ -726,10 +883,11 @@ class IndexToolsSource(ToolsSource):
             raise Exception(f"Could not browse documents: {e}") from e
 
         results = []
+        metadata_fields = self.__config.search_metadata_fields
         for hit in response.get("hits", []):
             data = extract_hit_metadata(
                 hit,
-                self.__config.metadata_fields,
+                metadata_fields,
                 self.__config.description_field,
             )
             data["document_id"] = hit.get("id", "")
@@ -740,14 +898,16 @@ class IndexToolsSource(ToolsSource):
             if short_id:
                 data["short_id"] = short_id
 
-            self.__citation_store.register_hit(
-                source_url=source_url,
+            registered = self.__register_search_hit_by_type(
                 context_hit=data,
                 search_hit=hit,
                 short_id=short_id,
                 index_type=response.get("index_type"),
                 index_id=response.get("index_id"),
             )
+            if registered is None:
+                continue
+            data["source_url"] = registered
 
             results.append(data)
 
@@ -1057,7 +1217,7 @@ class IndexToolsSource(ToolsSource):
         if not hits:
             return {
                 "fields": [],
-                "configured_fields": self.__config.metadata_fields,
+                "configured_fields": self.__config.search_metadata_fields,
             }
 
         all_paths: Dict[str, Dict[str, Any]] = {}
@@ -1073,7 +1233,7 @@ class IndexToolsSource(ToolsSource):
 
         return {
             "fields": sorted(all_paths.values(), key=lambda f: f["field_path"]),
-            "configured_fields": self.__config.metadata_fields,
+            "configured_fields": self.__config.search_metadata_fields,
         }
 
     @streamable(

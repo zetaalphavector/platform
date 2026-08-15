@@ -16,6 +16,7 @@ class LLMModelType(str, Enum):
     CHAT = "chat"
     PROMPT = "prompt"
     PROMPT_WITH_LOGITS = "prompt_with_logits"
+    RESPONSES = "responses"
 
 
 class LLMProviderName(str, Enum):
@@ -25,6 +26,10 @@ class LLMProviderName(str, Enum):
     AZURE_OPENAI = "azure_openai"
     AZURE_ANTHROPIC = "azure_anthropic"
     BEDROCK = "bedrock"
+
+
+class ToolChoiceNoneHandling(str, Enum):
+    OMIT_TOOLS = "omit_tools"
 
 
 class AnthropicConfiguration(BaseModel):
@@ -148,7 +153,7 @@ class LLMVendorConfiguration(BaseModel):
 class LLMModelConfiguration(BaseModel):
     name: str
     type: LLMModelType
-    temperature: float
+    temperature: Optional[float] = None
     json_output: bool = False
     max_tokens: Optional[int] = None
     interleave_system_message: Optional[str] = None
@@ -171,6 +176,35 @@ class LLMModelConfiguration(BaseModel):
     verbosity: Optional[str] = Field(
         None, description="Constrains the verbosity of the model's response."
     )
+    prompt_cache: bool = Field(
+        True,
+        description="Controls whether or not to use Anthropic's prompt caching. "
+        "This is ignored for non-Anthropic models.",
+    )
+    tool_choice_none_handling: Optional[ToolChoiceNoneHandling] = Field(
+        None,
+        description='With "omit_tools", the tools and tool_choice are omitted when '
+        "tool_choice is none, for OpenAI-compatible servers that would otherwise "
+        "leak tool-call markup. Only for openai and azure_openai chat models.",
+    )
+
+    @root_validator()
+    @classmethod
+    def options_match_model_type(cls, values):
+        if PYDANTIC_V2:
+            model_type = values.type
+            temperature = values.temperature
+        else:
+            model_type = values.get("type")
+            temperature = values.get("temperature")
+
+        if (
+            model_type is not None
+            and model_type != LLMModelType.RESPONSES
+            and temperature is None
+        ):
+            raise ValueError("temperature is required for non-responses models.")
+        return values
 
 
 class PromptModelParams(TypedDict):
@@ -204,6 +238,47 @@ class LLMClientConfiguration(BaseModel):
         default_factory=LLMVendorConfiguration
     )
     model_configuration: LLMModelConfiguration
+
+    @root_validator()
+    @classmethod
+    def provider_supports_model_type(cls, values):
+        if PYDANTIC_V2:
+            vendor = values.vendor
+            vendor_configuration = values.vendor_configuration
+            model_configuration = values.model_configuration
+        else:
+            vendor = values.get("vendor")
+            vendor_configuration = values.get("vendor_configuration")
+            model_configuration = values.get("model_configuration")
+
+        if (
+            not model_configuration
+            or model_configuration.type != LLMModelType.RESPONSES
+        ):
+            return values
+
+        supported_vendors = {
+            LLMProviderName.OPENAI,
+            LLMProviderName.AZURE_OPENAI,
+        }
+        if vendor not in supported_vendors:
+            raise ValueError(
+                "responses models are supported only for openai and azure_openai."
+            )
+
+        openai_configuration = (
+            vendor_configuration.openai if vendor_configuration else None
+        )
+        if (
+            vendor == LLMProviderName.OPENAI
+            and openai_configuration
+            and openai_configuration.openai_api_type == "azure"
+        ):
+            raise ValueError(
+                "responses models using Azure must set vendor='azure_openai' "
+                "instead of openai_api_type='azure'."
+            )
+        return values
 
     @classmethod
     def from_env_vars(

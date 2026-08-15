@@ -15,6 +15,11 @@ except ImportError:
     pass
 
 try:
+    from zav.prompt_completion.adapters.openai_responses_client import *
+except ImportError:
+    pass
+
+try:
     from zav.prompt_completion.adapters.azure_openai_client import *
 except ImportError:
     pass

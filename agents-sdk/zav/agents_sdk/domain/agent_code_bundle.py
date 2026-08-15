@@ -97,10 +97,18 @@ class AgentCodeBundle(BaseModel):
         with zipfile.ZipFile(
             filestream, mode="w", compression=zipfile.ZIP_DEFLATED
         ) as zip_ref:
-            for root, _, files in os.walk(project_dir):
-                basename = os.path.basename(root)
-                if basename in {"__pycache__", "env", "memories"}:
-                    continue
+            excluded_dirs = {"__pycache__", "env", "memories", "build"}
+            for root, dirs, files in os.walk(project_dir):
+                # Prune in-place so os.walk does not descend into excluded
+                # trees — a basename-only `continue` still recurses into their
+                # subdirs, which is how local run state (the default
+                # `.agent-state`/`.perf-storage` storage paths and their nested
+                # agent-traces/checkpoints) leaked into uploaded bundles. Also
+                # drop any dot-dir (.git, .venv, .agent-state, …) so on-disk
+                # run state never ships with the agent code.
+                dirs[:] = [
+                    d for d in dirs if d not in excluded_dirs and not d.startswith(".")
+                ]
 
                 for filename in files:
                     if filename.endswith(".pyc"):

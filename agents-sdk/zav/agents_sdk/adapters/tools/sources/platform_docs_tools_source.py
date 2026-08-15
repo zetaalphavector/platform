@@ -230,6 +230,7 @@ class PlatformDocsToolsSourceFactory(AgentDependencyFactory):
             timeout_seconds=cfg.timeout_seconds,
             cache_max_size=cfg.cache_max_size,
             cache_ttl_seconds=cfg.cache_ttl_seconds,
+            untrusted_content_envelope=False,
         )
         return PlatformDocsToolsSource(
             crawler=crawler,

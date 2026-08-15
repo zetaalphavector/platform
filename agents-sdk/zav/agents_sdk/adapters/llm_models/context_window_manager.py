@@ -82,6 +82,12 @@ def _estimate_tokens(message: PcChatMessage) -> int:
             total += count_tokens(json.dumps(fn_params, default=str))
     if message.function_call_response:
         total += count_tokens(message.function_call_response.function_response or "")
+    if message.response_replay_items:
+        total += count_tokens(
+            json.dumps(
+                message.response_replay_items, default=str, separators=(",", ":")
+            )
+        )
     return total
 
 
@@ -128,6 +134,8 @@ def _replace_tool_responses(
         function_call_response=message.function_call_response,
         tool_call_requests=message.tool_call_requests,
         tool_call_responses=new_responses,
+        response_replay_items=message.response_replay_items,
+        reasoning_summary=message.reasoning_summary,
     )
 
 
@@ -163,6 +171,8 @@ def _replace_bot_content(
         function_call_response=message.function_call_response,
         tool_call_requests=message.tool_call_requests,
         tool_call_responses=message.tool_call_responses,
+        response_replay_items=message.response_replay_items,
+        reasoning_summary=message.reasoning_summary,
     )
 
 

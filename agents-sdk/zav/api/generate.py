@@ -71,6 +71,23 @@ def _convert_const_to_enum(mapping: Dict) -> None:
         mapping["enum"] = [mapping.pop("const")]
 
 
+def _normalize_validation_error(mapping: Dict) -> None:
+    # Pydantic v2 adds 'ctx' and 'input' to the FastAPI ValidationError schema.
+    # Strip them so the spec stays stable across Pydantic versions.
+    required = mapping.get("required")
+    if isinstance(required, list) and set(required) == {"loc", "msg", "type"}:
+        properties = mapping.get("properties", {})
+        properties.pop("ctx", None)
+        properties.pop("input", None)
+
+
+def _normalize_bytes_field(mapping: Dict) -> None:
+    if mapping.get("contentMediaType") == "application/octet-stream":
+        mapping.pop("contentMediaType")
+        mapping.pop("contentEncoding", None)
+        mapping["format"] = "binary"
+
+
 def _prune_nullable_required_fields(mapping: Dict) -> None:
     required = mapping.get("required")
     properties = mapping.get("properties")
@@ -96,8 +113,11 @@ def _prune_nullable_required_fields(mapping: Dict) -> None:
 
 def _normalize_mapping(mapping: Dict) -> None:
     _remove_additional_properties(mapping)
+    _normalize_bytes_field(mapping)
+    _normalize_validation_error(mapping)
     _convert_const_to_enum(mapping)
     _collapse_nullable_union(mapping)
+    _normalize_bytes_field(mapping)  # re-run: collapse may expose contentMediaType
     _ensure_enum_description(mapping)
     _prune_nullable_required_fields(mapping)
     for child in list(mapping.values()):

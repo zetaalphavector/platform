@@ -55,13 +55,14 @@ class NotesService:
         self,
         content: str,
         object_type: str = "free",
+        object_id: Optional[str] = None,
     ) -> Dict:
         note_form = NoteForm(
             content=content,
             object_type=NoteObjectType(object_type),
             annotation_highlight=None,
             sharing=SharingPolicy(),
-            object_id=None,
+            object_id=object_id,
         )
         params = {
             **({"index_id": self.__index_id} if self.__index_id else {}),
@@ -127,14 +128,25 @@ class NotesService:
         self,
         note_id: int,
         content: str,
-        object_type: str = "free",
     ) -> None:
+        # replace_note is a full PUT, so preserve the note's existing type and
+        # attachment (a document-note keeps its object_id instead of being
+        # detached). Sharing follows the owner-private default, as on create.
+        # retrieve_note returns object_type already as a NoteObjectType, so pass
+        # it through rather than re-wrapping it.
+        existing = await self.retrieve_note(note_id)
+        existing_object_type = existing.get("object_type")
+        object_type = (
+            existing_object_type
+            if isinstance(existing_object_type, NoteObjectType)
+            else NoteObjectType(existing_object_type or "free")
+        )
         note_form = NoteForm(
             content=content,
-            object_type=NoteObjectType(object_type),
+            object_type=object_type,
             annotation_highlight=None,
             sharing=SharingPolicy(),
-            object_id=None,
+            object_id=existing.get("object_id"),
         )
         params = {
             **({"index_id": self.__index_id} if self.__index_id else {}),
@@ -142,6 +154,21 @@ class NotesService:
         await asyncify(self.__notes.replace_note)(
             id=note_id,
             note_form=note_form,
+            tenant=self.__tenant,
+            **params,
+            **self.__internal_headers,
+        )
+
+    @handle_api_errors
+    async def delete_note(
+        self,
+        note_id: int,
+    ) -> None:
+        params = {
+            **({"index_id": self.__index_id} if self.__index_id else {}),
+        }
+        await asyncify(self.__notes.delete_note)(
+            id=note_id,
             tenant=self.__tenant,
             **params,
             **self.__internal_headers,

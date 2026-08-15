@@ -1,3 +1,4 @@
+import asyncio
 from typing import AsyncGenerator, Optional, Tuple
 
 from zav.agents_sdk.adapters.agent_delegation.agent_delegation_provider import (
@@ -10,7 +11,7 @@ from zav.agents_sdk.adapters.instructions.instructions_provider import (
 )
 from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
     ChatResponse,
-    ZAVChatCompletionClient,
+    ResumableZAVChatCompletionClient,
 )
 from zav.agents_sdk.adapters.mcp.tools_provider import MCPToolsProvider
 from zav.agents_sdk.adapters.memory.memory_provider import MemoryProvider
@@ -92,7 +93,7 @@ class Agent(StreamableChatAgent):
 
     def __init__(
         self,
-        client: ZAVChatCompletionClient,
+        client: ResumableZAVChatCompletionClient,
         skills_provider: SkillsProvider,
         mcp_provider: MCPToolsProvider,
         agent_delegation_provider: AgentDelegationProvider,
@@ -132,38 +133,58 @@ class Agent(StreamableChatAgent):
                     yield msg
                 return
 
-        self.tools_registry.extend(await self.__mcp_provider.get_tools())
-        self.tools_registry.extend(await self.__skills_provider.get_tools())
-        self.tools_registry.extend(await self.__agent_delegation_provider.get_tools())
-        self.tools_registry.extend(await self.__tools_provider.get_tools())
-        self.tools_registry.extend(await self.__memory_provider.get_tools())
-        self.tools_registry.extend(await self.__context_provider.get_tools())
-
-        skills_prompt = await self.__skills_provider.to_prompt()
-        if skills_prompt:
-            self.__system_prompt = f"{self.__system_prompt}\n\n{skills_prompt}"
-
-        delegate_prompt = self.__agent_delegation_provider.to_prompt()
-        if delegate_prompt:
-            self.__system_prompt = f"{self.__system_prompt}\n\n{delegate_prompt}"
-
-        tools_prompt = await self.__tools_provider.to_prompt()
-        if tools_prompt:
-            self.__system_prompt = f"{self.__system_prompt}\n\n{tools_prompt}"
-
-        instructions_prompt = await self.__instructions_provider.to_prompt()
-        if instructions_prompt:
-            self.__system_prompt = f"{self.__system_prompt}\n\n{instructions_prompt}"
-
-        memory_prompt = await self.__memory_provider.to_prompt()
-        if memory_prompt:
-            self.__system_prompt = f"{self.__system_prompt}\n\n{memory_prompt}"
-
-        context_prompt = await self.__context_provider.to_prompt(
-            initial_context=self.__conversation_context,
+        (
+            mcp_tools,
+            skills_tools,
+            delegation_tools,
+            tools_tools,
+            memory_tools,
+            context_tools,
+        ) = await asyncio.gather(
+            self.__mcp_provider.get_tools(),
+            self.__skills_provider.get_tools(),
+            self.__agent_delegation_provider.get_tools(),
+            self.__tools_provider.get_tools(),
+            self.__memory_provider.get_tools(),
+            self.__context_provider.get_tools(),
         )
-        if context_prompt:
-            self.__system_prompt = f"{self.__system_prompt}\n\n{context_prompt}"
+        for provider_tools in (
+            mcp_tools,
+            skills_tools,
+            delegation_tools,
+            tools_tools,
+            memory_tools,
+            context_tools,
+        ):
+            self.tools_registry.extend(provider_tools)
+
+        (
+            skills_prompt,
+            delegate_prompt,
+            tools_prompt,
+            instructions_prompt,
+            memory_prompt,
+            context_prompt,
+        ) = await asyncio.gather(
+            self.__skills_provider.to_prompt(),
+            self.__agent_delegation_provider.to_prompt(),
+            self.__tools_provider.to_prompt(),
+            self.__instructions_provider.to_prompt(),
+            self.__memory_provider.to_prompt(),
+            self.__context_provider.to_prompt(
+                initial_context=self.__conversation_context,
+            ),
+        )
+        for prompt_section in (
+            skills_prompt,
+            delegate_prompt,
+            tools_prompt,
+            instructions_prompt,
+            memory_prompt,
+            context_prompt,
+        ):
+            if prompt_section:
+                self.__system_prompt = f"{self.__system_prompt}\n\n{prompt_section}"
 
         self.debug(
             {
@@ -186,7 +207,14 @@ class Agent(StreamableChatAgent):
         )
 
         completions = await self.__context_provider.process_conversation(
-            initial_context=self.__conversation_context,
+            # Seed the global conversation context into the transcript only on the
+            # first turn. On a resumed stateful turn it is already in the restored
+            # transcript, so re-injecting it would append a duplicate developer
+            # `<context>` message every turn. Per-turn (content_part) and
+            # conversation-derived context are still processed normally.
+            initial_context=(
+                None if self.__client.is_resumed else self.__conversation_context
+            ),
             conversation=conversation,
         )
 
@@ -196,8 +224,9 @@ class Agent(StreamableChatAgent):
             tools=self.tools_registry,
             stream=True,
             execute_tools=True,
-            stream_tool_events=True,
+            stream_tool_progress=True,
             concurrent_tool_execution=True,
+            preserve_streamed_content_parts=True,
             log_fn=self.debug,
         )
 

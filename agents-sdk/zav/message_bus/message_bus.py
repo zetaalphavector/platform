@@ -1,6 +1,6 @@
 import random
 from asyncio import sleep
-from typing import Callable, Dict, List, Type
+from typing import AsyncGenerator, Callable, Dict, List, Optional, Type
 
 from zav.logging import logger
 
@@ -14,11 +14,13 @@ class MessageBus:
         command_handlers: Dict[Type[Command], Callable],
         event_handlers: Dict[Type[Event], List[Callable]],
         exception_handlers: Dict[Type[Exception], Callable],
+        stream_command_handlers: Optional[Dict[Type[Command], Callable]] = None,
     ):
 
         self.__command_handlers = command_handlers
         self.__event_handlers = event_handlers
         self.__exception_handlers = exception_handlers
+        self.__stream_command_handlers = stream_command_handlers or {}
 
     async def handle(self, message: Message, retry_attempts=0):
 
@@ -85,3 +87,55 @@ class MessageBus:
         handler = self.__command_handlers[type(command)]
         result = await handler(command, queue)
         return result
+
+    async def handle_stream(self, message: Command) -> AsyncGenerator[object, None]:
+        if type(message) not in self.__stream_command_handlers:
+            raise KeyError(
+                f"No streaming handler registered for {type(message).__name__}"
+            )
+
+        queue: List[Message] = [message]
+        try:
+            while queue:
+                next_message = queue.pop(0)
+                if isinstance(next_message, Event):
+                    await self.__handle_event(next_message, queue)
+                elif isinstance(next_message, Command):
+                    if type(next_message) in self.__stream_command_handlers:
+                        handler = self.__stream_command_handlers[type(next_message)]
+                        inner = handler(next_message, queue)
+                        try:
+                            async for item in inner:
+                                yield item
+                        finally:
+                            await inner.aclose()
+                    else:
+                        result = await self.__handle_command(next_message, queue)
+                        if result is not None:
+                            yield result
+                else:
+                    raise Exception(f"{next_message} was not an Event or Command")
+        except Exception as e:
+            exc_type = type(e)
+            if exc_type in self.__exception_handlers:
+                handled_exception = self.__exception_handlers[exc_type](e)
+                try:
+                    raise handled_exception
+                except RetryableHandlerError:
+                    logger.exception(
+                        f"Retryable error during streaming dispatch for "
+                        f"{type(message).__name__}; retries are not applied "
+                        f"to streams. Raising NonRetryableHandlerError."
+                    )
+                    raise NonRetryableHandlerError(e)
+                except Exception as non_retryable_exception:
+                    logger.exception(
+                        f"Non retryable error during stream: "
+                        f"{non_retryable_exception}"
+                    )
+                    # Surface the original exception, mirroring ``handle`` — not
+                    # the mapped ``handled_exception`` a bare ``raise`` would
+                    # propagate here.
+                    raise e
+            logger.exception(f"No exception handler for {exc_type}")
+            raise

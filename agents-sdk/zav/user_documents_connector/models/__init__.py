@@ -9,6 +9,7 @@
 # sys.setrecursionlimit(n)
 
 from zav.user_documents_connector.model.document_request_error_code import DocumentRequestErrorCode
+from zav.user_documents_connector.model.error_response import ErrorResponse
 from zav.user_documents_connector.model.http_validation_error import HTTPValidationError
 from zav.user_documents_connector.model.item_access_rights import ItemAccessRights
 from zav.user_documents_connector.model.org_sharing_policy import OrgSharingPolicy

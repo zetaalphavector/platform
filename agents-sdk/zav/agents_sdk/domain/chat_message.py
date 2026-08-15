@@ -1,5 +1,6 @@
 import enum
 from typing import Any, Dict, List, Literal, Optional, Union
+from urllib.parse import parse_qs, urlparse
 
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, root_validator
 
@@ -10,9 +11,30 @@ class ChatMessageSender(str, enum.Enum):
 
 
 class ChatMessageEvidence(BaseModel):
+    # `document_hit_url` is a legacy field name: it holds an evidence URL that
+    # may be either an internal `/documents/...` retrieval URL or an external
+    # URL (e.g. for federated search results). Consumers that need to derive an
+    # internal document id should go through
+    # `extract_internal_document_id_from_evidence_url`.
     document_hit_url: str
     text_extract: Optional[str] = None
     anchor_text: Optional[str] = None
+
+
+def extract_internal_document_id_from_evidence_url(
+    evidence_url: str,
+) -> Optional[str]:
+    parsed_url = urlparse(evidence_url)
+    if parsed_url.scheme or parsed_url.netloc:
+        return None
+    if not parsed_url.path.startswith("/documents/"):
+        return None
+
+    property_values = parse_qs(parsed_url.query).get("property_values")
+    if not property_values or not property_values[0]:
+        return None
+
+    return property_values[0].split("_")[0]
 
 
 class FunctionCallRequest(BaseModel):
@@ -164,12 +186,14 @@ class ChatMessage(BaseModel):
     sender: ChatMessageSender
     content: str
     message_id: Optional[str] = None
+    session_id: Optional[str] = None
     content_parts: Optional[List[ContentPart]] = None
     image_uri: Optional[str] = None
     function_call_request: Optional[FunctionCallRequest] = None
     function_call_response: Optional[FunctionCallResponse] = None
     evidences: Optional[List[ChatMessageEvidence]] = None
     function_specs: Optional[FunctionSpec] = None
+    reasoning_summary: Optional[str] = None
 
     if PYDANTIC_V2:
         model_config = ConfigDict(from_attributes=True)

@@ -19,3 +19,13 @@ class CreatedAgentRequest(EventBase):
     conversation: List[ChatMessage]
     conversation_context: Optional[ConversationContext]
     bot_params: Optional[Dict[str, Any]]
+
+
+@dataclass
+class ConversationUpdated(EventBase):
+    # Fired when a stateful turn completes. Carries ids only (no transcript) so
+    # the Pulsar message stays small; the consumer re-reads the conversation
+    # from the DB, markdownifies it, and upserts the saved-results note. The
+    # requester is carried in request_headers (inherited from EventBase).
+    session_id: str
+    agent_identifier: str

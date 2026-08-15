@@ -11,6 +11,7 @@ from zav.message_bus.errors import (
 from zav.message_bus.handler_registry import (
     CommandHandlerRegistry,
     EventHandlerRegistry,
+    StreamCommandHandlerRegistry,
 )
 from zav.message_bus.handlers_factory import HandlerMixin, HandlersFactory
 from zav.message_bus.message_bus import MessageBus

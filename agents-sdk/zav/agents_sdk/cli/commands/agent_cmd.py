@@ -220,6 +220,11 @@ def prompt_agent_setup(
         agent_configuration["skill_creation_skills_source_configuration"] = {
             "enabled": True,
         }
+    if enable_instructions:
+        agent_configuration["disk_instruction_source_configuration"] = {
+            "enabled": True,
+            "instructions_directories": ["instructions/"],
+        }
 
     public_setup = {
         "agent_identifier": identifier,

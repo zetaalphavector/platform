@@ -30,10 +30,17 @@ def instrument_execute(
     execute: Callable[[List[ChatMessage]], Awaitable[Optional[ChatMessage]]],
 ):
     async def wrapper(conversation: List[ChatMessage]) -> Optional[ChatMessage]:
+        # Capture the turn's continuation identity up front. A StreamableChatAgent's
+        # execute() drains execute_streaming, whose cleanup() runs (clearing these
+        # instance attributes) before control returns here, so reading them now keeps
+        # the reply stamped consistently for plain and streamable agents alike.
+        message_id = self.message_id
+        session_id = self.session_id
         if self.span:
             self.span.update(
                 attributes={"input": conversation[-1].content if conversation else ""}
             )
+        response: Optional[ChatMessage] = None
         try:
             response = await execute(conversation)
         except Exception as e:
@@ -47,32 +54,37 @@ def instrument_execute(
                 )
                 self.span.end()
             raise
-        if response:
-            response.message_id = self.message_id
-        if self.span:
+        else:
             if response:
-                self.span.end(
-                    attributes={
-                        "output": {
-                            "content": response.content,
-                            "evidences": [e.dict() for e in response.evidences or []],
-                            "function_call_request": (
-                                response.function_call_request.dict()
-                                if response.function_call_request
-                                else None
-                            ),
-                            "function_specs": (
-                                response.function_specs.dict()
-                                if response.function_specs
-                                else None
-                            ),
+                response.message_id = message_id
+                response.session_id = session_id
+            if self.span:
+                if response:
+                    self.span.end(
+                        attributes={
+                            "output": {
+                                "content": response.content,
+                                "evidences": [
+                                    e.dict() for e in response.evidences or []
+                                ],
+                                "function_call_request": (
+                                    response.function_call_request.dict()
+                                    if response.function_call_request
+                                    else None
+                                ),
+                                "function_specs": (
+                                    response.function_specs.dict()
+                                    if response.function_specs
+                                    else None
+                                ),
+                            }
                         }
-                    }
-                )
-            else:
-                self.span.end()
-        await self.cleanup()
-        return response
+                    )
+                else:
+                    self.span.end()
+            return response
+        finally:
+            await self.cleanup()
 
     return wrapper
 
@@ -92,6 +104,7 @@ def instrument_execute_streaming(
         try:
             async for message in execute_streaming(conversation):
                 message.message_id = self.message_id
+                message.session_id = self.session_id
                 response = message
                 yield message
         except Exception as e:
@@ -105,29 +118,33 @@ def instrument_execute_streaming(
                 )
                 self.span.end()
             raise
-        if self.span:
-            if response:
-                self.span.end(
-                    attributes={
-                        "output": {
-                            "content": response.content,
-                            "evidences": [e.dict() for e in response.evidences or []],
-                            "function_call_request": (
-                                response.function_call_request.dict()
-                                if response.function_call_request
-                                else None
-                            ),
-                            "function_specs": (
-                                response.function_specs.dict()
-                                if response.function_specs
-                                else None
-                            ),
+        else:
+            if self.span:
+                if response:
+                    self.span.end(
+                        attributes={
+                            "output": {
+                                "content": response.content,
+                                "evidences": [
+                                    e.dict() for e in response.evidences or []
+                                ],
+                                "function_call_request": (
+                                    response.function_call_request.dict()
+                                    if response.function_call_request
+                                    else None
+                                ),
+                                "function_specs": (
+                                    response.function_specs.dict()
+                                    if response.function_specs
+                                    else None
+                                ),
+                            }
                         }
-                    }
-                )
-            else:
-                self.span.end()
-        await self.cleanup()
+                    )
+                else:
+                    self.span.end()
+        finally:
+            await self.cleanup()
 
     return wrapper
 
@@ -137,6 +154,7 @@ class ChatAgent(ABC):
     no_cleanup: ClassVar[bool] = False
     span: Optional[Span] = None
     message_id: Optional[str] = None
+    session_id: Optional[str] = None
     debug_backend: Optional[Callable[[Any], Any]] = None
     publish_event: Optional[Callable[[AgentEvent], Coroutine[None, None, None]]] = None
     __agent_identifier: Optional[str] = None
@@ -251,6 +269,11 @@ class StreamableChatAgent(ChatAgent):
     def __getattribute__(self, name: str) -> Any:
         if name == "execute_streaming":
             return instrument_execute_streaming(self, super().__getattribute__(name))
+        if name == "execute":
+            # execute() only collects the already-instrumented execute_streaming;
+            # return it un-instrumented so the span lifecycle and cleanup() fire
+            # once (via instrument_execute_streaming), not twice.
+            return object.__getattribute__(self, name)
         return super().__getattribute__(name)
 
     async def execute(self, conversation: List[ChatMessage]) -> Optional[ChatMessage]:

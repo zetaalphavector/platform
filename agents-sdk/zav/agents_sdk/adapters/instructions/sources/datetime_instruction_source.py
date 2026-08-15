@@ -30,7 +30,10 @@ class DateTimeInstructionSource(InstructionSource):
         tz = ZoneInfo(self.__timezone)
         now = datetime.now(tz)
         date_time_str = now.strftime("%A, %B %-d, %Y, %H:%M %Z")
-        return f"The current date and time is {date_time_str}."
+        return (
+            "## Current date and time\n\n"
+            f"The current date and time is {date_time_str}."
+        )
 
 
 class DateTimeInstructionSourceFactory(AgentDependencyFactory):

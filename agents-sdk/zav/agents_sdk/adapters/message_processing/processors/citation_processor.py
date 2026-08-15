@@ -1,11 +1,12 @@
 import re
-from typing import AsyncGenerator, List, Set
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.adapters.agent_state.citation import (
     CitationConfiguration,
+    CitationContextContribution,
     CitationStore,
 )
 from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
@@ -21,8 +22,15 @@ from zav.agents_sdk.domain.chat_message import (
     ChatMessageEvidence,
     ContentPart,
     ConversationContext,
+    CustomContext,
+    CustomContextItem,
     DocumentContext,
 )
+
+
+class ResolvedCitation(BaseModel):
+    evidence: ChatMessageEvidence
+    context: CitationContextContribution
 
 
 class CitationProcessorConfiguration(BaseModel):
@@ -56,7 +64,7 @@ class CitationProcessor(MessageProcessor):
     async def process_stream(
         self, stream: AsyncGenerator[StreamItem, None]
     ) -> AsyncGenerator[StreamItem, None]:
-        last_eligible: StreamItem | None = None
+        last_eligible: Optional[StreamItem] = None
 
         async for response, message in stream:
             completion = response.chat_completion
@@ -95,7 +103,8 @@ class CitationProcessor(MessageProcessor):
     def __process_inline_url(self, message: ChatMessage) -> ChatMessage:
         content = message.content
         evidences: List[ChatMessageEvidence] = []
-        cited_document_ids: Set[str] = set()
+        context = CitationContextContribution()
+        content_replacements: List[Tuple[str, str]] = []
 
         for match in self._INLINE_URL_PATTERN.finditer(content):
             citation_number = match.group(1)
@@ -103,32 +112,24 @@ class CitationProcessor(MessageProcessor):
             full_match = match.group(0)
             text_extract = match.group(3)
             anchor_text = f"[[{citation_number}]]"
-
-            registered = self.__store.get_hit(source_url)
+            registered = self.__resolve_citation(source_url, anchor_text, text_extract)
             if not registered:
                 continue
 
             content = content.replace(full_match, anchor_text, 1)
-
-            evidences.append(
-                ChatMessageEvidence(
-                    document_hit_url=registered.search_hit.get(
-                        "document_hit_url", source_url
-                    ),
-                    text_extract=text_extract,
-                    anchor_text=anchor_text,
-                )
-            )
-
-            doc_id = registered.search_hit.get("id", "")
-            if doc_id:
-                cited_document_ids.add(doc_id)
+            content_replacements.append((full_match, anchor_text))
+            evidences.append(registered.evidence)
+            self.__merge_context(context, registered.context)
 
         if not evidences:
             return message
 
         return self.__build_enriched_message(
-            message, evidences, cited_document_ids, content=content
+            message,
+            evidences,
+            context,
+            content=content,
+            content_replacements=content_replacements,
         )
 
     def __process_short_id(self, message: ChatMessage) -> ChatMessage:
@@ -138,7 +139,7 @@ class CitationProcessor(MessageProcessor):
             return message
 
         evidences: List[ChatMessageEvidence] = []
-        cited_document_ids: Set[str] = set()
+        context = CitationContextContribution()
 
         bare_pattern = re.compile(r"\[([a-f0-9]{7,8})\]")
         for match in bare_pattern.finditer(content):
@@ -147,27 +148,21 @@ class CitationProcessor(MessageProcessor):
             if not source_url:
                 continue
 
-            registered = self.__store.get_hit(source_url)
+            registered = self.__resolve_citation(
+                source_url=source_url,
+                anchor_text=match.group(0),
+                text_extract=None,
+            )
             if not registered:
                 continue
 
-            evidences.append(
-                ChatMessageEvidence(
-                    document_hit_url=registered.search_hit.get(
-                        "document_hit_url", source_url
-                    ),
-                    anchor_text=match.group(0),
-                )
-            )
-
-            doc_id = registered.search_hit.get("id", "")
-            if doc_id:
-                cited_document_ids.add(doc_id)
+            evidences.append(registered.evidence)
+            self.__merge_context(context, registered.context)
 
         if not evidences:
             return message
 
-        return self.__build_enriched_message(message, evidences, cited_document_ids)
+        return self.__build_enriched_message(message, evidences, context)
 
     def __process_deferred(self, message: ChatMessage) -> ChatMessage:
         # Deferred strategy: match response text against retrieved results.
@@ -179,7 +174,7 @@ class CitationProcessor(MessageProcessor):
     def __process_sup_numeric(self, message: ChatMessage) -> ChatMessage:
         content = message.content
         evidences: List[ChatMessageEvidence] = []
-        cited_document_ids: Set[str] = set()
+        context = CitationContextContribution()
 
         hits_by_index = list(self.__store.hits.items())
 
@@ -189,36 +184,68 @@ class CitationProcessor(MessageProcessor):
             if idx < 0 or idx >= len(hits_by_index):
                 continue
 
-            source_url, registered = hits_by_index[idx]
+            citation_key, hit = hits_by_index[idx]
             anchor_text = f"<sup>{citation_number}</sup>"
 
-            evidences.append(
-                ChatMessageEvidence(
-                    document_hit_url=registered.search_hit.get(
-                        "document_hit_url", source_url
-                    ),
-                    text_extract=registered.context_hit.get("description", ""),
-                    anchor_text=anchor_text,
-                )
+            resolved = self.__resolve_citation(
+                source_url=citation_key,
+                anchor_text=anchor_text,
+                text_extract=hit.context_hit.get("description", ""),
             )
+            if not resolved:
+                continue
 
-            doc_id = registered.search_hit.get("id", "")
-            if doc_id:
-                cited_document_ids.add(doc_id)
+            evidences.append(resolved.evidence)
+            self.__merge_context(context, resolved.context)
 
         if not evidences:
             return message
 
-        return self.__build_enriched_message(message, evidences, cited_document_ids)
+        return self.__build_enriched_message(message, evidences, context)
+
+    def __resolve_citation(
+        self, source_url: str, anchor_text: str, text_extract: Optional[str]
+    ) -> Optional[ResolvedCitation]:
+        hit = self.__store.get_hit(source_url)
+        if not hit:
+            return None
+
+        evidence_url = (
+            hit.evidence_url or hit.search_hit.get("document_hit_url") or source_url
+        )
+        if not evidence_url:
+            return None
+
+        return ResolvedCitation(
+            evidence=ChatMessageEvidence(
+                document_hit_url=evidence_url,
+                text_extract=text_extract,
+                anchor_text=anchor_text,
+            ),
+            context=hit.context_contribution,
+        )
+
+    @staticmethod
+    def __merge_context(
+        target: CitationContextContribution,
+        source: CitationContextContribution,
+    ) -> None:
+        target.document_ids.update(source.document_ids)
+        target.custom_items.extend(source.custom_items)
 
     def __build_enriched_message(
         self,
         message: ChatMessage,
         evidences: List[ChatMessageEvidence],
-        cited_document_ids: Set[str],
+        context: CitationContextContribution,
         content: str = "",
+        content_replacements: Optional[List[Tuple[str, str]]] = None,
     ) -> ChatMessage:
-        content_parts = list(message.content_parts or [])
+        content_parts = self.__replace_content_part_texts(
+            list(message.content_parts or []), content_replacements or []
+        )
+        cited_document_ids = context.document_ids
+
         if cited_document_ids:
             content_parts.append(
                 ContentPart(
@@ -232,6 +259,16 @@ class CitationProcessor(MessageProcessor):
                 )
             )
 
+        custom_items = self.__dedupe_custom_items(context.custom_items)
+        if custom_items:
+            content_parts.append(
+                ContentPart(
+                    type="context",
+                    context=ConversationContext(
+                        custom_context=CustomContext(items=custom_items)
+                    ),
+                )
+            )
         return ChatMessage(
             sender=message.sender,
             content=content or message.content,
@@ -242,7 +279,46 @@ class CitationProcessor(MessageProcessor):
             function_call_response=message.function_call_response,
             evidences=evidences,
             function_specs=message.function_specs,
+            reasoning_summary=message.reasoning_summary,
         )
+
+    @staticmethod
+    def __replace_content_part_texts(
+        content_parts: List[ContentPart],
+        replacements: List[Tuple[str, str]],
+    ) -> List[ContentPart]:
+        if not replacements:
+            return content_parts
+
+        result: List[ContentPart] = []
+        for part in content_parts:
+            if part.type != "text" or not part.text:
+                result.append(part)
+                continue
+
+            text = part.text
+            for original, replacement in replacements:
+                text = text.replace(original, replacement)
+
+            result.append(
+                ContentPart(
+                    type=part.type,
+                    context=part.context,
+                    tool=part.tool,
+                    text=text,
+                    table=part.table,
+                )
+            )
+        return result
+
+    @staticmethod
+    def __dedupe_custom_items(
+        items: List[CustomContextItem],
+    ) -> List[CustomContextItem]:
+        result: Dict[str, CustomContextItem] = {}
+        for item in items:
+            result[item.document_id] = item
+        return list(result.values())
 
 
 class CitationProcessorFactory(AgentDependencyFactory):

@@ -1,6 +1,6 @@
 import copy
 import inspect
-from typing import Any, Callable, Coroutine, Dict, Optional, Type, cast, get_args
+from typing import Any, Callable, Coroutine, Dict, Optional, Tuple, Type, cast, get_args
 
 from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span, Trace, TracingBackendFactory
@@ -10,6 +10,7 @@ from zav.agents_sdk.domain.agent_creator import AgentCreator
 from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyRegistryProtocol,
     DependencyGroup,
+    ResumableAgentDependency,
 )
 from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.agent_setup_retriever import (
@@ -25,7 +26,7 @@ from zav.agents_sdk.domain.utils import (
     check_is_class,
     check_is_optional,
 )
-from zav.agents_sdk.security import sanitize_bot_params
+from zav.agents_sdk.security import _PROTECTED_HANDLER_PARAMS, sanitize_bot_params
 
 
 def init_span(
@@ -77,6 +78,8 @@ class ChatAgentFactory:
             Callable[[AgentEvent], Coroutine[None, None, None]]
         ] = None,
         message_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        dependency_state: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         self.__agent_setup_retriever = agent_setup_retriever
         self.__chat_agent_class_registry = chat_agent_class_registry
@@ -86,7 +89,69 @@ class ChatAgentFactory:
         self.__debug_backend = debug_backend
         self.__publish_event = publish_event
         self.__message_id = message_id
+        self.__session_id = session_id
+        self.__dependency_state = dependency_state
+        self.__resumable_dependencies: Dict[str, ResumableAgentDependency] = {}
         self.agent_setup: Optional[AgentSetup] = None
+
+    def __dependency_state_key(
+        self,
+        dependency_path: Tuple[str, ...],
+        dependency: ResumableAgentDependency,
+        is_singleton: bool,
+    ) -> str:
+        # A singleton is shared across the whole dependency tree and resolved once
+        # per request, so its persisted state is keyed by ``state_key`` alone. This
+        # keeps the key stable across turns even when the resolution order or the set
+        # of paths that reference the singleton changes. A non-singleton is reached
+        # through a single path, so the path keeps distinct instances apart.
+        if is_singleton:
+            return dependency.state_key
+        return ".".join((*dependency_path, dependency.state_key))
+
+    async def __track_resumable_dependency(
+        self,
+        dependency_path: Tuple[str, ...],
+        dependency: Any,
+        is_singleton: bool = False,
+    ) -> None:
+        if not isinstance(dependency, ResumableAgentDependency):
+            return
+
+        state_key = self.__dependency_state_key(
+            dependency_path, dependency, is_singleton
+        )
+        already_tracked = self.__resumable_dependencies.get(state_key)
+        if already_tracked is dependency:
+            return
+        if already_tracked is not None:
+            raise ValueError(
+                f"Resumable dependency state key collision for {state_key!r}: "
+                f"{type(already_tracked).__name__} and {type(dependency).__name__} "
+                "resolve to the same key."
+            )
+        if self.__dependency_state is not None and state_key in self.__dependency_state:
+            await dependency.load(self.__dependency_state[state_key])
+        self.__resumable_dependencies[state_key] = dependency
+
+    async def dump_dependency_state(self) -> Dict[str, Dict[str, Any]]:
+        state = dict(self.__dependency_state or {})
+        for state_key, dependency in self.__resumable_dependencies.items():
+            state[state_key] = await dependency.dump()
+        return state
+
+    @property
+    def resumes_conversation(self) -> bool:
+        # True only when the agent (or a sub-agent) carries a dependency that
+        # replays the conversation transcript across turns — the resumable
+        # chat-completion client. Other resumable state (e.g. a counter) restores
+        # itself but NOT the conversation, so it does not make history work: such
+        # an agent must still be re-fed the full stored transcript on a stateful
+        # follow-up (see resolve_turn_conversation).
+        return any(
+            dependency.restores_conversation
+            for dependency in self.__resumable_dependencies.values()
+        )
 
     async def __parse_sub_agent(
         self,
@@ -97,6 +162,7 @@ class ChatAgentFactory:
         handler_params: Dict[str, Any],
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
+        track_resumable: bool = True,
     ):
         try:
             return await self.create(
@@ -106,6 +172,7 @@ class ChatAgentFactory:
                 span=init_sub_agent_span(
                     span=span, agent_identifier=sub_agent_identifier
                 ),
+                track_resumable=track_resumable,
             )
         except ValueError as e:
             if has_default:
@@ -133,9 +200,13 @@ class ChatAgentFactory:
             else {}
         )
         is_param_missing = param_name not in agent_configuration
-        param_value = agent_configuration.get(param_name, None)
+        is_protected_handler_param = (
+            param_name in _PROTECTED_HANDLER_PARAMS and param_name in handler_params
+        )
 
-        if is_param_missing:
+        if is_protected_handler_param:
+            param_value = handler_params[param_name]
+        elif is_param_missing:
             if param_name in handler_params:
                 param_value = handler_params[param_name]
             elif has_default:
@@ -148,6 +219,7 @@ class ChatAgentFactory:
             # configuration tampering. Runtime-provided values are only used to fill
             # in missing fields.
             config_value = agent_configuration[param_name]
+            param_value = config_value
             if (
                 param_name in handler_params
                 and isinstance(handler_params[param_name], dict)
@@ -203,6 +275,8 @@ class ChatAgentFactory:
         agent_setup: Optional[AgentSetup] = None,
         span: Optional[Span] = None,
         resolution_cache: Optional[Dict[type, Any]] = None,
+        dependency_path: Tuple[str, ...] = (),
+        track_resumable: bool = True,
     ) -> Optional[Any]:
         param_annotation = param.annotation
         is_optional = check_is_optional(param_annotation)
@@ -222,6 +296,14 @@ class ChatAgentFactory:
                 factory_conversation_context: Optional[ConversationContext] = None,
                 extra_agent_kwargs: Optional[Dict[str, Any]] = None,
             ):
+                # Agents spawned at runtime through an AgentCreator (the task and
+                # delegate tools) run isolated and stateless: a fresh context that
+                # returns only a text result. Their resumable dependencies are
+                # therefore not tracked or persisted into the parent turn's keyspace,
+                # which also stops repeated spawns of the same agent_identifier from
+                # colliding on the shared per-factory state key. Durable per-sub-agent
+                # resume (each sub-agent owning its own factory and state namespace) is
+                # intentionally deferred.
                 return await self.create(
                     agent_identifier=factory_agent_identifier,
                     handler_params={
@@ -233,6 +315,7 @@ class ChatAgentFactory:
                         span=span, agent_identifier=factory_agent_identifier
                     ),
                     extra_agent_kwargs=extra_agent_kwargs,
+                    track_resumable=False,
                 )
 
             return AgentCreator(
@@ -265,6 +348,8 @@ class ChatAgentFactory:
                                 agent_setup=agent_setup,
                                 span=span,
                                 resolution_cache=resolution_cache,
+                                dependency_path=(*dependency_path, param_name),
+                                track_resumable=track_resumable,
                             )
                         )
                         for param_name, param in agent_dependency_params.items()
@@ -273,6 +358,10 @@ class ChatAgentFactory:
                 )
                 if is_singleton and resolution_cache is not None:
                     resolution_cache[param_annotation] = result
+                if track_resumable:
+                    await self.__track_resumable_dependency(
+                        dependency_path, result, is_singleton=is_singleton
+                    )
                 return result
         # Parse dependency group
         if (
@@ -285,6 +374,11 @@ class ChatAgentFactory:
             factories = self.__agent_dependency_registry.get_subclasses_of(base_type)
             items = []
             for factory in factories:
+                factory_name = (
+                    factory.__name__
+                    if inspect.isclass(factory)
+                    else factory.__class__.__name__
+                )
                 factory_params = inspect.signature(factory.create).parameters
                 item = factory.create(
                     **{
@@ -298,12 +392,24 @@ class ChatAgentFactory:
                                 agent_setup=agent_setup,
                                 span=span,
                                 resolution_cache=resolution_cache,
+                                dependency_path=(
+                                    *dependency_path,
+                                    factory_name,
+                                    fp_name,
+                                ),
+                                track_resumable=track_resumable,
                             )
                         )
                         for fp_name, fp in factory_params.items()
                         if fp_name != "self"
                     }
                 )
+                if track_resumable:
+                    await self.__track_resumable_dependency(
+                        (*dependency_path, factory_name),
+                        item,
+                        is_singleton=getattr(factory, "__singleton__", False),
+                    )
                 items.append(item)
             return param_annotation(items=items)
         has_default = param.default != inspect.Parameter.empty
@@ -331,6 +437,7 @@ class ChatAgentFactory:
                 handler_params=handler_params,
                 conversation_context=conversation_context,
                 span=span,
+                track_resumable=track_resumable,
             )
         is_llm_client_configuration = is_class and issubclass(
             param_annotation, LLMClientConfiguration
@@ -373,6 +480,7 @@ class ChatAgentFactory:
         conversation_context: Optional[ConversationContext] = None,
         span: Optional[Span] = None,
         extra_agent_kwargs: Optional[Dict[str, Any]] = None,
+        track_resumable: bool = True,
     ) -> ChatAgent:
         agent_setup = await self.__agent_setup_retriever.get(
             agent_identifier=agent_identifier
@@ -405,6 +513,8 @@ class ChatAgentFactory:
                 agent_setup=agent_setup,
                 span=span,
                 resolution_cache=resolution_cache,
+                dependency_path=(agent_identifier, param_name),
+                track_resumable=track_resumable,
             )
             for param_name, param in agent_cls_params.items()
         }
@@ -449,6 +559,7 @@ class ChatAgentFactory:
         agent_instance.debug_backend = self.__debug_backend
         agent_instance.span = span
         agent_instance.message_id = self.__message_id
+        agent_instance.session_id = self.__session_id
 
         if self.__publish_event:
             agent_instance.publish_event = self.__publish_event

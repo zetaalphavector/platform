@@ -4,6 +4,8 @@ from zav.llm_tracing.feedback_service_factory import FeedbackServiceFactory
 from zav.llm_tracing.instrumented import Instrumented, instrument_instance
 from zav.llm_tracing.local_trace_store import LocalTraceStore
 from zav.llm_tracing.trace import Span, SpanContext, SpanEvent, Trace, now
+from zav.llm_tracing.trace_cleanup import TraceCleanupService
+from zav.llm_tracing.trace_cleanup_service_factory import TraceCleanupServiceFactory
 from zav.llm_tracing.tracing_configuration import (
     CaptureConfiguration,
     LangfuseConfiguration,
@@ -22,6 +24,8 @@ __all__ = [
     "TracingBackendFactory",
     "FeedbackService",
     "FeedbackServiceFactory",
+    "TraceCleanupService",
+    "TraceCleanupServiceFactory",
     "LangfuseConfiguration",
     "TracingConfiguration",
     "TracingVendorConfiguration",

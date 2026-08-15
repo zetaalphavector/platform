@@ -49,3 +49,8 @@ class ExceptionHandlerRegistry:
             return wrapped_function
 
         return inner_wrapper
+
+
+@ExceptionHandlerRegistry.register(TimeoutError)
+def __timeout_error(exception: TimeoutError):
+    return RetryableHandlerError(exception, max_retries=3, base_delay=1.0)

@@ -90,6 +90,7 @@ class ChatPage(ModelNormal):
             'chat': (ChatFeatureConfiguration,),  # noqa: E501
             'sharing_options': ([str],),  # noqa: E501
             'export_options': ([str],),  # noqa: E501
+            'onboarding_bot_identifier': (str,),  # noqa: E501
         }
 
     @cached_property
@@ -101,6 +102,7 @@ class ChatPage(ModelNormal):
         'chat': 'chat',  # noqa: E501
         'sharing_options': 'sharing_options',  # noqa: E501
         'export_options': 'export_options',  # noqa: E501
+        'onboarding_bot_identifier': 'onboarding_bot_identifier',  # noqa: E501
     }
 
     read_only_vars = {
@@ -147,6 +149,7 @@ class ChatPage(ModelNormal):
             chat (ChatFeatureConfiguration): [optional]  # noqa: E501
             sharing_options ([str]): [optional]  # noqa: E501
             export_options ([str]): [optional]  # noqa: E501
+            onboarding_bot_identifier (str): Bot identifier of the agent used for the onboarding flow. [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -231,6 +234,7 @@ class ChatPage(ModelNormal):
             chat (ChatFeatureConfiguration): [optional]  # noqa: E501
             sharing_options ([str]): [optional]  # noqa: E501
             export_options ([str]): [optional]  # noqa: E501
+            onboarding_bot_identifier (str): Bot identifier of the agent used for the onboarding flow. [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

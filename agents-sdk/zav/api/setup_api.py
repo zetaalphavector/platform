@@ -1,55 +1,41 @@
-import asyncio
 import logging
-from typing import Callable, Dict, List, Optional, Tuple, Type
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Callable, Dict, List, Mapping, Optional, Tuple, Type
 
 from fastapi import APIRouter, FastAPI
 from zav.logging import get_logger
-from zav.message_bus import Bootstrap, Command, MessageBus
+from zav.message_bus import Bootstrap, Command
 
+from zav.api.app_resources import ApiLifespan, compose_lifespans
 from zav.api.dependencies import get_message_bus
 from zav.api.probes import CommandHandlerRegistry as ProbesCommandHandlerRegistry
 from zav.api.probes import probes_router
 from zav.api.setup_routers import setup_routers
 
 
-class MessageBusDependency:
-    def __init__(self, bootstrap: Bootstrap):
+def __message_bus_lifespan(bootstrap: Bootstrap) -> ApiLifespan:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[Mapping[str, object]]:
+        await bootstrap.startup()
+        try:
+            yield get_message_bus.bind(bootstrap.message_bus)
+        finally:
+            await bootstrap.shutdown()
 
-        self.__input_bootstrap = bootstrap
-        self.__bootstrap: Optional[Bootstrap] = None
-        self.__message_bus: Optional[MessageBus] = None
-        self.__lock = asyncio.Lock()
-
-    async def __call__(self):
-
-        if self.__message_bus is not None:
-            return self.__message_bus
-
-        async with self.__lock:
-            if self.__message_bus is not None:
-                return self.__message_bus
-            if self.__bootstrap is not None:
-                self.__message_bus = self.__bootstrap.message_bus
-                return self.__message_bus
-            self.__bootstrap = self.__input_bootstrap
-            await self.__bootstrap.startup()
-            self.__message_bus = self.__bootstrap.message_bus
-
-        return self.__message_bus
-
-    async def close(self):
-
-        if self.__bootstrap is not None:
-            await self.__bootstrap.shutdown()
+    return lifespan
 
 
 def setup_api(
-    app: FastAPI,
     bootstrap: Bootstrap,
     routers: List[Tuple[str, APIRouter]],
+    app: Optional[FastAPI] = None,
     extra_exception_handlers: Optional[List[Callable[[FastAPI], None]]] = None,
     extra_command_handler_registry: Optional[Dict[Type[Command], Callable]] = None,
-):
+    lifespans: Optional[List[ApiLifespan]] = None,
+) -> FastAPI:
+
+    if app is not None:
+        raise ValueError("setup_api owns the FastAPI lifespan; call it without app")
 
     logging.getLogger("uvicorn").handlers = []
     logging.getLogger("uvicorn.error").handlers = []
@@ -67,17 +53,17 @@ def setup_api(
         )
     else:
         bootstrap.update_command_handler_registry(ProbesCommandHandlerRegistry.registry)
-    message_bus_dep = MessageBusDependency(bootstrap)
 
-    @app.on_event("shutdown")
-    async def shutdown():
-        await message_bus_dep.close()
+    app = FastAPI(
+        lifespan=compose_lifespans(
+            [__message_bus_lifespan(bootstrap), *(lifespans or [])]
+        )
+    )
 
-    # Add probes router
     app.include_router(probes_router)
 
     setup_routers(
         app=app, routers=routers, extra_exception_handlers=extra_exception_handlers
     )
 
-    app.dependency_overrides[get_message_bus] = message_bus_dep
+    return app

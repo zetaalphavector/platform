@@ -1,3 +1,4 @@
+from collections import Counter
 from typing import Any, Dict, List, Optional, Set
 
 from zav.logging import logger
@@ -9,7 +10,11 @@ from zav.agents_sdk.adapters.agent_delegation.delegable_agents_source import (
     DelegableAgentsSource,
     DelegableAgentsSourceGroup,
 )
-from zav.agents_sdk.domain.agent_creator import AgentCreator, run_sub_agent
+from zav.agents_sdk.domain.agent_creator import (
+    AgentCreator,
+    SubAgentToolResult,
+    run_sub_agent,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
 
@@ -18,13 +23,16 @@ _MINIMAL_DELEGATE_SYSTEM_PROMPT = """\
 
 You have access to a `delegate` tool that delegates a task to a specialized agent. \
 Each agent has its own tools and capabilities. The target agent runs in a fresh \
-context — it cannot see your conversation history — and returns a single text result.\
+context — it cannot see your conversation history — and returns a text result \
+as this tool's response. Visible tool outputs created by the delegated agent \
+may also appear in this chat.\
 """
 
 _MINIMAL_DELEGATE_TOOL_DESCRIPTION = """\
 Delegate a task to a specialized agent. The target agent runs in a fresh context \
 with no access to your conversation history. It executes autonomously using its \
-own tools and capabilities, and returns a single text result.\
+own tools and capabilities, returns a text result as this tool's response, and \
+may surface tool outputs in this chat.\
 """
 
 _VERBOSE_DELEGATE_SYSTEM_PROMPT = """\
@@ -32,7 +40,9 @@ _VERBOSE_DELEGATE_SYSTEM_PROMPT = """\
 
 You have access to a `delegate` tool that delegates a task to a specialized agent. \
 Each agent has its own tools and capabilities. The target agent runs in a fresh \
-context — it cannot see your conversation history — and returns a single text result.
+context — it cannot see your conversation history — and returns a text result \
+as this tool's response. Visible tool outputs created by the delegated agent \
+may also appear in this chat.
 
 Use `delegate` when a specialized agent is better suited for the task — for example, \
 when the user explicitly asks for a specific agent's capabilities, or when a domain \
@@ -41,7 +51,8 @@ expert agent would produce a better result than your general-purpose tools.
 When delegating:
 - Write a SELF-CONTAINED prompt that includes all relevant context.
 - Specify the desired output format and length constraints.
-- The user cannot see the delegated agent's output — relay the result yourself.
+- Use the returned text result to answer the user; it may also be visible in the \
+delegation tool UI when the chat frontend renders tool details.
 
 Prefer your own tools over delegation when you can handle the task directly.\
 """
@@ -49,7 +60,8 @@ Prefer your own tools over delegation when you can handle the task directly.\
 _VERBOSE_DELEGATE_TOOL_DESCRIPTION = """\
 Delegate a task to a specialized agent. The target agent runs in a fresh context \
 with no access to your conversation history. It executes autonomously using its \
-own tools and capabilities, and returns a single text result.
+own tools and capabilities, returns a text result as this tool's response, and \
+may surface visible tool outputs in this chat.
 
 Use this tool when:
 - The user's request matches the expertise of a specific agent.
@@ -61,8 +73,8 @@ Writing effective prompts:
 agent needs. It cannot see your conversation.
 2. Specify exact output format AND length constraints \
 (e.g., "one paragraph, ≤90 words" or "bullet list, max 5 items").
-3. The user CANNOT see the delegated agent's output — you must relay the \
-result yourself.
+3. Use the returned text result to answer the user; it may also be visible in \
+the delegation tool UI when the chat frontend renders tool details.
 
 When NOT to use this tool:
 - If you can handle the task yourself with your own tools.
@@ -108,7 +120,6 @@ class AgentDelegationProviderConfiguration(BaseModel):
 
 
 class AgentDelegationProvider:
-
     def __init__(
         self,
         agent_creator: AgentCreator,
@@ -159,6 +170,8 @@ class AgentDelegationProvider:
         if self.__resolved is not None:
             return self.__resolved
         self.__resolved = {}
+        if not self.__enabled:
+            return self.__resolved
         for source in self.__active_sources():
             try:
                 source_agents = await source.get_agents()
@@ -183,6 +196,13 @@ class AgentDelegationProvider:
             )
         ]
 
+    @staticmethod
+    def __delegation_failure_message(agent_name: str) -> str:
+        return (
+            f"The '{agent_name}' agent could not complete this task. You can try "
+            "delegating again, or continue using the information already available."
+        )
+
     def __build_delegate_tool(
         self,
         delegable_agents: List[DelegableAgent],
@@ -190,23 +210,46 @@ class AgentDelegationProvider:
         agents_by_name: Dict[str, DelegableAgent] = {
             a.name: a for a in delegable_agents
         }
+        identifier_counts = Counter(a.agent_identifier for a in delegable_agents)
+        agents_by_alias: Dict[str, DelegableAgent] = dict(agents_by_name)
+        for agent in delegable_agents:
+            if identifier_counts[agent.agent_identifier] == 1:
+                agents_by_alias[agent.agent_identifier] = agent
         agent_names = list(agents_by_name.keys())
 
         agents_description = "\n".join(
             f"- `{a.name}`: {a.description}" for a in delegable_agents
         )
 
-        async def execute(agent: str, prompt: str, description: str) -> str:
-            target = agents_by_name.get(agent)
+        async def execute(agent: str, prompt: str, description: str):
+            target = agents_by_alias.get(agent)
             if target is None:
                 available = ", ".join(agent_names)
                 return f"Unknown agent '{agent}'. Available agents: {available}"
 
-            return await run_sub_agent(
-                agent_creator=self.__agent_creator,
-                target_identifier=target.agent_identifier,
-                prompt=prompt,
-                bot_params=target.bot_params,
+            try:
+                child = await run_sub_agent(
+                    agent_creator=self.__agent_creator,
+                    target_identifier=target.agent_identifier,
+                    prompt=prompt,
+                    bot_params=target.bot_params,
+                )
+            except ValueError as exc:
+                if str(exc).startswith("Unknown agent:"):
+                    return (
+                        f"Configured delegate '{target.name}' points to unavailable "
+                        f"agent identifier '{target.agent_identifier}'. This is a "
+                        "configuration issue: use a registered agent_identifier "
+                        "or provide bot_params for a registered base agent."
+                    )
+                logger.exception(f"Delegation to '{target.name}' failed")
+                return self.__delegation_failure_message(target.name)
+            except Exception:
+                logger.exception(f"Delegation to '{target.name}' failed")
+                return self.__delegation_failure_message(target.name)
+            return SubAgentToolResult(
+                text=child.content or "Sub-agent completed but produced no output.",
+                content_parts=child.content_parts or [],
             )
 
         if self.__tool_description is not None:
@@ -255,7 +298,7 @@ class AgentDelegationProvider:
             ),
         )
 
-    def to_prompt(self) -> str:
+    async def to_prompt(self) -> str:
         if not self.__enabled or not self.__include_in_prompt:
             return ""
 
@@ -275,7 +318,6 @@ class AgentDelegationProvider:
 
 
 class AgentDelegationProviderFactory(AgentDependencyFactory):
-
     @classmethod
     def create(
         cls,

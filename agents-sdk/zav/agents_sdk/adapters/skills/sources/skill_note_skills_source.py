@@ -19,7 +19,7 @@ SkillNoteScope = Literal["own", "shared_with_me"]
 
 class SkillNoteSkillsSourceConfiguration(BaseModel):
     enabled: bool = False
-    include_scopes: List[SkillNoteScope] = ["own"]
+    include_scopes: Optional[List[SkillNoteScope]] = ["own"]
     allowed_skill_note_ids: Optional[List[str]] = None
 
 
@@ -30,15 +30,13 @@ class SkillNoteSkillsSource(SkillsSource):
         self,
         notes_service: NotesService,
         enabled: bool,
-        include_scopes: List[SkillNoteScope] = ["own"],
+        include_scopes: Optional[List[SkillNoteScope]] = ["own"],
         allowed_skill_note_ids: Optional[List[str]] = None,
     ):
         self.enabled = enabled
         self.__notes_service = notes_service
-        self.__include_scopes = include_scopes
-        self.__allowed_skill_note_ids = (
-            set(allowed_skill_note_ids) if allowed_skill_note_ids else None
-        )
+        self.__include_scopes = include_scopes or []
+        self.__allowed_skill_note_ids = allowed_skill_note_ids or []
         self.__skills: Dict[str, SkillProperties] = {}
         self.__skill_contents: Dict[str, str] = {}
         self.__discovered = False
@@ -70,16 +68,29 @@ class SkillNoteSkillsSource(SkillsSource):
 
         self.__ingest_notes(all_notes)
 
+        loaded_note_ids = {str(n.get("id")) for n in all_notes if n.get("id")}
+        additional_notes: List = []
+        for note_id_str in self.__allowed_skill_note_ids:
+            if note_id_str in loaded_note_ids:
+                continue
+            try:
+                note = await self.__notes_service.retrieve_note(
+                    note_id=int(note_id_str)
+                )
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid allowed_skill_note_id: {note_id_str}")
+                continue
+            except Exception as e:
+                logger.warning(f"Failed to fetch skill note {note_id_str}: {e}")
+                continue
+            if note:
+                additional_notes.append(note)
+
+        if additional_notes:
+            self.__ingest_notes(additional_notes)
+
     def __ingest_notes(self, notes: List) -> None:
         for note in notes:
-            note_id = note.get("id")
-            note_id_str = str(note_id) if note_id else None
-
-            if self.__allowed_skill_note_ids is not None and (
-                note_id_str is None or note_id_str not in self.__allowed_skill_note_ids
-            ):
-                continue
-
             content = note.get("content", "")
             if not content:
                 continue
