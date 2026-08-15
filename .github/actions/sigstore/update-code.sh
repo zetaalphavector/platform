@@ -8,7 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 TEMP_DIR=$(mktemp -d)
 
 # Clone the upstream repository into the temporary directory (shallow clone)
-git clone --depth 1 --branch v3.0.0 https://github.com/sigstore/gh-action-sigstore-python.git "$TEMP_DIR"
+git clone --depth 1 --branch v3.5.0 https://github.com/sigstore/gh-action-sigstore-python.git "$TEMP_DIR"
 
 # Sync the Python action script
 rsync -av \
@@ -19,14 +19,16 @@ rsync -av \
   --exclude='.*' \
   "$TEMP_DIR/templates/" .github/actions/sigstore/templates/
 
-# Sync requirements
+# Sync requirements. Upstream moved its requirements under requirements/
+# (main.in holds the ranges, main.txt a hash-locked compile); we keep the
+# flat requirements.txt layout our action.yml installs from.
 rsync -av \
-  "$TEMP_DIR/requirements.txt" .github/actions/sigstore/requirements.txt
+  "$TEMP_DIR/requirements/main.in" .github/actions/sigstore/requirements.txt
 
 # Remove the temporary directory
 rm -rf "$TEMP_DIR"
 
-echo "Files in .github/actions/sigstore updated from upstream v3.0.0."
+echo "Files in .github/actions/sigstore updated from upstream v3.5.0."
 echo ""
 echo "Next steps:"
 echo "  1. Review the changed code for security vulnerabilities"
