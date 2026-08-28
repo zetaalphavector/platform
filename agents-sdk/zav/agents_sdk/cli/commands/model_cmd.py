@@ -7,9 +7,11 @@ from rich.table import Table
 from typing_extensions import Annotated
 from zav.llm_domain import LLMModelConfiguration
 
+from zav.agents_sdk.cli.project_config import ProjectConfig
 from zav.agents_sdk.cli.require import (
     require_project,
     resolve_agent_identifier,
+    resolve_any_project_dir,
     resolve_project_dir,
 )
 from zav.agents_sdk.cli.source_aliases import infer_vendor
@@ -133,6 +135,10 @@ def __prompt_vendor_config(vendor: str, existing: Dict[str, Any]) -> Dict[str, A
         raw = __prompt_field(f"  {field} ({description})", field, current)
         if raw:
             result[field] = raw
+        elif field not in result:
+            # Required fields must exist for the configuration to materialize;
+            # empty is a valid value (e.g. no OpenAI organization).
+            result[field] = ""
 
     if vendor in ("azure_openai", "azure_anthropic") and "auth_type" in result:
         auth_type = result["auth_type"]
@@ -320,3 +326,79 @@ def model_show(
         )
 
     console.print()
+
+
+@model_app.command("list")
+def model_list(
+    project_dir: Annotated[
+        Optional[str],
+        typer.Option("--project-dir", help="Project directory."),
+    ] = None,
+):
+    """
+    List the named LLM configurations in this project.
+    """
+    project_dir = resolve_any_project_dir(project_dir)
+    config = ProjectConfig(project_dir)
+    configs = config.list_llm_configurations()
+
+    if not configs:
+        console.print("  [dim]No LLM configurations[/]")
+        return
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Name", style="cyan")
+    table.add_column("Vendor")
+    table.add_column("Model", style="dim")
+    for entry in configs:
+        model_name = entry.get("model_configuration", {}).get("name", "?")
+        table.add_row(entry.get("name", "?"), entry.get("vendor", "?"), model_name)
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def prompt_model_configuration(model_name: str) -> Dict[str, Any]:
+    """Reasoning models reject function tools on chat completions
+    (reasoning is on by default); they need the responses API."""
+    model_type = (
+        typer.prompt("Model type (chat / responses)", default="chat").strip().lower()
+    )
+    if model_type == "responses":
+        return {"name": model_name, "type": "responses"}
+    return {"name": model_name, "type": "chat", "temperature": 0.0}
+
+
+@model_app.command("add")
+def model_add(
+    name: Annotated[str, typer.Argument(help="Name for the LLM configuration.")],
+    project_dir: Annotated[
+        Optional[str],
+        typer.Option("--project-dir", help="Project directory."),
+    ] = None,
+):
+    """
+    Create a named LLM configuration that agents and MCP tools can reference.
+    """
+    project_dir = resolve_any_project_dir(project_dir)
+    config = ProjectConfig(project_dir)
+    if config.get_llm_configuration(name) is not None:
+        console.print(f"  [red]LLM configuration '{name}' already exists[/]")
+        raise typer.Exit(code=1)
+
+    model_name = typer.prompt("Model name", default="gpt-5.4-mini")
+    model_configuration = prompt_model_configuration(model_name)
+    vendor = infer_vendor(model_name) or typer.prompt("Vendor")
+    vendor_cfg = __prompt_vendor_config(vendor, {})
+
+    config.set_llm_configuration(
+        name,
+        vendor,
+        model_configuration,
+        vendor_cfg or None,
+    )
+    console.print()
+    console.print(
+        f"  [green]✅ LLM configuration '{name}' saved ({vendor} / {model_name})[/]"
+    )

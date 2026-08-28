@@ -24,7 +24,7 @@ def __show_project_overview(project_dir: str, config, agent_setup: dict):
     identifier = agent_setup.get("agent_identifier", "?")
     agent_name = agent_setup.get("agent_name", "?")
 
-    llm = agent_setup.get("llm_client_configuration", {})
+    llm = config.resolve_agent_llm(agent_setup.get("agent_identifier"))
     vendor = llm.get("vendor", "?")
     model_name = llm.get("model_configuration", {}).get("name", "?")
 
@@ -105,7 +105,7 @@ def __show_project_overview(project_dir: str, config, agent_setup: dict):
 def __show_agent_detail(config, agent_setup: dict):
     identifier = agent_setup.get("agent_identifier", "?")
     agent_name = agent_setup.get("agent_name", "?")
-    llm = agent_setup.get("llm_client_configuration", {})
+    llm = config.resolve_agent_llm(identifier)
     agent_cfg = agent_setup.get("agent_configuration", {})
 
     is_builtin = agent_name == "agent"

@@ -207,6 +207,7 @@ def test_run(
         tracing_backend_factory=TracingBackendFactory,
         trace_state_params={},
         agent_dependency_registry=AgentDependencyRegistry,
+        llm_configuration_store=agent_setup_retriever.llm_configuration_store,
     )
 
     n_items = len(list(harness.get_spec_paths()))

@@ -1,4 +1,5 @@
 from zav.agents_sdk.handlers.chats import *
+from zav.agents_sdk.handlers.mcp_server import *
 
 try:
     # The MCP OAuth callback handler depends on the optional ``mcp`` extra. When

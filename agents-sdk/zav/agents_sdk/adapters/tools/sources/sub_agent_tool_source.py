@@ -144,6 +144,13 @@ class SubAgentToolSourceConfiguration(BaseModel):
             "When set, verbose is ignored for the tool description."
         ),
     )
+    allow_llm_selection: bool = Field(
+        False,
+        description=(
+            "Let the agent pick the sub-agent's LLM by name "
+            "(within its allowed names)."
+        ),
+    )
 
 
 class SubAgentToolSource(ToolsSource):
@@ -159,6 +166,7 @@ class SubAgentToolSource(ToolsSource):
         include_in_prompt: bool,
         extra_instructions: Optional[str],
         tool_description: Optional[str],
+        allow_llm_selection: bool = False,
     ):
         self.__agent_creator = agent_creator
         self.enabled = enabled
@@ -166,6 +174,7 @@ class SubAgentToolSource(ToolsSource):
         self.__include_in_prompt = include_in_prompt
         self.__extra_instructions = extra_instructions
         self.__tool_description = tool_description
+        self.__allow_llm_selection = allow_llm_selection
 
     async def get_tools(self) -> List[Tool]:
         if not self.enabled:
@@ -173,10 +182,22 @@ class SubAgentToolSource(ToolsSource):
         return [self.__build_task_tool()]
 
     def __build_task_tool(self) -> Tool:
-        async def execute(prompt: str, description: str) -> SubAgentToolResult:
+        async def execute(
+            prompt: str,
+            description: str,
+            llm_configuration_name: Optional[str] = None,
+        ) -> SubAgentToolResult:
+            bot_params = None
+            if llm_configuration_name and self.__allow_llm_selection:
+                bot_params = {
+                    "llm_selection_configuration": {
+                        "llm_configuration_name": llm_configuration_name
+                    }
+                }
             child = await run_sub_agent(
                 agent_creator=self.__agent_creator,
                 prompt=prompt,
+                bot_params=bot_params,
             )
             return SubAgentToolResult(
                 text=child.content or "Sub-agent completed but produced no output.",
@@ -193,25 +214,34 @@ class SubAgentToolSource(ToolsSource):
         if self.__extra_instructions:
             description = f"{description}\n\n{self.__extra_instructions}"
 
+        properties = {
+            "description": {
+                "type": "string",
+                "description": "A short (3-5 word) label for the task.",
+            },
+            "prompt": {
+                "type": "string",
+                "description": (
+                    "A detailed, self-contained task description " "for the sub-agent."
+                ),
+            },
+        }
+        if self.__allow_llm_selection:
+            properties["llm_configuration_name"] = {
+                "type": "string",
+                "description": (
+                    "Optional named LLM configuration for the sub-agent "
+                    "(one its setup allows)."
+                ),
+            }
+
         return Tool(
             name="task",
             description=description,
             executable=execute,
             parameters_spec={
                 "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "A short (3-5 word) label for the task.",
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": (
-                            "A detailed, self-contained task description "
-                            "for the sub-agent."
-                        ),
-                    },
-                },
+                "properties": properties,
                 "required": ["description", "prompt"],
             },
             streaming_config=ToolStreamingConfig(
@@ -256,4 +286,7 @@ class SubAgentToolSourceFactory(AgentDependencyFactory):
             include_in_prompt=sub_agent_tool_source_configuration.include_in_prompt,
             extra_instructions=sub_agent_tool_source_configuration.extra_instructions,
             tool_description=sub_agent_tool_source_configuration.tool_description,
+            allow_llm_selection=(
+                sub_agent_tool_source_configuration.allow_llm_selection
+            ),
         )

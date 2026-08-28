@@ -208,6 +208,11 @@ class CitationProcessor(MessageProcessor):
     ) -> Optional[ResolvedCitation]:
         hit = self.__store.get_hit(source_url)
         if not hit:
+            # The model may cite a document id instead of the registered key
+            # (e.g. when the id reached it through injected context).
+            hit = self.__store.get_hit_by_document_id(source_url)
+        if not hit:
+            logger.warning(f"Citation could not be resolved: {source_url[:120]}")
             return None
 
         evidence_url = (

@@ -6,6 +6,7 @@ from rich.console import Console
 
 from zav.agents_sdk.cli.project_config import (
     CONFIG_FILE,
+    MCP_CONFIG_FILE,
     ProjectConfig,
     ProjectConfigError,
 )
@@ -49,6 +50,36 @@ def require_project(project_dir: str) -> ProjectConfig:
         )
         raise typer.Exit(code=1)
     return ProjectConfig(project_dir)
+
+
+def is_project(directory: str) -> bool:
+    # An SDK project shared by any consumer: an agent project, an MCP project, or a
+    # bare project carrying the SDK re-export marker.
+    return ProjectConfig.is_valid_project(directory) or os.path.isfile(
+        os.path.join(directory, MCP_CONFIG_FILE)
+    )
+
+
+def resolve_any_project_dir(project_dir: Optional[str]) -> str:
+    # Consumer-neutral resolver for capabilities (e.g. tools) that agents AND MCP
+    # share — unlike resolve_project_dir, it does not require an agent_setups.json.
+    if project_dir is not None:
+        if not is_project(project_dir):
+            console.print(
+                f"\n  [red]No project found in '{project_dir}'.[/]"
+                "\n  Run [bold]za agents init[/] or [bold]za mcp init[/] "
+                "to create one.\n"
+            )
+            raise typer.Exit(code=1)
+        return project_dir
+    for candidate in (".", "agents", "agent"):
+        if is_project(candidate):
+            return candidate
+    console.print(
+        "\n  [red]No project found.[/]"
+        "\n  Run [bold]za agents init[/] or [bold]za mcp init[/] to create one.\n"
+    )
+    raise typer.Exit(code=1)
 
 
 def require_agent(

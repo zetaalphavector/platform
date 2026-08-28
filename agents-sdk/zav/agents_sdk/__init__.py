@@ -31,6 +31,10 @@ if TYPE_CHECKING:
         get_local_file_mcp_oauth_integration_store,
         get_mcp_oauth_token_client,
     )
+    from zav.agents_sdk.adapters.policies import (
+        CitationConfiguration,
+        LLMSelectionConfiguration,
+    )
     from zav.agents_sdk.domain.agent_code_bundle import AgentCodeBundle
     from zav.agents_sdk.domain.agent_creator import AgentCreator
     from zav.agents_sdk.domain.agent_dependency import (
@@ -78,6 +82,16 @@ if TYPE_CHECKING:
     )
     from zav.agents_sdk.domain.chat_stream_supervision_store import (
         ChatStreamSupervisionStore,
+    )
+    from zav.agents_sdk.domain.llm_client_factory import (
+        LLMClientFactory,
+        LLMNotConfigured,
+    )
+    from zav.agents_sdk.domain.llm_configuration_store import (
+        LayeredLLMConfigurationStore,
+        LLMConfigurationStore,
+        LLMConfigurationStoreFromFile,
+        StaticLLMConfigurationStore,
     )
     from zav.agents_sdk.domain.mcp_oauth import MCPOAuthCallbackResult
     from zav.agents_sdk.domain.request_headers import RequestHeaders
@@ -185,4 +199,12 @@ __all__ = [
     "streamable",
     "ChatStreamRecordingStore",
     "ChatStreamSupervisionStore",
+    "LLMConfigurationStore",
+    "LLMConfigurationStoreFromFile",
+    "LayeredLLMConfigurationStore",
+    "StaticLLMConfigurationStore",
+    "LLMClientFactory",
+    "LLMNotConfigured",
+    "LLMSelectionConfiguration",
+    "CitationConfiguration",
 ]

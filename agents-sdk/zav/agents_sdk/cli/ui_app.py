@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import streamlit as st
-from zav.llm_domain import LLMModelType, LLMProviderName
+from zav.llm_domain import LLMClientConfiguration, LLMModelType, LLMProviderName
 from zav.object_storage_repo import ObjectRepositoryFactory, ObjectStorageItem
 from zav.pydantic_compat import PYDANTIC_V2
 
@@ -91,13 +91,42 @@ safe_agent_setup_retriever = AgentSetupRetrieverFromFile(file_path=zav_agent_set
 agent_setup_retriever = AgentSetupRetrieverFromFile(
     file_path=zav_agent_setup_src, secret_file_path=zav_secret_agent_setup_src
 )
+
+
+def llm_configuration_for(
+    agent_setup: Optional[AgentSetup],
+) -> Optional[LLMClientConfiguration]:
+    if agent_setup is None or not agent_setup.llm_configuration_name:
+        return None
+    return agent_setup_retriever.llm_configuration_store.get(
+        agent_setup.llm_configuration_name
+    )
+
+
+def effective_llm_configuration_name(
+    agent_setup: Optional[AgentSetup],
+    agent_configuration: Optional[dict],
+) -> Optional[str]:
+    """The name the request actually runs on: the model policy in the agent
+    configuration when the setup allows it, the setup's own name otherwise."""
+    default = agent_setup.llm_configuration_name if agent_setup else None
+    requested = (
+        (agent_configuration or {}).get("llm_selection_configuration") or {}
+    ).get("llm_configuration_name")
+    if not requested or requested == default:
+        return default
+    allowed = (agent_setup.allowed_llm_configuration_names or []) if agent_setup else []
+    return requested if requested in allowed else default
+
+
 # TODO: Think of a better way of passing the api key to RAGElo
 os.environ["OPENAI_API_KEY"] = next(
     iter(
         api_key
         for ags in asyncio.run(agent_setup_retriever.list())
-        if ags.llm_client_configuration
-        and (openai_conf := ags.llm_client_configuration.vendor_configuration.openai)
+        if (configuration := llm_configuration_for(ags))
+        and configuration.vendor_configuration
+        and (openai_conf := configuration.vendor_configuration.openai)
         and (api_key := openai_conf.openai_api_key.get_unencrypted_secret())
     ),
     "",
@@ -110,6 +139,7 @@ bootstrap = setup_bootstrap(
         agent_setup_retriever=agent_setup_retriever,
         chat_agent_class_registry=ChatAgentClassRegistry,
         agent_dependency_registry=AgentDependencyRegistry,
+        llm_configuration_store=agent_setup_retriever.llm_configuration_store,
     ),
     debug_backend=debug_storage.append,
     mcp_oauth_store=mcp_oauth_store,
@@ -678,14 +708,21 @@ def render_chat_configuration_item(
             st.json(json.dumps(agent_configuration or {}, indent=2))
 
             st.subheader("LLM model configuration")
+            effective_name = effective_llm_configuration_name(
+                chat_configuration_item.agent_setup, agent_configuration
+            )
             llm_client_configuration = (
-                chat_configuration_item.agent_setup.llm_client_configuration
+                agent_setup_retriever.llm_configuration_store.get(effective_name)
+                if effective_name
+                else None
             )
             llm_model_configuration = (
                 llm_client_configuration.model_configuration
                 if llm_client_configuration
                 else None
             )
+            st.caption("Configuration")
+            st.text(effective_name)
             st.caption("Vendor")
             st.text(
                 llm_client_configuration.vendor.value
@@ -904,9 +941,40 @@ with st.sidebar:
         )
 
     with st.expander("LLM model configuration"):
+        try:
+            edited_agent_configuration = (
+                json.loads(sel_agent_configuration) if sel_agent_configuration else {}
+            )
+        except json.JSONDecodeError:
+            edited_agent_configuration = agent_configuration
+        effective_name = effective_llm_configuration_name(
+            agent_setup, edited_agent_configuration
+        )
+        name_options = [
+            name
+            for name in agent_setup_retriever.llm_configuration_store.names()
+            if not name.startswith("__agent__:")
+        ]
+        if effective_name and effective_name not in name_options:
+            name_options.insert(0, effective_name)
+        sel_llm_configuration_name = st.selectbox(
+            "Configuration",
+            name_options,
+            index=(
+                name_options.index(effective_name)
+                if effective_name in name_options
+                else None
+            ),
+            help=(
+                "The named LLM configuration the agent runs on. "
+                "The fields below edit the selected configuration."
+            ),
+        )
         llm_client_configuration = (
-            agent_setup.llm_client_configuration
-            if agent_setup and agent_setup.llm_client_configuration
+            agent_setup_retriever.llm_configuration_store.get(
+                sel_llm_configuration_name
+            )
+            if sel_llm_configuration_name
             else None
         )
         llm_model_configuration = (
@@ -1061,28 +1129,47 @@ with st.sidebar:
     if agent_setup:
         if sel_agent_configuration:
             agent_setup.agent_configuration = json.loads(sel_agent_configuration)
-        if agent_setup.llm_client_configuration:
+        current_llm_configuration = (
+            agent_setup_retriever.llm_configuration_store.get(
+                sel_llm_configuration_name
+            )
+            if sel_llm_configuration_name
+            else None
+        )
+        if current_llm_configuration and sel_llm_configuration_name:
+            updated_llm_configuration = current_llm_configuration.copy(deep=True)
             if sel_vendor:
-                agent_setup.llm_client_configuration.vendor = LLMProviderName(
-                    sel_vendor
-                )
+                updated_llm_configuration.vendor = LLMProviderName(sel_vendor)
             if sel_name:
-                agent_setup.llm_client_configuration.model_configuration.name = sel_name
+                updated_llm_configuration.model_configuration.name = sel_name
             if sel_type:
-                agent_setup.llm_client_configuration.model_configuration.type = (
-                    LLMModelType(sel_type)
+                updated_llm_configuration.model_configuration.type = LLMModelType(
+                    sel_type
                 )
             if sel_temperature:
-                agent_setup.llm_client_configuration.model_configuration.temperature = (
+                updated_llm_configuration.model_configuration.temperature = (
                     sel_temperature
                 )
             if sel_max_tokens:
-                agent_setup.llm_client_configuration.model_configuration.max_tokens = (
-                    int(sel_max_tokens)
+                updated_llm_configuration.model_configuration.max_tokens = int(
+                    sel_max_tokens
                 )
-            agent_setup.llm_client_configuration.model_configuration.reasoning_effort = (  # noqa: E501
+            updated_llm_configuration.model_configuration.reasoning_effort = (
                 sel_reasoning_effort if sel_reasoning_effort else None
             )
+            agent_setup_retriever.llm_configuration_store.set(
+                sel_llm_configuration_name, updated_llm_configuration
+            )
+            # The picker drives the run unless the agent configuration pins a
+            # model policy, which is the stronger channel.
+            policy_name = (
+                (agent_setup.agent_configuration or {}).get(
+                    "llm_selection_configuration"
+                )
+                or {}
+            ).get("llm_configuration_name")
+            if not policy_name:
+                agent_setup.llm_configuration_name = sel_llm_configuration_name
         st.session_state.agent_setup = agent_setup
 
         safe_agent_setup_retriever.update_agent_setup(

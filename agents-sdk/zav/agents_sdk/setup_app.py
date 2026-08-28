@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         MCPOAuthIntegrationStore,
         MCPOAuthTokenClient,
     )
+    from zav.agents_sdk.domain.mcp_server_setup import MCPServerSetupRetriever
 from zav.agents_sdk.adapters.stream_buffer import StreamBufferRegistry
 from zav.agents_sdk.bootstrap import setup_bootstrap
 from zav.agents_sdk.controllers import routers as default_routers
@@ -65,6 +66,7 @@ def setup_app(
     chat_conversation_store: Optional[ChatConversationStore] = None,
     mcp_oauth_store: Optional[MCPOAuthIntegrationStore] = None,
     mcp_oauth_token_client: Optional[MCPOAuthTokenClient] = None,
+    mcp_server_setup_retriever: Optional[MCPServerSetupRetriever] = None,
 ) -> FastAPI:
     if stream_buffer_registry is None:
         stream_buffer_registry = StreamBufferRegistry()
@@ -91,11 +93,12 @@ def setup_app(
         chat_conversation_store=chat_conversation_store,
         mcp_oauth_store=mcp_oauth_store,
         mcp_oauth_token_client=mcp_oauth_token_client,
+        mcp_server_setup_retriever=mcp_server_setup_retriever,
     )
 
     app = setup_api(
         bootstrap=bootstrap,
-        routers=routers or default_routers,
+        routers=list(routers or default_routers),
         lifespans=[stream_buffer_registry_lifespan],
     )
     add_exception_handlers(app)

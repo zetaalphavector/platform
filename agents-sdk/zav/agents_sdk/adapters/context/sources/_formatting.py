@@ -59,6 +59,11 @@ def format_document_items_xml(
             document_id=item.data.get("document_id", item.id),
             doc_data=item.data,
             max_content_length=max_item_content_length,
+            extra_metadata={
+                key: item.data[key]
+                for key in ("source_url", "short_id")
+                if item.data.get(key)
+            },
         )
         for item in items
     )

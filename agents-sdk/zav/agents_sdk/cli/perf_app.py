@@ -60,6 +60,7 @@ app = setup_app(
         agent_setup_retriever=agent_setup_retriever,
         chat_agent_class_registry=ChatAgentClassRegistry,
         agent_dependency_registry=AgentDependencyRegistry,
+        llm_configuration_store=agent_setup_retriever.llm_configuration_store,
     ),
     debug_backend=logger.info,
     mcp_oauth_store=mcp_oauth_store,

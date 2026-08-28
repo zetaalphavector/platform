@@ -27,7 +27,7 @@ class DependencyGroup(Generic[T]):
 
     A concrete subclass declares the base type to collect via
     ``__collects__`` and can then be used as a constructor parameter.
-    When ``ChatAgentFactory`` encounters such a parameter, it scans the
+    When ``DependencyResolver`` encounters such a parameter, it scans the
     dependency registry for all factories whose return type is a subclass
     of ``__collects__``, resolves each one via normal DI, and wraps them
     in the group.
@@ -54,7 +54,6 @@ class AgentDependencyFactory(ABC, Generic[DEPENDENCY_PARAMS, T]):
         cls, *args: DEPENDENCY_PARAMS.args, **kwargs: DEPENDENCY_PARAMS.kwargs
     ) -> T:
         """Create an instance of the dependency. Arguments could be:
-        - llm_client_configuration matched by argument type LLMClientConfiguration
         - a typed object within agent_configuration matched by argument type
         - (un)typed key-value pairs within agent_configuration, matched by argument name
         - (un)typed key-value pairs within the handler command, matched by argument name

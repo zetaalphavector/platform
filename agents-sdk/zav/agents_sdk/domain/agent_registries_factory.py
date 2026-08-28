@@ -3,6 +3,7 @@ from typing import Optional, Protocol, Tuple
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistryProtocol
 from zav.agents_sdk.domain.agent_setup_retriever import AgentSetupRetriever
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistryProtocol
+from zav.agents_sdk.domain.llm_configuration_store import LLMConfigurationStore
 
 
 class AgentRegistriesFactory(Protocol):
@@ -11,4 +12,5 @@ class AgentRegistriesFactory(Protocol):
         AgentSetupRetriever,
         ChatAgentClassRegistryProtocol,
         Optional[AgentDependencyRegistryProtocol],
+        Optional[LLMConfigurationStore],
     ]: ...

@@ -4,6 +4,7 @@ from zav.agents_sdk.adapters.event_publishers import *
 from zav.agents_sdk.adapters.instructions import *
 from zav.agents_sdk.adapters.llm_models import *
 from zav.agents_sdk.adapters.mcp import *
+from zav.agents_sdk.adapters.mcp_server import ToolSurface, ToolSurfaceFactory
 from zav.agents_sdk.adapters.memory import *
 from zav.agents_sdk.adapters.message_processing import *
 from zav.agents_sdk.adapters.notifications import *

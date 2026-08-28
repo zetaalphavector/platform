@@ -8,7 +8,10 @@ MEMORIES_DIR = "memories"
 SPECS_DIR = "specs"
 ENV_DIR = "env"
 CONFIG_FILE = "agent_setups.json"
+MCP_CONFIG_FILE = "mcp_setups.json"
+LLM_CONFIG_FILE = "llm_configurations.json"
 SECRET_CONFIG_FILE = os.path.join(ENV_DIR, CONFIG_FILE)
+SECRET_LLM_CONFIG_FILE = os.path.join(ENV_DIR, LLM_CONFIG_FILE)
 PLATFORM_CONFIG_FILE = os.path.join(ENV_DIR, "zav_config.json")
 PROJECT_DIRS = [SKILLS_DIR, INSTRUCTIONS_DIR, MEMORIES_DIR, SPECS_DIR]
 
@@ -18,8 +21,14 @@ class ProjectConfig:
         self.project_dir = os.path.abspath(project_dir)
         self.__public_path = os.path.join(self.project_dir, CONFIG_FILE)
         self.__secret_path = os.path.join(self.project_dir, SECRET_CONFIG_FILE)
+        self.__mcp_path = os.path.join(self.project_dir, MCP_CONFIG_FILE)
+        self.__llm_path = os.path.join(self.project_dir, LLM_CONFIG_FILE)
+        self.__secret_llm_path = os.path.join(self.project_dir, SECRET_LLM_CONFIG_FILE)
         self.__public_setups: List[Dict[str, Any]] = []
         self.__secret_setups: List[Dict[str, Any]] = []
+        self.__mcp_setups: List[Dict[str, Any]] = []
+        self.__llm_configs: List[Dict[str, Any]] = []
+        self.__secret_llm_configs: List[Dict[str, Any]] = []
         self.__load()
 
     def __load(self):
@@ -29,6 +38,15 @@ class ProjectConfig:
         if os.path.isfile(self.__secret_path):
             with open(self.__secret_path, "r") as f:
                 self.__secret_setups = json.load(f)
+        if os.path.isfile(self.__mcp_path):
+            with open(self.__mcp_path, "r") as f:
+                self.__mcp_setups = json.load(f)
+        if os.path.isfile(self.__llm_path):
+            with open(self.__llm_path, "r") as f:
+                self.__llm_configs = json.load(f)
+        if os.path.isfile(self.__secret_llm_path):
+            with open(self.__secret_llm_path, "r") as f:
+                self.__secret_llm_configs = json.load(f)
 
     def save(self):
         with open(self.__public_path, "w") as f:
@@ -104,6 +122,123 @@ class ProjectConfig:
         ]
         self.save()
 
+    def save_mcp_servers(self):
+        with open(self.__mcp_path, "w") as f:
+            json.dump(self.__mcp_setups, f, indent=2)
+            f.write("\n")
+
+    def list_mcp_servers(self) -> List[Dict[str, Any]]:
+        return list(self.__mcp_setups)
+
+    def get_mcp_server(self, mcp_server_identifier: str) -> Optional[Dict[str, Any]]:
+        for setup in self.__mcp_setups:
+            if setup.get("mcp_server_identifier") == mcp_server_identifier:
+                return setup
+        return None
+
+    def add_mcp_server(self, setup: Dict[str, Any]):
+        identifier = setup["mcp_server_identifier"]
+        if self.get_mcp_server(identifier) is not None:
+            raise ProjectConfigError(f"MCP server '{identifier}' already exists")
+        self.__mcp_setups.append(setup)
+        self.save_mcp_servers()
+
+    def remove_mcp_server(self, mcp_server_identifier: str):
+        self.__mcp_setups = [
+            s
+            for s in self.__mcp_setups
+            if s.get("mcp_server_identifier") != mcp_server_identifier
+        ]
+        self.save_mcp_servers()
+
+    def save_llm_configurations(self):
+        with open(self.__llm_path, "w") as f:
+            json.dump(self.__llm_configs, f, indent=2)
+            f.write("\n")
+        os.makedirs(os.path.dirname(self.__secret_llm_path), exist_ok=True)
+        with open(self.__secret_llm_path, "w") as f:
+            json.dump(self.__secret_llm_configs, f, indent=2)
+            f.write("\n")
+
+    def list_llm_configurations(self) -> List[Dict[str, Any]]:
+        return list(self.__llm_configs)
+
+    def get_llm_configuration(self, name: str) -> Optional[Dict[str, Any]]:
+        return next((c for c in self.__llm_configs if c.get("name") == name), None)
+
+    def __get_llm_secret(self, name: str) -> Optional[Dict[str, Any]]:
+        return next(
+            (c for c in self.__secret_llm_configs if c.get("name") == name), None
+        )
+
+    def find_llm_configuration(self, vendor: str, model_name: str) -> Optional[str]:
+        for config in self.__llm_configs:
+            if (
+                config.get("vendor") == vendor
+                and config.get("model_configuration", {}).get("name") == model_name
+            ):
+                return config.get("name")
+        return None
+
+    def set_llm_configuration(
+        self,
+        name: str,
+        vendor: str,
+        model_configuration: Dict[str, Any],
+        vendor_config: Optional[Dict[str, Any]] = None,
+    ):
+        public = self.get_llm_configuration(name)
+        if public is None:
+            public = {"name": name}
+            self.__llm_configs.append(public)
+        public["vendor"] = vendor
+        public["model_configuration"] = model_configuration
+        if vendor_config:
+            secret = self.__get_llm_secret(name)
+            if secret is None:
+                secret = {"name": name}
+                self.__secret_llm_configs.append(secret)
+            secret["vendor_configuration"] = {vendor: vendor_config}
+        self.save_llm_configurations()
+
+    def get_llm_vendor_config(self, name: str, vendor: str) -> Dict[str, Any]:
+        secret = self.__get_llm_secret(name)
+        if secret:
+            return secret.get("vendor_configuration", {}).get(vendor, {})
+        return {}
+
+    def set_agent_llm_configuration(self, identifier: Optional[str], name: str):
+        agent = self.get_agent_or_default(identifier)
+        agent.pop("llm_client_configuration", None)
+        agent["llm_configuration_name"] = name
+        actual_id = agent.get("agent_identifier", identifier)
+        secret = self.get_secret(actual_id) if actual_id else None
+        if secret:
+            secret.pop("llm_client_configuration", None)
+        self.save()
+
+    def agent_llm_configuration_name(
+        self, identifier: Optional[str] = None
+    ) -> Optional[str]:
+        return self.get_agent_or_default(identifier).get("llm_configuration_name")
+
+    def resolve_agent_llm(self, identifier: Optional[str] = None) -> Dict[str, Any]:
+        # Legacy inline config wins (read back-compat); otherwise resolve the agent's
+        # named reference into a public {vendor, model_configuration} view.
+        agent = self.get_agent_or_default(identifier)
+        inline = agent.get("llm_client_configuration")
+        if inline:
+            return inline
+        name = agent.get("llm_configuration_name")
+        if name:
+            config = self.get_llm_configuration(name)
+            if config:
+                return {
+                    "vendor": config.get("vendor"),
+                    "model_configuration": config.get("model_configuration", {}),
+                }
+        return {}
+
     def get_agent_config(self, identifier: Optional[str] = None) -> Dict[str, Any]:
         agent = self.get_agent_or_default(identifier)
         return agent.get("agent_configuration", {})
@@ -128,12 +263,9 @@ class ProjectConfig:
     def get_model_config(
         self, identifier: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
-        agent = self.get_agent_or_default(identifier)
-        llm = agent.get("llm_client_configuration", {})
-        vendor = llm.get("vendor")
+        llm = self.resolve_agent_llm(identifier)
         model_cfg = llm.get("model_configuration", {})
-        model_name = model_cfg.get("name")
-        return vendor, model_name, model_cfg
+        return llm.get("vendor"), model_cfg.get("name"), model_cfg
 
     def set_model(
         self,
@@ -143,53 +275,44 @@ class ProjectConfig:
         vendor_config: Optional[Dict[str, Any]] = None,
         model_params: Optional[Dict[str, Any]] = None,
     ):
+        # Edits the named LLM configuration the agent references; a legacy or
+        # unconfigured agent is migrated onto a named config first.
         agent = self.get_agent_or_default(identifier)
-        llm = agent.setdefault("llm_client_configuration", {})
-        llm["vendor"] = vendor
-        llm.pop("vendor_configuration", None)
-        model_cfg = llm.setdefault("model_configuration", {})
-        model_cfg["name"] = model_name
-        model_cfg.setdefault("type", "chat")
-        model_cfg.setdefault("temperature", 0.0)
+        name = agent.get("llm_configuration_name")
+        if name is None:
+            name = self.find_llm_configuration(vendor, model_name) or agent.get(
+                "agent_identifier", "default"
+            )
+            self.set_agent_llm_configuration(agent.get("agent_identifier"), name)
+        existing = self.get_llm_configuration(name) or {}
+        model_configuration = dict(existing.get("model_configuration", {}))
+        model_configuration["name"] = model_name
+        model_configuration.setdefault("type", "chat")
+        model_configuration.setdefault("temperature", 0.0)
         if model_params:
             for key, value in model_params.items():
                 if value is None:
-                    model_cfg.pop(key, None)
+                    model_configuration.pop(key, None)
                 else:
-                    model_cfg[key] = value
-        if vendor_config is not None:
-            actual_id = identifier or agent.get("agent_identifier", "agent")
-            secret = self.get_secret(actual_id)
-            if secret:
-                secret.setdefault("llm_client_configuration", {})[
-                    "vendor_configuration"
-                ] = {vendor: vendor_config}
-            else:
-                self.__secret_setups.append(
-                    {
-                        "agent_identifier": actual_id,
-                        "llm_client_configuration": {
-                            "vendor_configuration": {vendor: vendor_config}
-                        },
-                    }
-                )
-            self.save()
-        else:
-            self.save()
+                    model_configuration[key] = value
+        self.set_llm_configuration(name, vendor, model_configuration, vendor_config)
 
     def get_vendor_config(
         self, vendor: str, identifier: Optional[str] = None
     ) -> Dict[str, Any]:
         agent = self.get_agent_or_default(identifier)
-        actual_id = identifier or agent.get("agent_identifier", "agent")
-        secret = self.get_secret(actual_id)
-        if secret:
-            return (
-                secret.get("llm_client_configuration", {})
-                .get("vendor_configuration", {})
-                .get(vendor, {})
-            )
-        return {}
+        if agent.get("llm_client_configuration"):  # legacy inline
+            actual_id = identifier or agent.get("agent_identifier", "agent")
+            secret = self.get_secret(actual_id)
+            if secret:
+                return (
+                    secret.get("llm_client_configuration", {})
+                    .get("vendor_configuration", {})
+                    .get(vendor, {})
+                )
+            return {}
+        name = agent.get("llm_configuration_name")
+        return self.get_llm_vendor_config(name, vendor) if name else {}
 
     def get_platform_config(self) -> Optional[Dict[str, Any]]:
         config_path = os.path.join(self.project_dir, PLATFORM_CONFIG_FILE)
