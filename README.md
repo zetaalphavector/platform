@@ -33,7 +33,9 @@ za agents dev
 
 https://github.com/user-attachments/assets/2d0b86f8-2d1e-4131-8de9-9d3d1909b631
 
+## Serve Your Tools over MCP
 
+Expose your project's tools to Claude Desktop, Cursor, or any MCP client. See the [Agents SDK README](agents-sdk/README.md) for the quick start.
 
 ## Continue Your Journey
 

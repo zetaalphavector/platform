@@ -31,6 +31,21 @@ za agents dev
 
 https://github.com/user-attachments/assets/2d0b86f8-2d1e-4131-8de9-9d3d1909b631
 
+# Serve Your Tools over MCP
+
+Expose your project's tools to Claude Desktop, Cursor, or any MCP client.
+
+```bash
+# Add an MCP server exposure
+za mcp init
+
+# Serve it and open the MCP Inspector
+za mcp dev
+
+# Wire a host to it
+za mcp install claude-desktop
+```
+
 For more detailed information and resources, check out the following:
 
 - [Tutorials](https://docs.zeta-alpha.com/gen-ai/customize/getting-started): Step-by-step tutorials to guide you through specific tasks and help you get started quickly.
