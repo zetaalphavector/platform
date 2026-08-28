@@ -6,6 +6,10 @@ from rich.console import Console
 from rich.table import Table
 from typing_extensions import Annotated
 
+from zav.agents_sdk.cli.commands.model_cmd import (
+    prompt_model_configuration,
+)
+from zav.agents_sdk.cli.project_config import ProjectConfig
 from zav.agents_sdk.cli.require import (
     require_agent,
     require_project,
@@ -20,6 +24,13 @@ from zav.agents_sdk.cli.utils import (
 console = Console()
 agent_app = typer.Typer(no_args_is_help=True)
 
+_DEFAULT_MODELS = {
+    "openai": "gpt-5.4-mini",
+    "anthropic": "claude-sonnet-4-6",
+    "azure_openai": "gpt-4.1",
+    "ollama": "llama3",
+}
+
 
 def __agent_exists_callback(agent_name_snake: str) -> str:
     console.print(f"  [yellow]Agent '{agent_name_snake}' already exists.[/]")
@@ -33,53 +44,86 @@ def __openai_key_prompt_callback(default_obscured: str) -> str:
     return typer.prompt("Enter your OpenAI API key", default=default_obscured)
 
 
-def prompt_agent_setup(
-    identifier: str,
-    *,
-    default_vendor: str = "openai",
-    default_model: Optional[str] = None,
-    skip_capabilities: bool = False,
-    existing_config: Optional[dict] = None,
-    existing_secret: Optional[dict] = None,
-    project_dir: Optional[str] = None,
-) -> tuple[dict, dict]:
+def __build_vendor_config(vendor: str, api_key: str) -> dict:
+    # Returns the vendor's inner credential dict; set_llm_configuration keys it by
+    # vendor (matching __prompt_vendor_config used by `model configure`).
+    if not api_key:
+        return {}
+    if vendor == "openai":
+        return {"openai_api_key": api_key, "openai_org": ""}
+    if vendor == "anthropic":
+        return {"anthropic_api_key": api_key}
+    if vendor == "azure_openai":
+        return {
+            "azure_openai_api_key": api_key,
+            "azure_openai_endpoint": "",
+            "azure_openai_api_version": "2024-02-15-preview",
+        }
+    return {"api_key": api_key}
+
+
+def resolve_llm_configuration(config: ProjectConfig) -> str:
+    """Pick one of the project's named LLM configurations, or prompt for a new
+    one and store it, reusing an existing entry when vendor+model already match
+    (so agents share configs)."""
+    existing = [c["name"] for c in config.list_llm_configurations() if c.get("name")]
+    while existing:
+        choice = typer.prompt(
+            f"LLM configuration ({', '.join(existing)}, or 'new')",
+            default=existing[0],
+        ).strip()
+        if choice in existing:
+            return choice
+        if choice.lower() == "new":
+            break
+        console.print(f"  [yellow]Unknown configuration '{choice}'.[/]")
     vendor = (
         typer.prompt(
             "LLM provider (openai / anthropic / azure_openai / ollama)",
-            default=default_vendor,
+            default="openai",
         )
         .strip()
         .lower()
     )
-
-    if default_model is None:
-        default_model = "gpt-5.4-mini"
-        if vendor == "anthropic":
-            default_model = "claude-sonnet-4-6"
-        elif vendor == "azure_openai":
-            default_model = "gpt-4.1"
-        elif vendor == "ollama":
-            default_model = "llama3"
-    model = typer.prompt("Model name", default=default_model)
-
-    existing_api_key = ""
-    if existing_secret:
-        vendor_cfg = existing_secret.get("llm_client_configuration", {}).get(
-            "vendor_configuration", {}
-        )
-        for v in vendor_cfg.values():
-            for k, val in v.items():
-                if "key" in k and val:
-                    existing_api_key = val
-                    break
-
-    api_key_hint = " [••••••••]" if existing_api_key else ""
+    model = typer.prompt(
+        "Model name", default=_DEFAULT_MODELS.get(vendor, "gpt-5.4-mini")
+    )
+    model_configuration = prompt_model_configuration(model)
     api_key = typer.prompt(
-        f"API key (stored in env/, never committed){api_key_hint}",
+        "API key (stored in env/, never committed)",
         hide_input=True,
         show_default=False,
-        default=existing_api_key,
+        default="",
     )
+    match = config.find_llm_configuration(vendor, model)
+    if match:
+        console.print(f"  [dim]Reusing LLM configuration '{match}'.[/]")
+        return match
+    name = (
+        "default"
+        if config.get_llm_configuration("default") is None
+        else to_snake_case(model)
+    )
+    config.set_llm_configuration(
+        name,
+        vendor,
+        model_configuration,
+        __build_vendor_config(vendor, api_key),
+    )
+    return name
+
+
+def prompt_agent_setup(
+    identifier: str,
+    config: ProjectConfig,
+    *,
+    skip_capabilities: bool = False,
+    existing_config: Optional[dict] = None,
+    existing_secret: Optional[dict] = None,
+    llm_configuration_name: Optional[str] = None,
+) -> tuple[dict, dict]:
+    if llm_configuration_name is None:
+        llm_configuration_name = resolve_llm_configuration(config)
 
     try:
         local_tz = os.readlink("/etc/localtime").split("/zoneinfo/")[-1]
@@ -229,15 +273,7 @@ def prompt_agent_setup(
     public_setup = {
         "agent_identifier": identifier,
         "agent_name": "agent",
-        "llm_client_configuration": {
-            "vendor": vendor,
-            "vendor_configuration": {},
-            "model_configuration": {
-                "name": model,
-                "type": "chat",
-                "temperature": 0.0,
-            },
-        },
+        "llm_configuration_name": llm_configuration_name,
         "agent_configuration": agent_configuration,
     }
 
@@ -248,31 +284,9 @@ def prompt_agent_setup(
         agent_configuration["base_url"] = ""
         agent_configuration["tenant"] = ""
 
-    vendor_config: dict = {}
-    if vendor == "openai" and api_key:
-        vendor_config = {"openai": {"openai_api_key": api_key, "openai_org": ""}}
-    elif vendor == "anthropic" and api_key:
-        vendor_config = {"anthropic": {"anthropic_api_key": api_key}}
-    elif vendor == "azure_openai" and api_key:
-        vendor_config = {
-            "azure_openai": {
-                "azure_openai_api_key": api_key,
-                "azure_openai_endpoint": "",
-                "azure_openai_api_version": "2024-02-15-preview",
-            }
-        }
-    elif api_key:
-        vendor_config = {vendor: {"api_key": api_key}}
-
-    secret_setup: dict = {
-        "agent_identifier": identifier,
-        "llm_client_configuration": {"vendor_configuration": vendor_config},
-    }
-
+    secret_setup: dict = {"agent_identifier": identifier}
     if tenant_config:
-        secret_setup["agent_configuration"] = {
-            "x_auth": tenant_config["x_auth"],
-        }
+        secret_setup["agent_configuration"] = {"x_auth": tenant_config["x_auth"]}
     else:
         secret_setup["agent_configuration"] = {"x_auth": ""}
 
@@ -292,6 +306,10 @@ def agent_add(
     project_dir: Annotated[
         Optional[str],
         typer.Option("--project-dir", help="Project directory."),
+    ] = None,
+    llm: Annotated[
+        Optional[str],
+        typer.Option("--llm", help="Use an existing LLM configuration by name."),
     ] = None,
 ):
     """
@@ -325,12 +343,21 @@ def agent_add(
         console.print(f"  [red]Agent '{name}' already exists[/]")
         raise typer.Exit(code=1)
 
-    public_setup, secret_setup = prompt_agent_setup(name)
+    if llm is not None and config.get_llm_configuration(llm) is None:
+        console.print(f"  [red]Unknown LLM configuration '{llm}'[/]")
+        raise typer.Exit(code=1)
+
+    public_setup, secret_setup = prompt_agent_setup(
+        name, config, llm_configuration_name=llm
+    )
     config.add_agent(public_setup, secret_setup)
 
-    vendor = public_setup["llm_client_configuration"]["vendor"]
-    model = public_setup["llm_client_configuration"]["model_configuration"]["name"]
-    console.print(f"  [green]✅ Agent '{name}' created ({vendor} / {model})[/]")
+    resolved_llm = config.resolve_agent_llm(name)
+    model = resolved_llm.get("model_configuration", {}).get("name", "?")
+    console.print(
+        f"  [green]✅ Agent '{name}' created "
+        f"({resolved_llm.get('vendor', '?')} / {model})[/]"
+    )
 
 
 @agent_app.command("list")
@@ -363,7 +390,7 @@ def agent_list(
         is_builtin = agent_name == "agent"
         agent_type = "[green]built-in[/]" if is_builtin else "[yellow]custom[/]"
         model = (
-            agent.get("llm_client_configuration", {})
+            config.resolve_agent_llm(identifier)
             .get("model_configuration", {})
             .get("name", "?")
         )
@@ -402,7 +429,7 @@ def agent_show(
 
     identifier = agent_setup.get("agent_identifier", "?")
     agent_name = agent_setup.get("agent_name", "?")
-    llm = agent_setup.get("llm_client_configuration", {})
+    llm = config.resolve_agent_llm(identifier)
 
     console.print()
     console.print(f"  [bold]Identifier:[/]  [cyan]{identifier}[/]")
@@ -464,6 +491,10 @@ def agent_configure(
         Optional[str],
         typer.Option("--agent", help="Agent identifier."),
     ] = None,
+    llm: Annotated[
+        Optional[str],
+        typer.Option("--llm", help="Point the agent at an existing LLM configuration."),
+    ] = None,
 ):
     """
     Reconfigure an existing agent (model, credentials, capabilities).
@@ -472,34 +503,33 @@ def agent_configure(
     config = require_project(project_dir)
     identifier = resolve_agent_identifier(config, agent)
 
+    if llm is not None and config.get_llm_configuration(llm) is None:
+        console.print(f"  [red]Unknown LLM configuration '{llm}'[/]")
+        raise typer.Exit(code=1)
+
     agent_setup = config.get_agent_or_default(identifier)
-    llm = agent_setup.get("llm_client_configuration", {})
     agent_cfg = agent_setup.get("agent_configuration", {})
     secret = config.get_secret(identifier) or {}
 
-    current_vendor = llm.get("vendor", "openai")
-    current_model = llm.get("model_configuration", {}).get("name")
-
     public_setup, secret_setup = prompt_agent_setup(
         identifier,
-        default_vendor=current_vendor,
-        default_model=current_model,
+        config,
         skip_capabilities=False,
         existing_config=agent_cfg,
         existing_secret=secret,
-        project_dir=project_dir,
+        llm_configuration_name=llm,
     )
 
+    name = public_setup.pop("llm_configuration_name", None)
     public_setup.pop("agent_identifier", None)
     config.update_agent(identifier, public_setup)
     config.update_secret(identifier, secret_setup)
+    if name:
+        config.set_agent_llm_configuration(identifier, name)
 
-    vendor = (
-        llm_cfg["vendor"]
-        if (llm_cfg := public_setup.get("llm_client_configuration"))
-        else current_vendor
-    )
-    model = llm_cfg["model_configuration"]["name"] if llm_cfg else current_model
+    resolved_llm = config.resolve_agent_llm(identifier)
+    model = resolved_llm.get("model_configuration", {}).get("name", "?")
     console.print(
-        f"  [green]✅ Agent '{identifier}' reconfigured ({vendor} / {model})[/]"
+        f"  [green]✅ Agent '{identifier}' reconfigured "
+        f"({resolved_llm.get('vendor', '?')} / {model})[/]"
     )

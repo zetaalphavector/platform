@@ -12,9 +12,8 @@ from typing import (
 )
 
 from typing_extensions import Literal
-from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span
-from zav.prompt_completion import ChatClientFactory, ChatCompletionClient
+from zav.prompt_completion import ChatCompletionClient
 
 from zav.agents_sdk.adapters.llm_models.chat_completion_types import (
     ChatCompletion,
@@ -38,11 +37,13 @@ from zav.agents_sdk.adapters.llm_models.chat_turn_runner import (
 from zav.agents_sdk.adapters.llm_models.context_window_manager import (
     ContextWindowManager,
 )
+from zav.agents_sdk.adapters.policies.llm_selection import LLMSelectionConfiguration
 from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyFactory,
     ResumableAgentDependency,
 )
 from zav.agents_sdk.domain.chat_message import ChatMessage
+from zav.agents_sdk.domain.llm_client_factory import LLMClientFactory, LLMNotConfigured
 from zav.agents_sdk.domain.tools import ToolsRegistry
 
 __all__ = [
@@ -378,16 +379,61 @@ class ResumableZAVChatCompletionClient(ResumableAgentDependency):
         return await self.__runner.run(request)
 
 
+class _DeferredChatCompletionClient(ChatCompletionClient):
+    """Resolves the LLM selection on first use, so building the ZAV client
+    never requires a resolvable selection (tool listing must succeed with no
+    LLM in scope)."""
+
+    def __init__(self, builder: Callable[[], ChatCompletionClient]):
+        self.__builder = builder
+        self.__client: Optional[ChatCompletionClient] = None
+
+    @classmethod
+    def from_configuration(
+        cls,
+        vendor_configuration,
+        model_configuration,
+        span: Optional[Span] = None,
+    ) -> ChatCompletionClient:
+        raise NotImplementedError
+
+    async def complete(self, request, stream=False):
+        if self.__client is None:
+            self.__client = self.__builder()
+        return await self.__client.complete(request, stream=stream)
+
+
+def _deferred_chat_completion_client(
+    llm_client_factory: Optional[LLMClientFactory],
+    llm_selection_configuration: LLMSelectionConfiguration,
+    span: Optional[Span],
+) -> ChatCompletionClient:
+    def build() -> ChatCompletionClient:
+        if llm_client_factory is None:
+            raise LLMNotConfigured("No LLM client factory in scope.")
+        return llm_client_factory.create_chat_completion_client(
+            requested=llm_selection_configuration.llm_configuration_name,
+            span=span,
+        )
+
+    return _DeferredChatCompletionClient(build)
+
+
 class ZAVChatCompletionClientFactory(AgentDependencyFactory):
     @classmethod
     def create(
         cls,
-        config: LLMClientConfiguration,
         context_window_manager: ContextWindowManager,
+        llm_client_factory: Optional[LLMClientFactory] = None,
+        llm_selection_configuration: LLMSelectionConfiguration = (
+            LLMSelectionConfiguration()
+        ),
         max_nesting_level: int = 20,
         span: Optional[Span] = None,
     ) -> ZAVChatCompletionClient:
-        chat_completion_client = ChatClientFactory.create(config, span=span)
+        chat_completion_client = _deferred_chat_completion_client(
+            llm_client_factory, llm_selection_configuration, span
+        )
         return ZAVChatCompletionClient(
             chat_completion_client,
             context_window_manager=context_window_manager,
@@ -400,12 +446,17 @@ class ResumableZAVChatCompletionClientFactory(AgentDependencyFactory):
     @classmethod
     def create(
         cls,
-        config: LLMClientConfiguration,
         context_window_manager: ContextWindowManager,
+        llm_client_factory: Optional[LLMClientFactory] = None,
+        llm_selection_configuration: LLMSelectionConfiguration = (
+            LLMSelectionConfiguration()
+        ),
         max_nesting_level: int = 20,
         span: Optional[Span] = None,
     ) -> ResumableZAVChatCompletionClient:
-        chat_completion_client = ChatClientFactory.create(config, span=span)
+        chat_completion_client = _deferred_chat_completion_client(
+            llm_client_factory, llm_selection_configuration, span
+        )
         client = ZAVChatCompletionClient(
             chat_completion_client,
             context_window_manager=context_window_manager,

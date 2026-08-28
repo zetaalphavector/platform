@@ -100,6 +100,7 @@ class UserSettingsPatch(ModelNormal):
             'report_email': (bool,),  # noqa: E501
             'card_style': (CardStyleString,),  # noqa: E501
             'homepage': (HomepageString,),  # noqa: E501
+            'language': (str, none_type,),  # noqa: E501
             'index_clusters': (IndexClusters,),  # noqa: E501
             'affiliation': (str, none_type,),  # noqa: E501
         }
@@ -119,6 +120,7 @@ class UserSettingsPatch(ModelNormal):
         'report_email': 'report_email',  # noqa: E501
         'card_style': 'card_style',  # noqa: E501
         'homepage': 'homepage',  # noqa: E501
+        'language': 'language',  # noqa: E501
         'index_clusters': 'index_clusters',  # noqa: E501
         'affiliation': 'affiliation',  # noqa: E501
     }
@@ -173,6 +175,7 @@ class UserSettingsPatch(ModelNormal):
             report_email (bool): [optional]  # noqa: E501
             card_style (CardStyleString): [optional]  # noqa: E501
             homepage (HomepageString): [optional]  # noqa: E501
+            language (str, none_type): [optional]  # noqa: E501
             index_clusters (IndexClusters): [optional]  # noqa: E501
             affiliation (str, none_type): [optional]  # noqa: E501
         """
@@ -265,6 +268,7 @@ class UserSettingsPatch(ModelNormal):
             report_email (bool): [optional]  # noqa: E501
             card_style (CardStyleString): [optional]  # noqa: E501
             homepage (HomepageString): [optional]  # noqa: E501
+            language (str, none_type): [optional]  # noqa: E501
             index_clusters (IndexClusters): [optional]  # noqa: E501
             affiliation (str, none_type): [optional]  # noqa: E501
         """

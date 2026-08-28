@@ -105,6 +105,7 @@ class UserSettings(ModelNormal):
             'index_clusters': (IndexClusters,),  # noqa: E501
             'affiliation': (str, none_type,),  # noqa: E501
             'homepage': (HomepageString,),  # noqa: E501
+            'language': (str, none_type,),  # noqa: E501
         }
 
     @cached_property
@@ -125,6 +126,7 @@ class UserSettings(ModelNormal):
         'index_clusters': 'index_clusters',  # noqa: E501
         'affiliation': 'affiliation',  # noqa: E501
         'homepage': 'homepage',  # noqa: E501
+        'language': 'language',  # noqa: E501
     }
 
     read_only_vars = {
@@ -182,6 +184,7 @@ class UserSettings(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             homepage (HomepageString): [optional]  # noqa: E501
+            language (str, none_type): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -288,6 +291,7 @@ class UserSettings(ModelNormal):
                                 through its discriminator because we passed in
                                 _visited_composed_classes = (Animal,)
             homepage (HomepageString): [optional]  # noqa: E501
+            language (str, none_type): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

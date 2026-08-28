@@ -11,6 +11,7 @@ from typing_extensions import Annotated
 from zav.agents_sdk.cli.require import (
     require_agent,
     require_project,
+    resolve_any_project_dir,
     resolve_project_dir,
 )
 from zav.agents_sdk.cli.source_aliases import (
@@ -399,7 +400,6 @@ def __do_settings(provider_name, prov_key, display, project_dir, agent):
 
 
 def __do_add_source(provider_name, project_dir, name):
-    require_project(project_dir)
     dependencies_dir = init_dependencies(project_dir)
 
     def file_exists_callback(existing: str) -> str:
@@ -525,7 +525,7 @@ def make_provider_app(provider_name: str) -> typer.Typer:
         ] = None,
     ):
         """Scaffold a new custom source."""
-        project_dir = resolve_project_dir(project_dir)
+        project_dir = resolve_any_project_dir(project_dir)
         __do_add_source(provider_name, project_dir, name)
 
     return app

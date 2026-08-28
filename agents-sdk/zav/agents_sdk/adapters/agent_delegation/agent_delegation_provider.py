@@ -117,6 +117,14 @@ class AgentDelegationProviderConfiguration(BaseModel):
             "When set, verbose is ignored for the tool description."
         ),
     )
+    allow_llm_selection: bool = Field(
+        False,
+        description=(
+            "Let the delegating agent pick the target agent's LLM by name "
+            "(within the target's allowed names). Overridable per delegable "
+            "agent via DelegableAgent.allow_llm_selection."
+        ),
+    )
 
 
 class AgentDelegationProvider:
@@ -131,6 +139,7 @@ class AgentDelegationProvider:
         tool_description: Optional[str],
         include_sources: Optional[Set[str]] = None,
         exclude_sources: Optional[Set[str]] = None,
+        allow_llm_selection: bool = False,
     ):
         self.__agent_creator = agent_creator
         self.__delegable_agents_sources = delegable_agents_sources
@@ -141,6 +150,7 @@ class AgentDelegationProvider:
         self.__tool_description = tool_description
         self.__include_sources = include_sources
         self.__exclude_sources = exclude_sources
+        self.__allow_llm_selection = allow_llm_selection
         self.__resolved: Optional[Dict[str, List[DelegableAgent]]] = None
 
     async def describe_loaded(self) -> Dict[str, Any]:
@@ -221,18 +231,39 @@ class AgentDelegationProvider:
             f"- `{a.name}`: {a.description}" for a in delegable_agents
         )
 
-        async def execute(agent: str, prompt: str, description: str):
+        def llm_selection_allowed(agent: DelegableAgent) -> bool:
+            if agent.allow_llm_selection is not None:
+                return agent.allow_llm_selection
+            return self.__allow_llm_selection
+
+        any_llm_selection = any(llm_selection_allowed(a) for a in delegable_agents)
+
+        async def execute(
+            agent: str,
+            prompt: str,
+            description: str,
+            llm_configuration_name: Optional[str] = None,
+        ):
             target = agents_by_alias.get(agent)
             if target is None:
                 available = ", ".join(agent_names)
                 return f"Unknown agent '{agent}'. Available agents: {available}"
+
+            bot_params = target.bot_params
+            if llm_configuration_name and llm_selection_allowed(target):
+                bot_params = {
+                    **(bot_params or {}),
+                    "llm_selection_configuration": {
+                        "llm_configuration_name": llm_configuration_name
+                    },
+                }
 
             try:
                 child = await run_sub_agent(
                     agent_creator=self.__agent_creator,
                     target_identifier=target.agent_identifier,
                     prompt=prompt,
-                    bot_params=target.bot_params,
+                    bot_params=bot_params,
                 )
             except ValueError as exc:
                 if str(exc).startswith("Unknown agent:"):
@@ -286,6 +317,14 @@ class AgentDelegationProvider:
             },
             "required": ["agent", "description", "prompt"],
         }
+        if any_llm_selection:
+            parameters_spec["properties"]["llm_configuration_name"] = {
+                "type": "string",
+                "description": (
+                    "Optional named LLM configuration for the target agent "
+                    "(one its setup allows)."
+                ),
+            }
 
         return Tool(
             name="delegate",
@@ -346,5 +385,8 @@ class AgentDelegationProviderFactory(AgentDependencyFactory):
                 set(agent_delegation_provider_configuration.exclude_sources)
                 if agent_delegation_provider_configuration.exclude_sources
                 else None
+            ),
+            allow_llm_selection=(
+                agent_delegation_provider_configuration.allow_llm_selection
             ),
         )

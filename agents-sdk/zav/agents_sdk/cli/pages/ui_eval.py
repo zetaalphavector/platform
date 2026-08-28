@@ -42,6 +42,7 @@ from zav.agents_sdk.cli.ui_app import (
     ChatMessageItem,
     EvaluatorItem,
     agent_display_name,
+    llm_configuration_for,
     render_chat_configuration_item,
     render_entry,
     retrieve_trace_file_content,
@@ -298,8 +299,8 @@ else:
     if sel_existing_eval:
         eval_file_content = retrieve_eval_file_content(sel_existing_eval)
         for agent_conf in eval_file_content.agent_configurations:
-            if agent_conf.agent_setup.llm_client_configuration:
-                default_llm_config = agent_conf.agent_setup.llm_client_configuration
+            if configuration := llm_configuration_for(agent_conf.agent_setup):
+                default_llm_config = configuration
                 break
     if default_llm_config:
         default_llm_json = format_model_json(default_llm_config)

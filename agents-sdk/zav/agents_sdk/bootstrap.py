@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
 from zav.agents_sdk.domain.chat_agent_state_store import ChatAgentStateStore
 from zav.agents_sdk.domain.chat_conversation_store import ChatConversationStore
+from zav.agents_sdk.domain.mcp_server_setup import MCPServerSetupRetriever
 from zav.agents_sdk.handlers import CommandHandlerRegistry, EventHandlerRegistry
 
 
@@ -32,6 +33,7 @@ def setup_bootstrap(
     chat_conversation_store: Optional[ChatConversationStore] = None,
     mcp_oauth_store: Optional[MCPOAuthIntegrationStore] = None,
     mcp_oauth_token_client: Optional[MCPOAuthTokenClient] = None,
+    mcp_server_setup_retriever: Optional[MCPServerSetupRetriever] = None,
 ):
     if tracing_backend_factory:
         for tracing_vendor, tracing_backend in tracing_backend_factory.registry.items():
@@ -74,6 +76,13 @@ def setup_bootstrap(
             BootstrapDependency(
                 name="mcp_oauth_token_client",
                 value=mcp_oauth_token_client,
+            )
+        )
+    if mcp_server_setup_retriever is not None:
+        bootstrap_deps.append(
+            BootstrapDependency(
+                name="mcp_server_setup_retriever",
+                value=mcp_server_setup_retriever,
             )
         )
     if extra_bootstrap_deps is not None:

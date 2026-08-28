@@ -2,12 +2,12 @@ from typing import List, Literal, Set, get_args
 
 from zav.pydantic_compat import BaseModel, Field
 
-from zav.agents_sdk.adapters.agent_state.citation import CitationConfiguration
 from zav.agents_sdk.adapters.instructions.instruction_source import InstructionSource
+from zav.agents_sdk.adapters.policies.citation import CitationConfiguration
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 
 CitationStrategy = Literal["inline_url", "short_id", "deferred", "sup_numeric"]
-CitableResource = Literal["search_results", "documents", "tags"]
+CitableResource = Literal["search_results", "context", "documents", "tags"]
 
 _INLINE_URL_CITATION_INSTRUCTIONS: dict[CitableResource, str] = {
     "search_results": (
@@ -15,6 +15,14 @@ _INLINE_URL_CITATION_INSTRUCTIONS: dict[CitableResource, str] = {
         "in this format:\n"
         '[[N]](source_url "relevant text extract")\n'
         "where N is a sequential number starting from 1."
+    ),
+    "context": (
+        "Documents and sources provided to you in the conversation context "
+        "(for example, the documents the user is currently viewing) are cited "
+        "the same way as search results, using their `source_url` field:\n"
+        '[[N]](source_url "relevant text extract")\n'
+        "Do not use a plain link; a citation must use the [[N]](...) form to be "
+        "shown as a reference."
     ),
     "documents": (
         "When you want to refer to a document, use a markdown link with its "

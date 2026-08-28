@@ -259,6 +259,7 @@ async def handle_create(
         agent_setup_retriever,
         chat_agent_class_registry,
         agent_dependency_registry,
+        llm_configuration_store,
     ) = await agent_registries_factory.create(tenant=cmd.tenant)
     dependency_state = None
     if cmd.stateful:
@@ -286,6 +287,7 @@ async def handle_create(
             "session_id": cmd.session_id,
         },
         agent_dependency_registry=agent_dependency_registry,
+        llm_configuration_store=llm_configuration_store,
         debug_backend=debug_backend,
         publish_event=lambda agent_event: push_event_to_queue(
             cmd, agent_event, event_publisher
@@ -399,6 +401,7 @@ async def handle_create_stream(
         agent_setup_retriever,
         chat_agent_class_registry,
         agent_dependency_registry,
+        llm_configuration_store,
     ) = await agent_registries_factory.create(tenant=cmd.tenant)
     dependency_state = None
     if cmd.stateful:
@@ -426,6 +429,7 @@ async def handle_create_stream(
             "session_id": cmd.session_id,
         },
         agent_dependency_registry=agent_dependency_registry,
+        llm_configuration_store=llm_configuration_store,
         debug_backend=debug_backend,
         publish_event=lambda agent_event: push_event_to_queue(
             cmd, agent_event, event_publisher

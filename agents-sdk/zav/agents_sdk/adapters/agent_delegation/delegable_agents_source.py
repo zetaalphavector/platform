@@ -26,6 +26,13 @@ class DelegableAgent(BaseModel):
             "the same configuration as a direct invocation."
         ),
     )
+    allow_llm_selection: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether the delegating agent may pick this agent's LLM by name. "
+            "Unset falls back to the provider's allow_llm_selection."
+        ),
+    )
 
 
 class DelegableAgentsSource(ABC):

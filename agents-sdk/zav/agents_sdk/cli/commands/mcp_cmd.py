@@ -1,4 +1,6 @@
+import asyncio
 import json
+import shlex
 from typing import Optional
 
 import typer
@@ -313,3 +315,179 @@ def mcp_settings(
     else:
         console.print()
         console.print("  [dim]No changes made[/]")
+
+
+__EXPLORE_TRANSPORT_MAP = {
+    "stdio": "stdio",
+    "sse": "http-sse",
+    "http-sse": "http-sse",
+    "http": "streamable-http",
+    "streamable-http": "streamable-http",
+}
+
+
+def __build_server_config(entry: dict):
+    from zav.agents_sdk.adapters.mcp.tools_provider import (
+        MCPServerConfig,
+        MCPServerTransportConfig,
+        SseTransportConfig,
+        StdIoTransportConfig,
+        StreamableHttpTransportConfig,
+    )
+
+    transport = __EXPLORE_TRANSPORT_MAP.get(entry.get("transport", "stdio"))
+    if transport is None:
+        raise ValueError(f"Unknown transport: {entry.get('transport')!r}")
+    name = entry.get("name") or "mcp-server"
+
+    if transport == "stdio":
+        command = entry.get("command")
+        if not command:
+            raise ValueError("stdio transport requires a --command")
+        parts = shlex.split(command)
+        transport_config = MCPServerTransportConfig(
+            stdio=StdIoTransportConfig(name=name, command=parts[0], args=parts[1:])
+        )
+    elif transport == "http-sse":
+        transport_config = MCPServerTransportConfig(
+            sse=SseTransportConfig(name=name, url=entry["url"])
+        )
+    else:
+        transport_config = MCPServerTransportConfig(
+            streamable_http=StreamableHttpTransportConfig(name=name, url=entry["url"])
+        )
+    return MCPServerConfig(transport=transport, transport_config=transport_config)
+
+
+async def __explore(entry: dict, call: Optional[str], call_args: Optional[str]) -> None:
+    # Deferred import: the adapter pulls in heavy SDK internals.
+    from zav.agents_sdk.adapters.mcp.tools_provider import (
+        MCPToolsProvider,
+        MCPToolsProviderConfiguration,
+    )
+    from zav.agents_sdk.domain.mcp_oauth import MCP_OAUTH_CONNECT_TOOL_NAME_PREFIX
+
+    server_config = __build_server_config(entry)
+    provider = MCPToolsProvider(
+        MCPToolsProviderConfiguration(
+            enabled=True,
+            servers=[server_config],
+            # This is an interactive debug tool, not the latency-sensitive chat
+            # path, so allow a slow server (e.g. a cold `npx` download) to connect.
+            client_session_timeout_seconds=30,
+        ),
+        tenant="zetaalpha",
+    )
+    try:
+        tools = await provider.get_tools()
+        real_tools = [
+            t
+            for t in tools
+            if not t.name.startswith(MCP_OAUTH_CONNECT_TOOL_NAME_PREFIX)
+        ]
+        unreachable = [
+            t for t in tools if t.name.startswith(MCP_OAUTH_CONNECT_TOOL_NAME_PREFIX)
+        ]
+
+        if not real_tools:
+            console.print(
+                f"  [red]Could not list tools for '{entry.get('name')}'.[/] "
+                "The server is unreachable or requires OAuth authorization "
+                "(not supported in explore)."
+                if unreachable
+                else f"  [yellow]'{entry.get('name')}' exposed no tools.[/]"
+            )
+            return
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Tool", style="cyan")
+        table.add_column("Description", style="dim")
+        for tool in real_tools:
+            description = (tool.description or "").strip().splitlines()
+            table.add_row(tool.name, description[0] if description else "")
+        console.print()
+        console.print(f"  [bold]{len(real_tools)} tool(s) on '{entry.get('name')}'[/]")
+        console.print(table)
+
+        for tool in real_tools:
+            console.print(f"\n  [bold cyan]{tool.name}[/] input schema:")
+            console.print(json.dumps(tool.get_parameters_spec(), indent=2))
+
+        if call:
+            target = next((t for t in real_tools if t.name == call), None)
+            if target is None:
+                console.print(f"\n  [red]Tool '{call}' not found.[/]")
+                return
+            kwargs = json.loads(call_args) if call_args else {}
+            console.print(f"\n  [bold]Calling [cyan]{call}[/] with {kwargs}[/]")
+            result = await target.executable(**kwargs)
+            console.print(result)
+    finally:
+        await provider.cleanup()
+
+
+@mcp_app.command("explore")
+def mcp_explore(
+    name: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Configured MCP server name (omit when using --url/--command)."
+        ),
+    ] = None,
+    transport: Annotated[
+        Optional[str],
+        typer.Option("--transport", "-t", help="stdio/sse/http (ad-hoc server)."),
+    ] = None,
+    url: Annotated[
+        Optional[str],
+        typer.Option("--url", help="Server URL for an ad-hoc sse/http server."),
+    ] = None,
+    command: Annotated[
+        Optional[str],
+        typer.Option("--command", help="Command for an ad-hoc stdio server."),
+    ] = None,
+    call: Annotated[
+        Optional[str],
+        typer.Option("--call", help="Tool name to invoke after listing."),
+    ] = None,
+    call_args: Annotated[
+        Optional[str],
+        typer.Option("--args", help="JSON arguments for --call."),
+    ] = None,
+    project_dir: Annotated[
+        Optional[str],
+        typer.Option("--project-dir", help="Project directory."),
+    ] = None,
+    agent: Annotated[
+        Optional[str],
+        typer.Option("--agent", help="Agent identifier."),
+    ] = None,
+):
+    """Connect to an MCP server and show the tools it exposes (and optionally call one).
+
+    Reuses the agents-sdk MCP client, so it works against any MCP server — a
+    configured one (by name) or an ad-hoc one via --url/--command.
+    """
+    entry: Optional[dict]
+    if url or command:
+        entry = {
+            "name": name or "ad-hoc",
+            "transport": transport or ("streamable-http" if url else "stdio"),
+        }
+        if url:
+            entry["url"] = url
+        if command:
+            entry["command"] = command
+    else:
+        if name is None:
+            console.print("  [red]Provide a server name, or --url/--command.[/]")
+            raise typer.Exit(code=1)
+        config = require_project(resolve_project_dir(project_dir))
+        entry = next(
+            (s for s in __get_servers(config, agent) if s.get("name") == name), None
+        )
+        if entry is None:
+            console.print(f"  [red]MCP server '{name}' not found in config.[/]")
+            raise typer.Exit(code=1)
+
+    asyncio.run(__explore(entry, call, call_args))

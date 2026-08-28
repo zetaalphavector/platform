@@ -47,6 +47,7 @@ async def run_agent_headless(
         tracing_backend_factory=TracingBackendFactory,
         trace_state_params={},
         agent_dependency_registry=AgentDependencyRegistry,
+        llm_configuration_store=agent_setup_retriever.llm_configuration_store,
     )
 
     agent = await chat_agent_factory.create(

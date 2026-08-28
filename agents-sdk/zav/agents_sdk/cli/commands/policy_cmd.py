@@ -38,10 +38,14 @@ def __get_policies() -> List[PolicyEntry]:
     if _POLICIES_CACHE is None:
         # Deferred import: adapters pull in heavy SDK internals (pydantic models,
         # LLM clients, etc.) — importing at module level adds ~2.5s to CLI startup.
-        from zav.agents_sdk.adapters.agent_state.citation import CitationConfiguration
+        from zav.agents_sdk.adapters.policies import (
+            CitationConfiguration,
+            LLMSelectionConfiguration,
+        )
 
         _POLICIES_CACHE = [
             ("citations", "citation_configuration", CitationConfiguration),
+            ("model", "llm_selection_configuration", LLMSelectionConfiguration),
         ]
     return _POLICIES_CACHE
 

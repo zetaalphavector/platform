@@ -2,6 +2,8 @@ import json
 import os
 from typing import Callable
 
+from zav.agents_sdk.cli.project_config import ENV_DIR, PROJECT_DIRS, ProjectConfig
+
 
 def to_camel_case(name: str) -> str:
     return "".join(
@@ -59,6 +61,28 @@ def init_dependencies(project_dir: str):
     dependencies_dir = os.path.join(project_dir, "dependencies")
     os.makedirs(dependencies_dir, exist_ok=True)
     return dependencies_dir
+
+
+def scaffold_project(project_dir: str, sdk_version: str):
+    """Create a minimal, agent-agnostic project skeleton (dirs + __init__.py with
+    the SDK re-export). No agent_setups.json — agents and MCP layer their own
+    config on top. Safe to call on an existing project (only fills gaps)."""
+    os.makedirs(project_dir, exist_ok=True)
+    for subdir in PROJECT_DIRS:
+        os.makedirs(os.path.join(project_dir, subdir), exist_ok=True)
+    os.makedirs(os.path.join(project_dir, ENV_DIR), exist_ok=True)
+    gitignore = os.path.join(project_dir, ".gitignore")
+    if not os.path.isfile(gitignore):
+        with open(gitignore, "w") as f:
+            f.write("env/\nmemories/\n")
+    init_file = os.path.join(project_dir, "__init__.py")
+    if not os.path.isfile(init_file):
+        with open(init_file, "w") as f:
+            f.write(
+                '"""\nGenerated using Zeta Alpha Agents SDK '
+                f'Version: {sdk_version}\n"""\n'
+                "from zav.agents_sdk.agents.agent import *  # noqa: F401,F403\n"
+            )
 
 
 def create_agent_files(
@@ -122,45 +146,22 @@ class {class_name}(StreamableChatAgent):
             yield ChatMessage.from_orm(chat_client_response.chat_completion)
 """)
 
-    # Update agent_setups.json
-    agent_setups_file = os.path.join(project_dir, "agent_setups.json")
-    with open(agent_setups_file, "r+") as f:
-        setups = json.load(f)
-        setups.append(
-            {
-                "agent_identifier": agent_name_snake,
-                "agent_name": agent_name_snake,
-                "llm_client_configuration": {
-                    "vendor": "openai",
-                    "vendor_configuration": {},
-                    "model_configuration": {
-                        "name": "gpt-5.4-mini",
-                        "type": "chat",
-                        "temperature": 0.0,
-                    },
-                },
-            }
+    # Reference a named LLM configuration, creating a shared "default" if absent.
+    config = ProjectConfig(project_dir)
+    if config.get_llm_configuration("default") is None:
+        config.set_llm_configuration(
+            "default",
+            "openai",
+            {"name": "gpt-5.4-mini", "type": "chat", "temperature": 0.0},
+            {"openai_api_key": openai_api_key, "openai_org": ""},
         )
-        f.seek(0)
-        json.dump(setups, f, indent=2)
-        f.truncate()
-
-    # Update env/agent_setups.json
-    with open(env_agent_setups_file, "r+") as f:
-        env_setups = json.load(f)
-        env_setups.append(
-            {
-                "agent_identifier": agent_name_snake,
-                "llm_client_configuration": {
-                    "vendor_configuration": {
-                        "openai": {"openai_api_key": openai_api_key, "openai_org": ""}
-                    }
-                },
-            }
-        )
-        f.seek(0)
-        json.dump(env_setups, f, indent=2)
-        f.truncate()
+    config.add_agent(
+        {
+            "agent_identifier": agent_name_snake,
+            "agent_name": agent_name_snake,
+            "llm_configuration_name": "default",
+        }
+    )
 
     return agent_name_snake
 
@@ -243,6 +244,52 @@ SOURCE_TEMPLATES = {
                 The processed result.
             """
             return f"Received: {{query}}"
+
+        return [Tool.from_callable(name="{source_name}_example", executable=example_tool)]
+''',  # noqa: E501
+    },
+    "tools_llm": {
+        "base_import": "from zav.agents_sdk.adapters.tools.tools_source import ToolsSource",  # noqa: E501
+        "extra_imports": (
+            "from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (  # noqa: E501\n"  # noqa: E501
+            "    ZAVChatCompletionClient,\n"
+            ")\n"
+            "from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender\n"  # noqa: E501
+            "from zav.agents_sdk.domain.tools import Tool"
+        ),
+        "base_class": "ToolsSource",
+        "factory_extra_params": "\n        zav_chat_completion_client: ZAVChatCompletionClient,",  # noqa: E501
+        "factory_extra_args": "\n            zav_chat_completion_client=zav_chat_completion_client,",  # noqa: E501
+        "body": '''
+    source_name = "{source_name}"
+
+    def __init__(
+        self,
+        {config_snake}_configuration: {class_name}Configuration,
+        zav_chat_completion_client: ZAVChatCompletionClient,
+    ):
+        self.enabled = {config_snake}_configuration.enabled
+        self.__chat_client = zav_chat_completion_client
+
+    async def get_tools(self) -> list:
+        async def example_tool(question: str) -> str:
+            """Ask the selected LLM one question and return its answer.
+
+            The client materializes on first use from the model policy: the
+            exposure's llm_selection_configuration, the request's
+            llm_configuration_name, or the agent's own selection.
+            """
+            try:
+                response = await self.__chat_client.complete(
+                    messages=[
+                        ChatMessage(sender=ChatMessageSender.USER, content=question)
+                    ]
+                )
+            except Exception as e:
+                return f"LLM unavailable: {{e}}"
+            if response.error is not None or response.chat_completion is None:
+                return f"LLM unavailable: {{response.error}}"
+            return response.chat_completion.content.strip()
 
         return [Tool.from_callable(name="{source_name}_example", executable=example_tool)]
 ''',  # noqa: E501
@@ -358,6 +405,8 @@ def create_source_files(
         )
 
     config_snake = source_name_snake
+    factory_extra_params = template.get("factory_extra_params", "") if template else ""
+    factory_extra_args = template.get("factory_extra_args", "") if template else ""
 
     imports = (
         "from zav.agents_sdk import AgentDependencyFactory, AgentDependencyRegistry"
@@ -382,10 +431,12 @@ class {class_name}Source({base_class}):
 class {class_name}SourceFactory(AgentDependencyFactory):
     @classmethod
     def create(
-        cls,
+        cls,{factory_extra_params}
         {config_snake}_configuration: {class_name}Configuration = {class_name}Configuration(),
     ) -> {class_name}Source:
-        return {class_name}Source({config_snake}_configuration={config_snake}_configuration)
+        return {class_name}Source(
+            {config_snake}_configuration={config_snake}_configuration,{factory_extra_args}
+        )
 
 
 AgentDependencyRegistry.register({class_name}SourceFactory)

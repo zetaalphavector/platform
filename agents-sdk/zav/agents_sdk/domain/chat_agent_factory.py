@@ -1,32 +1,21 @@
-import copy
 import inspect
-from typing import Any, Callable, Coroutine, Dict, Optional, Tuple, Type, cast, get_args
+from typing import Any, Callable, Coroutine, Dict, Optional, Tuple, Type
 
 from zav.llm_domain import LLMClientConfiguration
 from zav.llm_tracing import Span, Trace, TracingBackendFactory
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel, _BaseModel
+from zav.pydantic_compat import _BaseModel
 
-from zav.agents_sdk.domain.agent_creator import AgentCreator
 from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyRegistryProtocol,
-    DependencyGroup,
     ResumableAgentDependency,
 )
 from zav.agents_sdk.domain.agent_event import AgentEvent
-from zav.agents_sdk.domain.agent_setup_retriever import (
-    AgentSetup,
-    AgentSetupRetriever,
-    merge_dicts,
-)
+from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
 from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistryProtocol
 from zav.agents_sdk.domain.chat_request import ConversationContext
-from zav.agents_sdk.domain.utils import (
-    check_is_base_model,
-    check_is_class,
-    check_is_optional,
-)
-from zav.agents_sdk.security import _PROTECTED_HANDLER_PARAMS, sanitize_bot_params
+from zav.agents_sdk.domain.dependency_resolver import DependencyResolver
+from zav.agents_sdk.domain.llm_configuration_store import LLMConfigurationStore
 
 
 def init_span(
@@ -66,6 +55,11 @@ def init_sub_agent_span(
 
 
 class ChatAgentFactory:
+    """Creates configured agents. Dependency resolution itself lives in
+    DependencyResolver; the factory supplies the two agent-shaped concerns the
+    resolver delegates back: agent creation (the AgentCreation seam) and
+    resumable-state tracking (the resolution hook)."""
+
     def __init__(
         self,
         agent_setup_retriever: AgentSetupRetriever,
@@ -73,6 +67,7 @@ class ChatAgentFactory:
         tracing_backend_factory: Type[TracingBackendFactory],
         trace_state_params: Dict[str, Any],
         agent_dependency_registry: Optional[AgentDependencyRegistryProtocol] = None,
+        llm_configuration_store: Optional[LLMConfigurationStore] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         publish_event: Optional[
             Callable[[AgentEvent], Coroutine[None, None, None]]
@@ -85,13 +80,18 @@ class ChatAgentFactory:
         self.__chat_agent_class_registry = chat_agent_class_registry
         self.__tracing_backend_factory = tracing_backend_factory
         self.__trace_state_params = trace_state_params
-        self.__agent_dependency_registry = agent_dependency_registry
         self.__debug_backend = debug_backend
         self.__publish_event = publish_event
         self.__message_id = message_id
         self.__session_id = session_id
         self.__dependency_state = dependency_state
         self.__resumable_dependencies: Dict[str, ResumableAgentDependency] = {}
+        self.__resolver = DependencyResolver(
+            dependency_registry=agent_dependency_registry,
+            agent_creation=self,
+            on_dependency_resolved=self.__track_resumable_dependency,
+            llm_configuration_store=llm_configuration_store,
+        )
         self.agent_setup: Optional[AgentSetup] = None
 
     def __dependency_state_key(
@@ -153,324 +153,27 @@ class ChatAgentFactory:
             for dependency in self.__resumable_dependencies.values()
         )
 
-    async def __parse_sub_agent(
-        self,
-        has_default: bool,
-        is_optional: bool,
-        sub_agent_identifier: str,
-        param_default: Any,
-        handler_params: Dict[str, Any],
-        conversation_context: Optional[ConversationContext] = None,
-        span: Optional[Span] = None,
-        track_resumable: bool = True,
-    ):
-        try:
-            return await self.create(
-                agent_identifier=sub_agent_identifier,
-                handler_params=handler_params,
-                conversation_context=conversation_context,
-                span=init_sub_agent_span(
-                    span=span, agent_identifier=sub_agent_identifier
-                ),
-                track_resumable=track_resumable,
-            )
-        except ValueError as e:
-            if has_default:
-                return param_default
-            elif is_optional:
-                return None
-            else:
-                raise e
-
-    def __parse_agent_configuration(
-        self,
-        param_name: str,
-        has_default: bool,
-        is_optional: bool,
-        is_not_annotated: bool,
-        is_base_model: bool,
-        param_default: Any,
-        param_annotation: BaseModel,
-        handler_params: Dict[str, Any],
-        agent_setup: Optional[AgentSetup] = None,
-    ):
-        agent_configuration = (
-            agent_setup.agent_configuration
-            if agent_setup and agent_setup.agent_configuration
-            else {}
-        )
-        is_param_missing = param_name not in agent_configuration
-        is_protected_handler_param = (
-            param_name in _PROTECTED_HANDLER_PARAMS and param_name in handler_params
-        )
-
-        if is_protected_handler_param:
-            param_value = handler_params[param_name]
-        elif is_param_missing:
-            if param_name in handler_params:
-                param_value = handler_params[param_name]
-            elif has_default:
-                return param_default
-            else:
-                raise ValueError(f"Missing value for required parameter: {param_name}")
-        else:
-            # Agent configuration found in the AgentSetup should take precedence over
-            # any runtime overrides (handler_params) to avoid accidental or malicious
-            # configuration tampering. Runtime-provided values are only used to fill
-            # in missing fields.
-            config_value = agent_configuration[param_name]
-            param_value = config_value
-            if (
-                param_name in handler_params
-                and isinstance(handler_params[param_name], dict)
-                and isinstance(config_value, dict)
-            ):
-                # Perform a deep merge so nested dictionaries are combined while
-                # ensuring agent configuration values take precedence.
-                merged = copy.deepcopy(handler_params[param_name])
-                merge_dicts(merged, config_value)
-                param_value = merged
-        if param_value is None:
-            if is_optional:
-                # The arg is optional and the value is None so we return None
-                return None
-            else:
-                # The arg is not optional and the value is None so we raise an error
-                raise ValueError(f"Missing value for required parameter: {param_name}")
-        if is_not_annotated:
-            # The arg is not typed so we return the value as is
-            return param_value
-        elif is_base_model:
-            # Try to parse the value as a Pydantic model
-            if isinstance(param_value, dict):
-                if PYDANTIC_V2:
-                    return param_annotation.model_validate(param_value)
-                else:
-                    return param_annotation.parse_obj(param_value)
-            elif isinstance(param_value, str):
-                if PYDANTIC_V2:
-                    return param_annotation.model_validate_json(param_value)
-                else:
-                    return param_annotation.parse_raw(param_value)
-            elif isinstance(param_value, _BaseModel):
-                if PYDANTIC_V2:
-                    return param_annotation.model_validate(param_value)
-                else:
-                    return param_annotation.from_orm(param_value)
-            else:
-                raise ValueError(
-                    f"Unsupported type for {param_name}: {type(param_value)}"
-                )
-        else:
-            # We assume this is a value that can be directly passed
-            return param_value
-
-    async def __parse_value(
+    async def create_agent(
         self,
         agent_identifier: str,
-        param: inspect.Parameter,
-        param_name: str,
         handler_params: Dict[str, Any],
         conversation_context: Optional[ConversationContext] = None,
-        agent_setup: Optional[AgentSetup] = None,
-        span: Optional[Span] = None,
-        resolution_cache: Optional[Dict[type, Any]] = None,
-        dependency_path: Tuple[str, ...] = (),
+        parent_span: Optional[Span] = None,
+        extra_agent_kwargs: Optional[Dict[str, Any]] = None,
         track_resumable: bool = True,
-    ) -> Optional[Any]:
-        param_annotation = param.annotation
-        is_optional = check_is_optional(param_annotation)
-        if is_optional:
-            param_annotation = next(
-                annotation
-                for annotation in get_args(param_annotation)
-                if annotation is not type(None)  # noqa: E721
-            )
-        is_class = check_is_class(param_annotation)
-        # Parse AgentCreator
-        if is_class and issubclass(param_annotation, AgentCreator):
-
-            async def agent_factory(
-                factory_agent_identifier: str,
-                bot_params: Dict[str, Any],
-                factory_conversation_context: Optional[ConversationContext] = None,
-                extra_agent_kwargs: Optional[Dict[str, Any]] = None,
-            ):
-                # Agents spawned at runtime through an AgentCreator (the task and
-                # delegate tools) run isolated and stateless: a fresh context that
-                # returns only a text result. Their resumable dependencies are
-                # therefore not tracked or persisted into the parent turn's keyspace,
-                # which also stops repeated spawns of the same agent_identifier from
-                # colliding on the shared per-factory state key. Durable per-sub-agent
-                # resume (each sub-agent owning its own factory and state namespace) is
-                # intentionally deferred.
-                return await self.create(
-                    agent_identifier=factory_agent_identifier,
-                    handler_params={
-                        **handler_params,
-                        **sanitize_bot_params(bot_params),
-                    },
-                    conversation_context=factory_conversation_context,
-                    span=init_sub_agent_span(
-                        span=span, agent_identifier=factory_agent_identifier
-                    ),
-                    extra_agent_kwargs=extra_agent_kwargs,
-                    track_resumable=False,
-                )
-
-            return AgentCreator(
-                agent_factory=agent_factory, default_agent_identifier=agent_identifier
-            )
-        # Parse agent dependency
-        if self.__agent_dependency_registry and is_class:
-            agent_dependency = self.__agent_dependency_registry.get(param_annotation)
-            if agent_dependency:
-                is_singleton = getattr(agent_dependency, "__singleton__", False)
-                if (
-                    is_singleton
-                    and resolution_cache is not None
-                    and param_annotation in resolution_cache
-                ):
-                    return resolution_cache[param_annotation]
-                # The agent dependency needs to be inspected and initialized
-                agent_dependency_params = inspect.signature(
-                    agent_dependency.create
-                ).parameters
-                result = agent_dependency.create(
-                    **{
-                        param_name: (
-                            await self.__parse_value(
-                                agent_identifier=agent_identifier,
-                                param=param,
-                                param_name=param_name,
-                                handler_params=handler_params,
-                                conversation_context=conversation_context,
-                                agent_setup=agent_setup,
-                                span=span,
-                                resolution_cache=resolution_cache,
-                                dependency_path=(*dependency_path, param_name),
-                                track_resumable=track_resumable,
-                            )
-                        )
-                        for param_name, param in agent_dependency_params.items()
-                        if param_name != "self"
-                    }
-                )
-                if is_singleton and resolution_cache is not None:
-                    resolution_cache[param_annotation] = result
-                if track_resumable:
-                    await self.__track_resumable_dependency(
-                        dependency_path, result, is_singleton=is_singleton
-                    )
-                return result
-        # Parse dependency group
-        if (
-            self.__agent_dependency_registry
-            and is_class
-            and issubclass(param_annotation, DependencyGroup)
-            and hasattr(param_annotation, "__collects__")
-        ):
-            base_type = param_annotation.__collects__
-            factories = self.__agent_dependency_registry.get_subclasses_of(base_type)
-            items = []
-            for factory in factories:
-                factory_name = (
-                    factory.__name__
-                    if inspect.isclass(factory)
-                    else factory.__class__.__name__
-                )
-                factory_params = inspect.signature(factory.create).parameters
-                item = factory.create(
-                    **{
-                        fp_name: (
-                            await self.__parse_value(
-                                agent_identifier=agent_identifier,
-                                param=fp,
-                                param_name=fp_name,
-                                handler_params=handler_params,
-                                conversation_context=conversation_context,
-                                agent_setup=agent_setup,
-                                span=span,
-                                resolution_cache=resolution_cache,
-                                dependency_path=(
-                                    *dependency_path,
-                                    factory_name,
-                                    fp_name,
-                                ),
-                                track_resumable=track_resumable,
-                            )
-                        )
-                        for fp_name, fp in factory_params.items()
-                        if fp_name != "self"
-                    }
-                )
-                if track_resumable:
-                    await self.__track_resumable_dependency(
-                        (*dependency_path, factory_name),
-                        item,
-                        is_singleton=getattr(factory, "__singleton__", False),
-                    )
-                items.append(item)
-            return param_annotation(items=items)
-        has_default = param.default != inspect.Parameter.empty
-        # parse conversation context
-        is_conversation_context = is_class and issubclass(
-            param_annotation, ConversationContext
-        )
-        if is_conversation_context:
-            return conversation_context
-        # Parse sub agent
-        is_chat_agent = is_class and issubclass(param_annotation, ChatAgent)
-        if is_chat_agent:
-            # Retrieve agent_identifier from agent_setup
-            sub_agent_name = cast(ChatAgent, param_annotation).agent_name
-            sub_agent_identifier = sub_agent_name
-            if agent_setup and agent_setup.sub_agent_mapping:
-                sub_agent_identifier = agent_setup.sub_agent_mapping.get(
-                    sub_agent_name, sub_agent_name
-                )
-            return await self.__parse_sub_agent(
-                has_default=has_default,
-                is_optional=is_optional,
-                sub_agent_identifier=sub_agent_identifier,
-                param_default=param.default,
-                handler_params=handler_params,
-                conversation_context=conversation_context,
-                span=span,
-                track_resumable=track_resumable,
-            )
-        is_llm_client_configuration = is_class and issubclass(
-            param_annotation, LLMClientConfiguration
-        )
-        if is_llm_client_configuration:
-            if agent_setup is None:
-                if has_default:
-                    return param.default
-                if is_optional:
-                    return None
-                else:
-                    raise ValueError(
-                        f"Missing value for required parameter: {param_name}"
-                    )
-            return agent_setup.llm_client_configuration
-
-        is_span = is_class and issubclass(param_annotation, Span)
-        if is_span:
-            return span
-
-        # Parse agent configuration
-        is_not_annotated = param_annotation == inspect.Parameter.empty
-        is_base_model = is_class and check_is_base_model(param_annotation)
-        return self.__parse_agent_configuration(
-            param_name=param_name,
-            has_default=has_default,
-            is_optional=is_optional,
-            is_not_annotated=is_not_annotated,
-            is_base_model=is_base_model,
-            param_default=param.default,
-            param_annotation=cast(BaseModel, param_annotation),
+    ) -> ChatAgent:
+        """The resolver's AgentCreation seam: a dependency that demands an
+        agent (AgentCreator, sub-agent injection) gets one under a sub-agent
+        span of the requesting resolution."""
+        return await self.create(
+            agent_identifier=agent_identifier,
             handler_params=handler_params,
-            agent_setup=agent_setup,
+            conversation_context=conversation_context,
+            span=init_sub_agent_span(
+                span=parent_span, agent_identifier=agent_identifier
+            ),
+            extra_agent_kwargs=extra_agent_kwargs,
+            track_resumable=track_resumable,
         )
 
     async def create(
@@ -502,22 +205,21 @@ class ChatAgentFactory:
             agent_name=agent_setup.agent_name
         )
         agent_cls_params = inspect.signature(agent_cls).parameters
-        resolution_cache: Dict[type, Any] = {}
-        agent_cls_param_values = {
-            param_name: await self.__parse_value(
-                agent_identifier=agent_identifier,
-                param=param,
-                param_name=param_name,
-                handler_params=handler_params,
-                conversation_context=conversation_context,
-                agent_setup=agent_setup,
-                span=span,
-                resolution_cache=resolution_cache,
-                dependency_path=(agent_identifier, param_name),
-                track_resumable=track_resumable,
-            )
-            for param_name, param in agent_cls_params.items()
-        }
+        # An undeclared allowed list restricts runtime requests to the default.
+        agent_cls_param_values = await self.__resolver.resolve_parameters(
+            parameters=agent_cls_params,
+            configuration=agent_setup.agent_configuration or {},
+            handler_params=handler_params,
+            key_prefix=agent_identifier,
+            conversation_context=conversation_context,
+            span=span,
+            sub_agent_mapping=agent_setup.sub_agent_mapping,
+            default_llm_configuration_name=agent_setup.llm_configuration_name,
+            allowed_llm_configuration_names=(
+                agent_setup.allowed_llm_configuration_names or ()
+            ),
+            track_resumable=track_resumable,
+        )
         agent_instance = agent_cls(
             **{**agent_cls_param_values, **(extra_agent_kwargs or {})}
         )

@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from zav.message_bus import Command
 
@@ -42,3 +42,23 @@ class HandleMCPOAuthCallback(Command):
     state: str
     code: Optional[str] = None
     error: Optional[str] = None
+
+
+@dataclass
+class ListMCPTools(Command):
+    tenant: str
+    request_headers: RequestHeaders
+    mcp_server_identifier: Optional[str]
+    index_id: Optional[str] = None
+    llm_configuration_name: Optional[str] = None
+
+
+@dataclass
+class CallMCPTool(Command):
+    tenant: str
+    request_headers: RequestHeaders
+    mcp_server_identifier: Optional[str]
+    tool_name: str
+    arguments: Dict[str, Any]
+    index_id: Optional[str] = None
+    llm_configuration_name: Optional[str] = None
