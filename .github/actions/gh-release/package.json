@@ -34,12 +34,12 @@
     "@types/mime-types": "^3.0.1",
     "@types/node": "^20.19.25",
     "@vercel/ncc": "^0.38.4",
-    "@vitest/coverage-v8": "^4.0.13",
+    "@vitest/coverage-v8": "^4.1.12",
     "prettier": "3.6.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "typescript-formatter": "^7.2.2",
-    "vitest": "^4.0.4"
+    "vitest": "^4.1.12"
   },
   "resolutions": {
     "undici": "^6.29.1"
