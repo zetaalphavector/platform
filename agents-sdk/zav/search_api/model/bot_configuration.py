@@ -86,6 +86,7 @@ class BotConfiguration(ModelNormal):
             'bot_type': (str,),  # noqa: E501
             'bot_params': ({str: (bool, date, datetime, dict, float, int, list, str, none_type)},),  # noqa: E501
             'instructions': (str,),  # noqa: E501
+            'prompt_suggestions': ([str],),  # noqa: E501
         }
 
     @cached_property
@@ -99,6 +100,7 @@ class BotConfiguration(ModelNormal):
         'bot_type': 'bot_type',  # noqa: E501
         'bot_params': 'bot_params',  # noqa: E501
         'instructions': 'instructions',  # noqa: E501
+        'prompt_suggestions': 'prompt_suggestions',  # noqa: E501
     }
 
     read_only_vars = {
@@ -149,6 +151,7 @@ class BotConfiguration(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
             instructions (str): Optional markdown instructions shown when selecting this bot. [optional]  # noqa: E501
+            prompt_suggestions ([str]): Prompts offered as chips in an empty chat with this bot.. [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -240,6 +243,7 @@ class BotConfiguration(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             bot_params ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
             instructions (str): Optional markdown instructions shown when selecting this bot. [optional]  # noqa: E501
+            prompt_suggestions ([str]): Prompts offered as chips in an empty chat with this bot.. [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

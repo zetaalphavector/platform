@@ -34,6 +34,11 @@ class BaseClientFactory(Generic[PROMPT_COMPLETION_CLIENT]):
         return prompt_inner_wrapper
 
     @classmethod
+    def warm_up(cls) -> None:
+        for client in set(cls.registry.values()):
+            client.warm_up()
+
+    @classmethod
     def create(
         cls,
         config: LLMClientConfiguration,
@@ -45,7 +50,12 @@ class BaseClientFactory(Generic[PROMPT_COMPLETION_CLIENT]):
         if not vendor_configuration:
             raise ValueError(f"Vendor configuration not found for: {config.vendor}")
 
-        client = cls.registry[(config.vendor, config.model_configuration.type)]
+        client = cls.registry.get((config.vendor, config.model_configuration.type))
+        if client is None:
+            raise ValueError(
+                f"No {cls.__name__} client for {config.vendor.value}/"
+                f"{config.model_configuration.type.value} models."
+            )
 
         # Casting because the type checker is unable to recognize that
         # `BaseCompletionClient` is the same as `PROMPT_COMPLETION_CLIENT`.

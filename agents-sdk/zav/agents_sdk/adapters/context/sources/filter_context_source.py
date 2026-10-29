@@ -19,6 +19,7 @@ class FilterContextSourceConfiguration(BaseModel):
 class FilterContextSource(ContextSource):
 
     source_name = "filters"
+    source_description = "The search filters the user has set."
 
     def __init__(self, filter_context: Optional[FilterContext], enabled: bool):
         self.enabled = enabled

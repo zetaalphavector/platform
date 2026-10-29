@@ -21,9 +21,13 @@ def build_chat_openai(config: LLMClientConfiguration) -> ChatOpenAI:
         return ChatOpenAI(
             openai_api_key=(  # type: ignore
                 openai_config.openai_api_key.get_unencrypted_secret()
+                if openai_config.openai_api_key is not None
+                else None
             ),
             openai_organization=(  # type: ignore
                 openai_config.openai_org.get_unencrypted_secret()
+                if openai_config.openai_org is not None
+                else None
             ),
             openai_api_base=openai_config.openai_api_base,  # type: ignore
             model=config.model_configuration.name,

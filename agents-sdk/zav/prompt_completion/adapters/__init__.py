@@ -1,5 +1,6 @@
 from zav.prompt_completion.client_factories import (
     ChatClientFactory,
+    ImageClientFactory,
     PromptClientFactory,
     PromptWithLogitsClientFactory,
 )
@@ -16,6 +17,11 @@ except ImportError:
 
 try:
     from zav.prompt_completion.adapters.openai_responses_client import *
+except ImportError:
+    pass
+
+try:
+    from zav.prompt_completion.adapters.openai_image_client import *
 except ImportError:
     pass
 

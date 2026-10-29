@@ -27,6 +27,7 @@ class UserDocumentContextSource(ContextSource):
     """Resolves user document context by listing uploaded documents."""
 
     source_name = "user_documents"
+    source_description = "The user's uploaded documents."
 
     def __init__(
         self,

@@ -92,6 +92,7 @@ class DisplaySettings(ModelNormal):
             'created_by_field': (str,),  # noqa: E501
             'created_by_id_field': (str,),  # noqa: E501
             'description_field': (str,),  # noqa: E501
+            'description_template': (str,),  # noqa: E501
             'url_field': (str,),  # noqa: E501
             'source_field': (str,),  # noqa: E501
             'bounding_boxes_field': (str,),  # noqa: E501
@@ -110,6 +111,7 @@ class DisplaySettings(ModelNormal):
         'created_by_field': 'created_by_field',  # noqa: E501
         'created_by_id_field': 'created_by_id_field',  # noqa: E501
         'description_field': 'description_field',  # noqa: E501
+        'description_template': 'description_template',  # noqa: E501
         'url_field': 'url_field',  # noqa: E501
         'source_field': 'source_field',  # noqa: E501
         'bounding_boxes_field': 'bounding_boxes_field',  # noqa: E501
@@ -163,6 +165,7 @@ class DisplaySettings(ModelNormal):
             created_by_field (str): [optional]  # noqa: E501
             created_by_id_field (str): [optional]  # noqa: E501
             description_field (str): [optional]  # noqa: E501
+            description_template (str): [optional]  # noqa: E501
             url_field (str): [optional]  # noqa: E501
             source_field (str): [optional]  # noqa: E501
             bounding_boxes_field (str): [optional]  # noqa: E501
@@ -254,6 +257,7 @@ class DisplaySettings(ModelNormal):
             created_by_field (str): [optional]  # noqa: E501
             created_by_id_field (str): [optional]  # noqa: E501
             description_field (str): [optional]  # noqa: E501
+            description_template (str): [optional]  # noqa: E501
             url_field (str): [optional]  # noqa: E501
             source_field (str): [optional]  # noqa: E501
             bounding_boxes_field (str): [optional]  # noqa: E501

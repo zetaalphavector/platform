@@ -1,5 +1,6 @@
 from zav.prompt_completion.adapters import (
     ChatClientFactory,
+    ImageClientFactory,
     PromptClientFactory,
     PromptWithLogitsClientFactory,
 )
@@ -11,14 +12,20 @@ from zav.prompt_completion.client import (
     ChatMessage,
     ChatMessageSender,
     ChatResponse,
+    ContentFilterError,
     FunctionCallRequest,
     FunctionCallResponse,
+    ImageGenerationClient,
+    ImageGenerationRequest,
+    ImageGenerationResult,
+    ImageUsage,
     PromptAnswer,
     PromptAnswerWithLogits,
     PromptCompletionClient,
     PromptCompletionWithLogitsClient,
     PromptResponse,
     PromptTooLargeError,
+    RateLimitError,
     ToolCallRequest,
     ToolCallResponse,
 )

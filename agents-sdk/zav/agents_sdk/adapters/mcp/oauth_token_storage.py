@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -9,6 +9,7 @@ from zav.agents_sdk.adapters.mcp.oauth_repository import (
     MCPOAuthClientInfoRecord,
     MCPOAuthPendingAuthorization,
     MCPOAuthRepository,
+    MCPToolListing,
     MCPUserIntegrationRecord,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
@@ -19,6 +20,11 @@ class MCPOAuthConnectionState:
     server_name: str
     tokens: Optional[OAuthToken] = None
     pending: Optional[MCPOAuthPendingAuthorization] = None
+    tool_listing: Optional[MCPToolListing] = None
+    error: Optional[str] = None
+    failed_at: Optional[datetime] = None
+    disabled: bool = False
+    tool_permissions: Dict[str, str] = field(default_factory=dict)
 
 
 def _pending_expired(pending: Optional[MCPOAuthPendingAuthorization]) -> bool:
@@ -26,7 +32,14 @@ def _pending_expired(pending: Optional[MCPOAuthPendingAuthorization]) -> bool:
 
 
 def _is_empty(record: MCPUserIntegrationRecord) -> bool:
-    return record.tokens is None and record.pending is None
+    return (
+        record.tokens is None
+        and record.pending is None
+        and record.tool_listing is None
+        and record.error is None
+        and not record.disabled
+        and not record.tool_permissions
+    )
 
 
 class MCPOAuthIntegrationStore:
@@ -49,11 +62,16 @@ class MCPOAuthIntegrationStore:
                     )
                     continue
                 await self.__repository.save_user_integration(record)
-            if record.tokens or record.pending:
+            if not _is_empty(record):
                 states[record.server_name] = MCPOAuthConnectionState(
                     server_name=record.server_name,
                     tokens=record.tokens,
                     pending=record.pending,
+                    tool_listing=record.tool_listing,
+                    error=record.error,
+                    failed_at=record.failed_at,
+                    disabled=record.disabled,
+                    tool_permissions=dict(record.tool_permissions),
                 )
         return states
 
@@ -93,6 +111,10 @@ class MCPOAuthIntegrationStore:
             tenant=tenant, user_uuid=user_uuid, server_name=server_name
         )
         record.pending = pending
+        # A new authorization is a new grant: the old one was refused (or is
+        # being replaced), and what the new one lists may differ.
+        record.tokens = None
+        record.tool_listing = None
         await self.__repository.save_user_integration(record)
 
     async def save_tokens(
@@ -135,6 +157,65 @@ class MCPOAuthIntegrationStore:
         if record is None:
             return
         record.tokens = None
+        record.tool_listing = None
+        if _is_empty(record):
+            await self.__repository.delete_user_integration(
+                tenant, user_uuid, server_name
+            )
+            return
+        await self.__repository.save_user_integration(record)
+
+    async def __record(
+        self, tenant: str, user_uuid: str, server_name: str
+    ) -> MCPUserIntegrationRecord:
+        return await self.__repository.get_user_integration(
+            tenant, user_uuid, server_name
+        ) or MCPUserIntegrationRecord(
+            tenant=tenant, user_uuid=user_uuid, server_name=server_name
+        )
+
+    async def save_tool_listing(
+        self,
+        tenant: str,
+        user_uuid: str,
+        server_name: str,
+        tool_listing: MCPToolListing,
+    ) -> None:
+        record = await self.__record(tenant, user_uuid, server_name)
+        record.tool_listing = tool_listing
+        record.error = None
+        record.failed_at = None
+        await self.__repository.save_user_integration(record)
+
+    async def record_failure(
+        self, tenant: str, user_uuid: str, server_name: str, error: str
+    ) -> None:
+        record = await self.__record(tenant, user_uuid, server_name)
+        record.error = error
+        record.failed_at = datetime.now(timezone.utc)
+        await self.__repository.save_user_integration(record)
+
+    async def set_disabled(
+        self, tenant: str, user_uuid: str, server_name: str, disabled: bool
+    ) -> None:
+        record = await self.__record(tenant, user_uuid, server_name)
+        record.disabled = disabled
+        if _is_empty(record):
+            await self.__repository.delete_user_integration(
+                tenant, user_uuid, server_name
+            )
+            return
+        await self.__repository.save_user_integration(record)
+
+    async def set_tool_permissions(
+        self,
+        tenant: str,
+        user_uuid: str,
+        server_name: str,
+        tool_permissions: Dict[str, str],
+    ) -> None:
+        record = await self.__record(tenant, user_uuid, server_name)
+        record.tool_permissions = dict(tool_permissions)
         if _is_empty(record):
             await self.__repository.delete_user_integration(
                 tenant, user_uuid, server_name

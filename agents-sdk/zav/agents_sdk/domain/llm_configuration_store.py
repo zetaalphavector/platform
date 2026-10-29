@@ -1,11 +1,13 @@
 import json
 import os
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Set
 
+from zav.encryption.pydantic import EncryptedStr, resolve_secret_refs
 from zav.llm_domain import LLMClientConfiguration
 from zav.logging import logger
 
 from zav.agents_sdk.domain.agent_setup_retriever import merge_dicts
+from zav.agents_sdk.domain.secret_store import SecretStore
 
 
 class LLMConfigurationStore(Protocol):
@@ -14,6 +16,21 @@ class LLMConfigurationStore(Protocol):
     def get(self, name: str) -> Optional[LLMClientConfiguration]: ...
 
     def names(self) -> List[str]: ...
+
+
+class LLMConfigurationStoreFactory(Protocol):
+    """Where a host keeps each tenant's named LLM configurations: project files
+    for `za agents serve`, tenant settings for the hosted chat service."""
+
+    async def create(self, tenant: str) -> LLMConfigurationStore: ...
+
+
+class StaticLLMConfigurationStoreFactory:
+    def __init__(self, store: LLMConfigurationStore):
+        self.__store = store
+
+    async def create(self, tenant: str) -> LLMConfigurationStore:
+        return self.__store
 
 
 class StaticLLMConfigurationStore:
@@ -29,10 +46,17 @@ class StaticLLMConfigurationStore:
 
 class LayeredLLMConfigurationStore:
     """A mutable overlay on a base store: inline agent configurations and
-    runtime overrides live in the overlay, named entries in the base."""
+    runtime overrides live in the overlay, named entries in the base. With a
+    secret store, configurations leave with their refs resolved, as
+    Tenant.get_llm_client_config does for a tenant."""
 
-    def __init__(self, base: Optional[LLMConfigurationStore] = None):
+    def __init__(
+        self,
+        base: Optional[LLMConfigurationStore] = None,
+        secret_store: Optional[SecretStore] = None,
+    ):
         self.__base = base
+        self.__secret_store = secret_store
         self.__overrides: Dict[str, LLMClientConfiguration] = {}
 
     def set(self, name: str, configuration: LLMClientConfiguration) -> None:
@@ -40,11 +64,29 @@ class LayeredLLMConfigurationStore:
 
     def get(self, name: str) -> Optional[LLMClientConfiguration]:
         configuration = self.__overrides.get(name)
-        if configuration is not None:
+        if configuration is None and self.__base is not None:
+            configuration = self.__base.get(name)
+        if configuration is None or self.__secret_store is None:
             return configuration
-        if self.__base is not None:
-            return self.__base.get(name)
-        return None
+        return self.__resolve(configuration)
+
+    def __resolve(
+        self, configuration: LLMClientConfiguration
+    ) -> LLMClientConfiguration:
+        secret_store = self.__secret_store
+        assert secret_store is not None
+        missing: Set[str] = set()
+
+        def get_secret(name: str) -> Optional[EncryptedStr]:
+            secret = secret_store.get(name)
+            if secret is None:
+                missing.add(name)
+            return secret
+
+        resolved = resolve_secret_refs(configuration, get_secret)
+        for name in sorted(missing):
+            logger.warning(f"Secret '{name}' is not configured")
+        return resolved
 
     def names(self) -> List[str]:
         base_names = self.__base.names() if self.__base is not None else []

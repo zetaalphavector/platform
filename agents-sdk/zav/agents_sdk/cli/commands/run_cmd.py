@@ -9,7 +9,14 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from typing_extensions import Annotated
 
-from zav.agents_sdk.cli.project_config import CONFIG_FILE, ENV_DIR
+from zav.agents_sdk.cli.project_config import (
+    CONFIG_FILE,
+    ENV_DIR,
+    SECRETS_FILE,
+    ProjectConfig,
+    get_local_requester_uuid,
+    get_local_tenant,
+)
 from zav.agents_sdk.cli.require import resolve_project_dir
 
 console = Console()
@@ -27,7 +34,16 @@ async def run_agent_headless(
     # don't need them.
     from zav.llm_tracing import TracingBackendFactory
 
-    from zav.agents_sdk import AgentDependencyRegistry, AgentSetupRetrieverFromFile
+    from zav.agents_sdk import (
+        AgentDependencyRegistry,
+        AgentSetupRetrieverFromFile,
+        SecretStoreFromFile,
+    )
+    from zav.agents_sdk.cli.local_mcp_oauth import (
+        setup_local_mcp_configurations,
+        setup_local_mcp_oauth,
+    )
+    from zav.agents_sdk.cli.local_notifications import setup_local_notifications
     from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
     from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
     from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
@@ -37,9 +53,18 @@ async def run_agent_headless(
     if secret_setup_src is None:
         secret_setup_src = os.path.join(project_dir, ENV_DIR, CONFIG_FILE)
 
+    secret_store = SecretStoreFromFile(os.path.join(project_dir, SECRETS_FILE))
     agent_setup_retriever = AgentSetupRetrieverFromFile(
-        file_path=setup_src, secret_file_path=secret_setup_src
+        file_path=setup_src,
+        secret_file_path=secret_setup_src,
+        agent_configuration_defaults=ProjectConfig(
+            project_dir
+        ).platform_agent_configuration,
+        secret_store=secret_store,
     )
+    setup_local_notifications(AgentDependencyRegistry)
+    setup_local_mcp_oauth(AgentDependencyRegistry)
+    setup_local_mcp_configurations(AgentDependencyRegistry, project_dir, secret_store)
 
     chat_agent_factory = ChatAgentFactory(
         agent_setup_retriever=agent_setup_retriever,
@@ -48,11 +73,16 @@ async def run_agent_headless(
         trace_state_params={},
         agent_dependency_registry=AgentDependencyRegistry,
         llm_configuration_store=agent_setup_retriever.llm_configuration_store,
+        secret_store=secret_store,
     )
 
     agent = await chat_agent_factory.create(
         agent_identifier=agent_identifier,
-        handler_params={"request_headers": {}},
+        handler_params={
+            # The local user `za agents ui` and `mcp-servers connect` use.
+            "request_headers": {"requester_uuid": get_local_requester_uuid()},
+            "tenant": get_local_tenant(),
+        },
     )
 
     conversation = [

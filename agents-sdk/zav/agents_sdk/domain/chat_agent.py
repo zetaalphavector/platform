@@ -304,6 +304,8 @@ class ProcessorAgent(ChatAgent):
         agent_outputs: Dict[str, Any] = {}
         if conversation:
             reprs = json.loads(conversation[-1].content)
+            if "content" in reprs and isinstance(reprs["content"], str):
+                reprs["content"] = base64.b64decode(reprs["content"])
             if "pdf" in reprs and isinstance(reprs["pdf"], str):
                 reprs["pdf"] = base64.b64decode(reprs["pdf"])
             if "cad_pdf" in reprs and isinstance(reprs["cad_pdf"], str):

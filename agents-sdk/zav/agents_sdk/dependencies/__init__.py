@@ -4,6 +4,7 @@ from zav.agents_sdk.dependencies.chat_stream_recording_store import (
 from zav.agents_sdk.dependencies.chat_stream_supervision_store import (
     get_chat_stream_supervision_store,
 )
+from zav.agents_sdk.dependencies.message_inbox_store import get_message_inbox_store
 from zav.agents_sdk.dependencies.stream_buffer_registry import (
     get_stream_buffer_registry,
 )
@@ -11,5 +12,6 @@ from zav.agents_sdk.dependencies.stream_buffer_registry import (
 __all__ = [
     "get_chat_stream_recording_store",
     "get_chat_stream_supervision_store",
+    "get_message_inbox_store",
     "get_stream_buffer_registry",
 ]

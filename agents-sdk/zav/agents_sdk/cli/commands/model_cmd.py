@@ -5,7 +5,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import Annotated
-from zav.llm_domain import LLMModelConfiguration
+from zav.llm_domain import (
+    ImageQuality,
+    ImageSettings,
+    LLMClientConfiguration,
+    LLMModelConfiguration,
+)
+from zav.pydantic_compat import ValidationError
 
 from zav.agents_sdk.cli.project_config import ProjectConfig
 from zav.agents_sdk.cli.require import (
@@ -14,7 +20,7 @@ from zav.agents_sdk.cli.require import (
     resolve_any_project_dir,
     resolve_project_dir,
 )
-from zav.agents_sdk.cli.source_aliases import infer_vendor
+from zav.agents_sdk.cli.source_aliases import infer_model_type, infer_vendor
 
 console = Console()
 
@@ -22,7 +28,6 @@ console = Console()
 VENDOR_REQUIRED_FIELDS: Dict[str, Dict[str, str]] = {
     "openai": {
         "openai_api_key": "OpenAI API key",
-        "openai_org": "OpenAI organization ID",
     },
     "anthropic": {
         "anthropic_api_key": "Anthropic API key",
@@ -44,6 +49,7 @@ VENDOR_REQUIRED_FIELDS: Dict[str, Dict[str, str]] = {
 
 VENDOR_OPTIONAL_FIELDS: Dict[str, Dict[str, str]] = {
     "openai": {
+        "openai_org": "OpenAI organization ID",
         "openai_api_base": "API base URL override",
     },
     "anthropic": {
@@ -98,6 +104,12 @@ def __parse_value(raw: str) -> Any:
         return raw
 
 
+def __display_credential(field: str, value: Any) -> str:
+    if field.endswith("_ref"):
+        return f"secret {value}"
+    return "••••••••" if __is_sensitive(field) else str(value)
+
+
 def __is_sensitive(field: str) -> bool:
     return any(s in field for s in ("key", "secret", "token"))
 
@@ -108,16 +120,22 @@ def __mask_hint(field: str, value: str) -> str:
     return f" [{value}]"
 
 
-def __prompt_field(label: str, field: str, current: Optional[str] = None) -> str:
-    hint = __mask_hint(field, current) if current else ""
+def __prompt_field(
+    label: str, field: str, current: Optional[str] = None, ref: Optional[str] = None
+) -> str:
+    # A referenced secret is kept by pressing Enter; a typed value rotates it.
+    hint = (
+        f" [secret: {ref}]" if ref else (__mask_hint(field, current) if current else "")
+    )
     return typer.prompt(
         f"{label}{hint}",
-        default=current or "",
-        show_default=not __is_sensitive(field),
+        default="" if ref else (current or ""),
+        show_default=not __is_sensitive(field) and not ref,
+        hide_input=__is_sensitive(field),
     )
 
 
-def __prompt_vendor_config(vendor: str, existing: Dict[str, Any]) -> Dict[str, Any]:
+def prompt_vendor_config(vendor: str, existing: Dict[str, Any]) -> Dict[str, Any]:
     required = VENDOR_REQUIRED_FIELDS.get(vendor, {})
     optional = VENDOR_OPTIONAL_FIELDS.get(vendor, {})
 
@@ -132,10 +150,12 @@ def __prompt_vendor_config(vendor: str, existing: Dict[str, Any]) -> Dict[str, A
 
     for field, description in required.items():
         current = result.get(field)
-        raw = __prompt_field(f"  {field} ({description})", field, current)
+        raw = __prompt_field(
+            f"  {field} ({description})", field, current, result.get(f"{field}_ref")
+        )
         if raw:
             result[field] = raw
-        elif field not in result:
+        elif field not in result and f"{field}_ref" not in result:
             # Required fields must exist for the configuration to materialize;
             # empty is a valid value (e.g. no OpenAI organization).
             result[field] = ""
@@ -148,7 +168,10 @@ def __prompt_vendor_config(vendor: str, existing: Dict[str, Any]) -> Dict[str, A
             for field, description in auth_fields.items():
                 current = auth_cfg.get(field)
                 raw = __prompt_field(
-                    f"  {auth_type}.{field} ({description})", field, current
+                    f"  {auth_type}.{field} ({description})",
+                    field,
+                    current,
+                    auth_cfg.get(f"{field}_ref"),
                 )
                 if raw:
                     auth_cfg[field] = raw
@@ -233,7 +256,7 @@ def model_configure(
             )
 
     existing_vendor_cfg = config.get_vendor_config(vendor, identifier)
-    vendor_cfg = __prompt_vendor_config(vendor, existing_vendor_cfg)
+    vendor_cfg = prompt_vendor_config(vendor, existing_vendor_cfg)
 
     console.print()
     console.print("  [bold]Model parameters[/]")
@@ -313,11 +336,9 @@ def model_show(
             if isinstance(value, dict):
                 console.print(f"    {key}:")
                 for k, v in value.items():
-                    display = "••••••••" if "key" in k or "secret" in k else str(v)
-                    console.print(f"      {k}: {display}")
+                    console.print(f"      {k}: {__display_credential(k, v)}")
             else:
-                display = "••••••••" if "key" in key or "secret" in key else str(value)
-                console.print(f"    {key}: {display}")
+                console.print(f"    {key}: {__display_credential(key, value)}")
     elif vendor and vendor in VENDOR_REQUIRED_FIELDS and VENDOR_REQUIRED_FIELDS[vendor]:
         console.print()
         console.print(
@@ -361,12 +382,39 @@ def model_list(
 
 def prompt_model_configuration(model_name: str) -> Dict[str, Any]:
     """Reasoning models reject function tools on chat completions
-    (reasoning is on by default); they need the responses API."""
+    (reasoning is on by default); they need the responses API. Image models
+    are only reachable through the image generation tool."""
+    default_type = infer_model_type(model_name)
     model_type = (
-        typer.prompt("Model type (chat / responses)", default="chat").strip().lower()
+        typer.prompt("Model type (chat / responses / image)", default=default_type)
+        .strip()
+        .lower()
     )
     if model_type == "responses":
         return {"name": model_name, "type": "responses"}
+    if model_type == "image":
+        qualities = [quality.value for quality in ImageQuality]
+        quality = (
+            typer.prompt(
+                f"Image quality ({' / '.join(qualities)})",
+                default=ImageQuality.MEDIUM.value,
+            )
+            .strip()
+            .lower()
+        )
+        try:
+            ImageSettings(quality=quality)
+        except ValidationError:
+            console.print(
+                f"  [red]Image quality must be one of {', '.join(qualities)}, "
+                f"not {quality}[/]"
+            )
+            raise typer.Exit(code=1)
+        return {
+            "name": model_name,
+            "type": "image",
+            "image_settings": {"quality": quality},
+        }
     return {"name": model_name, "type": "chat", "temperature": 0.0}
 
 
@@ -390,7 +438,15 @@ def model_add(
     model_name = typer.prompt("Model name", default="gpt-5.4-mini")
     model_configuration = prompt_model_configuration(model_name)
     vendor = infer_vendor(model_name) or typer.prompt("Vendor")
-    vendor_cfg = __prompt_vendor_config(vendor, {})
+    try:
+        LLMClientConfiguration.parse_obj(
+            {"vendor": vendor, "model_configuration": model_configuration}
+        )
+    except ValidationError as e:
+        problems = "; ".join(str(error["msg"]) for error in e.errors())
+        console.print(f"  [red]{problems}[/]")
+        raise typer.Exit(code=1)
+    vendor_cfg = prompt_vendor_config(vendor, {})
 
     config.set_llm_configuration(
         name,

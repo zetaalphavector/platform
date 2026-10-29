@@ -6,7 +6,10 @@ from zav.pydantic_compat import BaseModel, Field, validator
 from zav.agents_sdk.adapters.registration.registration_service import (
     RegistrationService,
 )
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, streamable
 
@@ -184,7 +187,7 @@ def _build_base_prompt(
     return f"{preamble}\n\n{steps_section}\n\n{_ONBOARDING_POSTAMBLE}\n"
 
 
-class OnboardingToolsSourceConfiguration(BaseModel):
+class OnboardingToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = Field(
         False,
         description=(
@@ -226,6 +229,9 @@ class OnboardingToolsSource(ToolsSource):
     and the tool derives its step count from the list length."""
 
     source_name = "onboarding"
+    source_description = (
+        "Guide a new user through the platform and track their progress."
+    )
 
     def __init__(
         self,
@@ -233,8 +239,10 @@ class OnboardingToolsSource(ToolsSource):
         registration_service: RegistrationService,
         steps: Optional[List[OnboardingStep]] = None,
         instructions: Optional[str] = None,
+        defer_tools: Optional[bool] = None,
     ) -> None:
         self.enabled = enabled
+        self.defer_tools = defer_tools
         self.__steps = steps if steps is not None else list(DEFAULT_ONBOARDING_STEPS)
         self.__total_steps = len(self.__steps)
         self.__base_prompt = _build_base_prompt(self.__steps, instructions)
@@ -327,6 +335,7 @@ class OnboardingToolsSourceFactory(AgentDependencyFactory):
     ) -> OnboardingToolsSource:
         return OnboardingToolsSource(
             enabled=onboarding_tools_source_configuration.enabled,
+            defer_tools=onboarding_tools_source_configuration.defer_tools,
             registration_service=registration_service,
             steps=onboarding_tools_source_configuration.steps,
             instructions=onboarding_tools_source_configuration.instructions,

@@ -23,7 +23,6 @@ from zav.search_api.model_utils import (  # noqa: F401
 )
 from zav.search_api.model.document_asset_response import DocumentAssetResponse
 from zav.search_api.model.document_id_string import DocumentIdString
-from zav.search_api.model.guid_string import GUIDString
 from zav.search_api.model.generic_error import GenericError
 from zav.search_api.model.uuid_string import UUIDString
 
@@ -81,7 +80,7 @@ class DocumentAssetsApi(object):
                 },
                 'openapi_types': {
                     'guid':
-                        (GUIDString,),
+                        (DocumentIdString,),
                     'asset_type':
                         (str,),
                     'requester_uuid':
@@ -223,7 +222,7 @@ class DocumentAssetsApi(object):
         >>> result = thread.get()
 
         Args:
-            guid (GUIDString):
+            guid (DocumentIdString):
             asset_type (str): Return document asset of the specified type.
 
         Keyword Args:

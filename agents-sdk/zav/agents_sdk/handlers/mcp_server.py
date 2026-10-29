@@ -37,7 +37,10 @@ async def resolve_mcp_tool_surface(
         chat_agent_class_registry,
         agent_dependency_registry,
         llm_configuration_store,
-    ) = await agent_registries_factory.create(tenant=cmd.tenant)
+        secret_store,
+    ) = await agent_registries_factory.create(
+        tenant=cmd.tenant, request_headers=cmd.request_headers
+    )
     # The factory participates only in its true role: creating agents when a
     # tool source in the bundle demands one (e.g. the delegate/task tools).
     trace_state_params = {
@@ -56,6 +59,7 @@ async def resolve_mcp_tool_surface(
         trace_state_params=trace_state_params,
         agent_dependency_registry=agent_dependency_registry,
         llm_configuration_store=llm_configuration_store,
+        secret_store=secret_store,
     )
     # A bundle has no agent setup: the exposure's llm_selection_configuration
     # or the caller supplies the name; requests are unrestricted within the
@@ -64,6 +68,7 @@ async def resolve_mcp_tool_surface(
         dependency_registry=agent_dependency_registry,
         agent_creation=chat_agent_factory,
         llm_configuration_store=llm_configuration_store,
+        secret_store=secret_store,
     )
     return await resolver.resolve(
         ToolSurface,

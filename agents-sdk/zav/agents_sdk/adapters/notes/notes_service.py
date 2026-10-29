@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 from zav.saved_results import ApiClient, Configuration
 from zav.saved_results.apis import NotesApi
@@ -75,20 +75,21 @@ class NotesService:
         )
         return response.to_dict()
 
-    @handle_api_errors
-    async def retrieve_notes(
+    async def __filter_notes(
         self,
         note_object_type: Optional[str] = None,
         note_object_id: Optional[str] = None,
         page: Optional[int] = None,
         page_size: Optional[int] = None,
         created_by_me: Optional[bool] = None,
-    ) -> List:
+        sort_by: Optional[List[str]] = None,
+    ) -> Tuple[List, int]:
         params = {
             **({"index_id": self.__index_id} if self.__index_id else {}),
             **({"page": page} if page is not None else {}),
             **({"page_size": page_size} if page_size is not None else {}),
             **({"created_by_me": created_by_me} if created_by_me is not None else {}),
+            **({"sort_by": sort_by} if sort_by is not None else {}),
             **(
                 {"note_object_id": note_object_id} if note_object_id is not None else {}
             ),
@@ -103,8 +104,49 @@ class NotesService:
             **params,
             **self.__internal_headers,
         )
-        resp = response.to_dict().get("results", [])
-        return [item.to_dict() if hasattr(item, "to_dict") else item for item in resp]
+        data = response.to_dict()
+        results = data.get("results", [])
+        items = [
+            item.to_dict() if hasattr(item, "to_dict") else item for item in results
+        ]
+        return items, int(data.get("count", 0))
+
+    @handle_api_errors
+    async def retrieve_notes(
+        self,
+        note_object_type: Optional[str] = None,
+        note_object_id: Optional[str] = None,
+        page: Optional[int] = None,
+        page_size: Optional[int] = None,
+        created_by_me: Optional[bool] = None,
+    ) -> List:
+        items, _ = await self.__filter_notes(
+            note_object_type=note_object_type,
+            note_object_id=note_object_id,
+            page=page,
+            page_size=page_size,
+            created_by_me=created_by_me,
+        )
+        return items
+
+    @handle_api_errors
+    async def retrieve_notes_with_total_count(
+        self,
+        note_object_type: Optional[str] = None,
+        page: Optional[int] = None,
+        page_size: Optional[int] = None,
+        created_by_me: Optional[bool] = None,
+        sort_by: Optional[List[str]] = None,
+    ) -> Tuple[List, int]:
+        """A page of notes and the total match count, both from one call: the
+        count is already part of the paginated response."""
+        return await self.__filter_notes(
+            note_object_type=note_object_type,
+            page=page,
+            page_size=page_size,
+            created_by_me=created_by_me,
+            sort_by=sort_by,
+        )
 
     @handle_api_errors
     async def retrieve_note(
@@ -129,11 +171,12 @@ class NotesService:
         note_id: int,
         content: str,
     ) -> None:
-        # replace_note is a full PUT, so preserve the note's existing type and
-        # attachment (a document-note keeps its object_id instead of being
-        # detached). Sharing follows the owner-private default, as on create.
-        # retrieve_note returns object_type already as a NoteObjectType, so pass
-        # it through rather than re-wrapping it.
+        # replace_note is a full PUT, so preserve the note's existing type,
+        # attachment and sharing; an empty policy would make a shared note
+        # private. retrieve_note returns generated models (object_type is a
+        # NoteObjectType, sharing a SharingPolicy), so pass them through. The
+        # API sends non-owners an empty policy, which saved-results ignores on
+        # their PUT.
         existing = await self.retrieve_note(note_id)
         existing_object_type = existing.get("object_type")
         object_type = (
@@ -145,7 +188,7 @@ class NotesService:
             content=content,
             object_type=object_type,
             annotation_highlight=None,
-            sharing=SharingPolicy(),
+            sharing=existing.get("sharing") or SharingPolicy(),
             object_id=existing.get("object_id"),
         )
         params = {

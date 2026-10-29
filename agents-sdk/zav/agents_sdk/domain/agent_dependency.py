@@ -8,6 +8,7 @@ from typing import (
     List,
     Optional,
     Protocol,
+    Tuple,
     Type,
     TypeVar,
     Union,
@@ -94,6 +95,12 @@ class AgentDependencyRegistryProtocol(Protocol):
         self, base: type
     ) -> List[Union[Type[AgentDependencyFactory], AgentDependencyFactory]]: ...
 
+    def entries(
+        self,
+    ) -> List[
+        Tuple[type, Union[Type[AgentDependencyFactory], AgentDependencyFactory]]
+    ]: ...
+
 
 class AgentDependencyRegistry(AgentDependencyRegistryProtocol):
     registry: Dict[
@@ -118,6 +125,13 @@ class AgentDependencyRegistry(AgentDependencyRegistryProtocol):
             for return_type, factory in cls.registry.items()
             if inspect.isclass(return_type) and issubclass(return_type, base)
         ]
+
+    @classmethod
+    def entries(
+        cls,
+    ) -> List[Tuple[type, Union[Type[AgentDependencyFactory], AgentDependencyFactory]]]:
+        """Each registered factory with the type it creates."""
+        return list(cls.registry.items())
 
     @classmethod
     def register(

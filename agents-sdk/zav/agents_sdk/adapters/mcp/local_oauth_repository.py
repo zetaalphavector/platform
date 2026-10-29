@@ -10,6 +10,7 @@ from zav.agents_sdk.adapters.mcp.oauth_repository import (
     MCPOAuthClientInfoRecord,
     MCPOAuthPendingAuthorization,
     MCPOAuthRepository,
+    MCPToolListing,
     MCPUserIntegrationRecord,
 )
 from zav.agents_sdk.adapters.mcp.oauth_serialization import (
@@ -103,6 +104,26 @@ def _tokens_from_data(data: Optional[Dict[str, Any]]) -> Optional[OAuthToken]:
     )
 
 
+def _listing_to_data(listing: MCPToolListing) -> Dict[str, Any]:
+    return {
+        "fingerprint": listing.fingerprint,
+        "listed_at": _format_datetime(listing.listed_at),
+        "tools": listing.tools,
+    }
+
+
+def _listing_from_data(
+    data: Optional[Dict[str, Any]],
+) -> Optional[MCPToolListing]:
+    if not data:
+        return None
+    return MCPToolListing(
+        fingerprint=data["fingerprint"],
+        listed_at=_parse_datetime(data["listed_at"]),
+        tools=data["tools"],
+    )
+
+
 def _record_to_data(record: MCPUserIntegrationRecord) -> Dict[str, Any]:
     return {
         "tenant": record.tenant,
@@ -110,6 +131,13 @@ def _record_to_data(record: MCPUserIntegrationRecord) -> Dict[str, Any]:
         "server_name": record.server_name,
         "pending": _pending_to_data(record.pending) if record.pending else None,
         "tokens": _tokens_to_data(record.tokens) if record.tokens else None,
+        "tool_listing": (
+            _listing_to_data(record.tool_listing) if record.tool_listing else None
+        ),
+        "error": record.error,
+        "failed_at": _format_datetime(record.failed_at) if record.failed_at else None,
+        "disabled": record.disabled,
+        "tool_permissions": record.tool_permissions,
     }
 
 
@@ -124,6 +152,13 @@ def _record_from_data(
         server_name=data["server_name"],
         pending=_pending_from_data(data.get("pending")),
         tokens=_tokens_from_data(data.get("tokens")),
+        tool_listing=_listing_from_data(data.get("tool_listing")),
+        error=data.get("error"),
+        failed_at=(
+            _parse_datetime(data["failed_at"]) if data.get("failed_at") else None
+        ),
+        disabled=bool(data.get("disabled")),
+        tool_permissions=dict(data.get("tool_permissions") or {}),
     )
 
 

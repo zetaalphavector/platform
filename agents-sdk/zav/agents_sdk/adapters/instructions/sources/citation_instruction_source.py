@@ -7,14 +7,36 @@ from zav.agents_sdk.adapters.policies.citation import CitationConfiguration
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 
 CitationStrategy = Literal["inline_url", "short_id", "deferred", "sup_numeric"]
-CitableResource = Literal["search_results", "context", "documents", "tags"]
+CitableResource = Literal["search_results", "context", "documents", "tags", "memories"]
+
+_MEDIA_CITATION_INSTRUCTION = (
+    'Video and audio results (content_type "video/..." or "audio/...") describe '
+    "moments by time, usually as a range at the start of a transcript line, e.g. "
+    '"[00:19-00:26] Speaker 1: The bird flies off the branch.", sometimes as a '
+    'single time, e.g. "At 00:17 the bird lands." A citation that carries a time '
+    "opens the video or audio player at that moment. So when you cite a video or "
+    "audio file, put the time of the supporting text in the citation link after "
+    "#t=: a range as start,end, a single time as start only. For example:\n"
+    "The bird leaves the branch {range_example}\n"
+    "The bird lands {start_example}\n"
+    "Write the time only in the citation link, not in your sentence and not in "
+    "the quoted text. Only use times you actually saw. If the supporting text has "
+    "no time, cite the file without one."
+)
+
 
 _INLINE_URL_CITATION_INSTRUCTIONS: dict[CitableResource, str] = {
     "search_results": (
         "When citing search results, use the `source_url` field "
         "in this format:\n"
         '[[N]](source_url "relevant text extract")\n'
-        "where N is a sequential number starting from 1."
+        "where N is a sequential number starting from 1.\n"
+        + _MEDIA_CITATION_INSTRUCTION.format(
+            range_example=(
+                '[[1]](source_url#t=00:19,00:26 "The bird flies off the branch.")'
+            ),
+            start_example='[[2]](source_url#t=00:17 "The bird lands.")',
+        )
     ),
     "context": (
         "Documents and sources provided to you in the conversation context "
@@ -34,6 +56,14 @@ _INLINE_URL_CITATION_INSTRUCTIONS: dict[CitableResource, str] = {
         "tag id in this format:\n"
         "[{tag name}](/tags/{tag ID})."
     ),
+    "memories": (
+        "Recalled memories and memory search results are sources that can be used "
+        "to support your answers. When your answer relies on a memory, "
+        "always cite it right after that claim, using its `source_url` field:\n"
+        '[[N]](source_url "relevant text extract")\n'
+        "Do not use a plain link; a citation must use the [[N]](...) form to be "
+        "shown as a reference."
+    ),
 }
 
 _SHORT_ID_CITATION_INSTRUCTIONS: dict[CitableResource, str] = {
@@ -41,7 +71,11 @@ _SHORT_ID_CITATION_INSTRUCTIONS: dict[CitableResource, str] = {
         "When citing search results, use the `short_id` field "
         "from each result:\n"
         "[[short_id]]\n"
-        "The short_id will be resolved to a full reference automatically."
+        "The short_id will be resolved to a full reference automatically.\n"
+        + _MEDIA_CITATION_INSTRUCTION.format(
+            range_example="[[a1b2c3d4#t=00:19,00:26]]",
+            start_example="[[a1b2c3d4#t=00:17]]",
+        )
     ),
 }
 
@@ -94,7 +128,8 @@ class CitationInstructionSourceConfiguration(BaseModel):
         description=(
             "Which resource types to include citation instructions for. "
             "'search_results' is always implied by the strategy. "
-            "Add 'documents' and/or 'tags' to include linking instructions."
+            "Add 'documents', 'tags', and/or 'memories' to include linking "
+            "instructions."
         ),
     )
 
@@ -102,6 +137,7 @@ class CitationInstructionSourceConfiguration(BaseModel):
 class CitationInstructionSource(InstructionSource):
 
     source_name = "citation_instructions"
+    source_description = "How to cite sources in answers."
 
     def __init__(
         self,

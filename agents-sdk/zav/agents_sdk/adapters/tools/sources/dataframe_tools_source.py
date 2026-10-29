@@ -10,13 +10,19 @@ import matplotlib.pyplot as plt
 import polars as pl
 import seaborn as sns
 from fastexcel import CalamineCellError
+from openpyxl import load_workbook
+from openpyxl.utils import range_boundaries
+from openpyxl.worksheet.formula import ArrayFormula
 from zav.logging import logger
-from zav.pydantic_compat import BaseModel, model_validator
+from zav.pydantic_compat import BaseModel, Field, model_validator
 
 from zav.agents_sdk.adapters.async_wrapper import asyncify
 from zav.agents_sdk.adapters.retrievers.zav_retriever import ZAVRetriever
 from zav.agents_sdk.adapters.tools.sources.plotting import create_plot_image_uri
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, exclude_fields, hide, streamable
 
@@ -81,9 +87,19 @@ then use the other dataframe tools to explore and analyze it.
 you receive a text confirmation, so continue your answer after plotting.\
 """
 
+_FORMULAS_PROMPT_LINE = """
+- Dataframes hold calculated values only. To see or explain how an Excel \
+value is calculated, use `read_workbook_formulas`.\
+"""
 
-class DataFrameToolsSourceConfiguration(BaseModel):
+
+class DataFrameToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = False
+    read_workbook_formulas: bool = Field(
+        False,
+        description="Offer read_workbook_formulas: an Excel document's formulas and "
+        "defined names with their cached values.",
+    )
 
 
 def _map_dtype_to_json_type(dtype):
@@ -206,9 +222,125 @@ def _validate_plot_columns(
     return {"status": "ok"}
 
 
+_MAX_FORMULA_CELLS = 300
+
+
+def _to_json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _read_workbook_formulas(
+    content: bytes, sheet_name: Optional[str], cell_range: Optional[str]
+) -> Dict[str, Any]:
+    formulas_wb = load_workbook(io.BytesIO(content), read_only=True)
+    values_wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    try:
+        if sheet_name is not None and sheet_name not in formulas_wb.sheetnames:
+            return {
+                "status": "error",
+                "message": (
+                    f"Sheet '{sheet_name}' not found."
+                    f" Available sheets: {formulas_wb.sheetnames}"
+                ),
+            }
+        min_col, min_row, max_col, max_row = (
+            range_boundaries(cell_range) if cell_range else (None, None, None, None)
+        )
+        defined_names = [
+            {"name": name, "refers_to": defined_name.attr_text}
+            for name, defined_name in formulas_wb.defined_names.items()
+        ]
+        sheets = []
+        formulas: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        total_in_scope = 0
+        for ws in formulas_wb.worksheets:
+            defined_names.extend(
+                {"name": name, "refers_to": defined_name.attr_text, "scope": ws.title}
+                for name, defined_name in ws.defined_names.items()
+            )
+            in_scope = sheet_name is None or ws.title == sheet_name
+            is_ranged = cell_range is not None and in_scope
+            formula_count = 0
+            for row in ws.iter_rows(
+                min_row=min_row if is_ranged else None,
+                max_row=max_row if is_ranged else None,
+                min_col=min_col if is_ranged else None,
+                max_col=max_col if is_ranged else None,
+            ):
+                for cell in row:
+                    if cell.data_type != "f":
+                        continue
+                    formula_count += 1
+                    if not in_scope:
+                        continue
+                    total_in_scope += 1
+                    if total_in_scope > _MAX_FORMULA_CELLS:
+                        continue
+                    formula = (
+                        cell.value.text
+                        if isinstance(cell.value, ArrayFormula)
+                        else str(cell.value)
+                    )
+                    formulas.setdefault(ws.title, {})[cell.coordinate] = {
+                        "sheet": ws.title,
+                        "cell": cell.coordinate,
+                        "formula": formula,
+                        "cached_value": None,
+                    }
+            sheets.append(
+                {
+                    "sheet_name": ws.title,
+                    "dimensions": ws.calculate_dimension(force=True),
+                    "formula_cell_count": formula_count,
+                }
+            )
+        for title, sheet_formulas in formulas.items():
+            is_ranged = cell_range is not None
+            for row in values_wb[title].iter_rows(
+                min_row=min_row if is_ranged else None,
+                max_row=max_row if is_ranged else None,
+                min_col=min_col if is_ranged else None,
+                max_col=max_col if is_ranged else None,
+            ):
+                for cell in row:
+                    entry = sheet_formulas.get(getattr(cell, "coordinate", ""))
+                    if entry is not None:
+                        entry["cached_value"] = _to_json_value(cell.value)
+        returned = [
+            entry
+            for sheet_formulas in formulas.values()
+            for entry in sheet_formulas.values()
+        ]
+        result: Dict[str, Any] = {
+            "status": "ok",
+            "sheets": sheets,
+            "defined_names": defined_names,
+            "formulas": returned,
+            "returned_formula_count": len(returned),
+            "total_formula_count": total_in_scope,
+        }
+        if total_in_scope > len(returned):
+            result["info"] = (
+                f"Only the first {_MAX_FORMULA_CELLS} formulas are returned."
+                " Narrow the request with sheet_name and cell_range."
+            )
+        return result
+    finally:
+        formulas_wb.close()
+        values_wb.close()
+
+
 class DataFrameToolsSource(ToolsSource):
 
     source_name = "dataframe_tools"
+    source_description = (
+        "Analyse spreadsheets and tables with code: filter, aggregate and read "
+        "formulas."
+    )
 
     def __init__(
         self,
@@ -217,6 +349,7 @@ class DataFrameToolsSource(ToolsSource):
     ):
         self.__retriever = retriever
         self.__config = dataframe_tools_source_configuration
+        self.defer_tools = dataframe_tools_source_configuration.defer_tools
         self.enabled = dataframe_tools_source_configuration.enabled
         self.__dataframes: Dict[str, pl.DataFrame] = {}
         self.__stored_values: Dict[str, Any] = {}
@@ -295,11 +428,22 @@ class DataFrameToolsSource(ToolsSource):
                 name="create_correlation_heatmap",
                 executable=self.create_correlation_heatmap,
             ),
-        ]
+        ] + (
+            [
+                Tool.from_callable(
+                    name="read_workbook_formulas",
+                    executable=self.read_workbook_formulas,
+                )
+            ]
+            if self.__config.read_workbook_formulas
+            else []
+        )
 
     async def to_prompt(self) -> str:
         if not self.enabled:
             return ""
+        if self.__config.read_workbook_formulas:
+            return _SYSTEM_PROMPT_SECTION + _FORMULAS_PROMPT_LINE
         return _SYSTEM_PROMPT_SECTION
 
     async def __get_document_content_bytes(self, document_id: str) -> Optional[bytes]:
@@ -404,6 +548,55 @@ class DataFrameToolsSource(ToolsSource):
                 }
         except Exception as e:
             logger.debug(f"Error loading dataframe: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @streamable(
+        running_text="Reading formulas from the workbook...",
+        completed_text="Read workbook formulas.",
+        params_transform=hide,
+        response_transform=hide,
+    )
+    async def read_workbook_formulas(
+        self,
+        document_id: str,
+        sheet_name: Optional[str] = None,
+        cell_range: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Read the formulas of an Excel (.xlsx) document with their cached values.
+
+        Use this to explain how values are calculated, how cells and sheets
+        depend on each other, or to compare calculations. Loaded dataframes
+        only contain the calculated values, not the formulas.
+
+        Args:
+            document_id: Reference to the document.
+            sheet_name: Sheet to read formulas from. Omit to read all sheets.
+            cell_range: A1 range within sheet_name (e.g. "A1:F40" or "C:C").
+                Requires sheet_name.
+
+        Returns:
+            Dict with the sheets (dimensions, formula cell count), the
+            defined names, and up to 300 formula cells with their formula
+            and cached value. cached_value is null when the file was saved
+            without calculated values.
+        """
+        if cell_range is not None and sheet_name is None:
+            return {
+                "status": "error",
+                "message": "cell_range requires sheet_name.",
+            }
+        try:
+            workbook_bytes = await self.__get_document_content_bytes(document_id)
+            if not workbook_bytes:
+                return {
+                    "status": "error",
+                    "message": ("No content found for document_id:" f" {document_id}"),
+                }
+            return await asyncify(_read_workbook_formulas)(
+                workbook_bytes, sheet_name, cell_range
+            )
+        except Exception as e:
+            logger.debug(f"Error reading workbook formulas: {e}")
             return {"status": "error", "message": str(e)}
 
     async def __load_excel(

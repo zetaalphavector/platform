@@ -3,12 +3,13 @@ import os
 
 from zav.logging import logger
 
-from zav.agents_sdk import AgentSetupRetrieverFromFile, setup_app
+from zav.agents_sdk import AgentSetupRetrieverFromFile, SecretStoreFromFile, setup_app
 from zav.agents_sdk.adapters import AgentDependencyRegistry
 from zav.agents_sdk.adapters.agent_state import LocalFileChatAgentStateStore
 from zav.agents_sdk.adapters.local_agent_registries_factory import (
     LocalAgentRegistriesFactory,
 )
+from zav.agents_sdk.adapters.message_inbox import LocalFileMessageInboxStore
 from zav.agents_sdk.adapters.stream_buffer import (
     LocalFileChatStreamRecordingStore,
     LocalFileChatStreamSupervisionStore,
@@ -16,7 +17,11 @@ from zav.agents_sdk.adapters.stream_buffer import (
 from zav.agents_sdk.cli.load_chat_agent_factory import (
     from_string as import_chat_agent_class_registry_from_string,
 )
-from zav.agents_sdk.cli.local_mcp_oauth import setup_local_mcp_oauth
+from zav.agents_sdk.cli.local_mcp_oauth import (
+    setup_local_mcp_configurations,
+    setup_local_mcp_oauth,
+)
+from zav.agents_sdk.cli.project_config import SECRETS_FILE, ProjectConfig
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
 
 zav_project_dir = os.environ["ZAV_PROJECT_DIR"]
@@ -29,10 +34,17 @@ perf_label = os.getenv("ZAV_PERF_LABEL", "server")
 
 import_chat_agent_class_registry_from_string(zav_project_dir)
 
+secret_store = SecretStoreFromFile(os.path.join(zav_project_dir, SECRETS_FILE))
 agent_setup_retriever = AgentSetupRetrieverFromFile(
-    file_path=zav_agent_setup_src, secret_file_path=zav_secret_agent_setup_src
+    file_path=zav_agent_setup_src,
+    secret_file_path=zav_secret_agent_setup_src,
+    agent_configuration_defaults=ProjectConfig(
+        zav_project_dir
+    ).platform_agent_configuration,
+    secret_store=secret_store,
 )
 mcp_oauth_store, mcp_oauth_token_client = setup_local_mcp_oauth(AgentDependencyRegistry)
+setup_local_mcp_configurations(AgentDependencyRegistry, zav_project_dir, secret_store)
 
 # All perf servers share one on-disk state store so a turn checkpointed by one
 # server can be resumed by another. This is the file-backed stand-in for the
@@ -55,12 +67,19 @@ chat_stream_supervision_store = LocalFileChatStreamSupervisionStore(
     base_path=os.path.join(storage_path, "agent-traces", "supervision")
 )
 
+# And the conversation's inbox, so a message sent to any server reaches the
+# turn whichever server runs it.
+message_inbox_store = LocalFileMessageInboxStore(
+    base_path=os.path.join(storage_path, "agent-traces", "inbox")
+)
+
 app = setup_app(
     agent_registries_factory=LocalAgentRegistriesFactory(
         agent_setup_retriever=agent_setup_retriever,
         chat_agent_class_registry=ChatAgentClassRegistry,
         agent_dependency_registry=AgentDependencyRegistry,
         llm_configuration_store=agent_setup_retriever.llm_configuration_store,
+        secret_store=secret_store,
     ),
     debug_backend=logger.info,
     mcp_oauth_store=mcp_oauth_store,
@@ -68,6 +87,7 @@ app = setup_app(
     agent_state_store=agent_state_store,
     chat_stream_recording_store=chat_stream_recording_store,
     chat_stream_supervision_store=chat_stream_supervision_store,
+    message_inbox_store=message_inbox_store,
 )
 
 

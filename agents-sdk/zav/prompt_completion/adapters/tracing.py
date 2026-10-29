@@ -15,6 +15,7 @@ def create_span(
     functions_dict: Optional[Dict[str, Any]] = None,
     interleave_system_message: Optional[str] = None,
     span: Optional[Span] = None,
+    tool_search: Optional[str] = None,
 ) -> Optional[Span]:
     return (
         span.new(
@@ -34,7 +35,30 @@ def create_span(
                     **({"json_output": json_output} if json_output is not None else {}),
                     "interleave_system_message": interleave_system_message,
                     "stream": stream,
+                    # The vendor tool search protocol the deferred tools used.
+                    **({"tool_search": tool_search} if tool_search else {}),
                 },
+            },
+        )
+        if span
+        else None
+    )
+
+
+def create_image_generation_span(
+    prompt: str,
+    model_name: str,
+    model_parameters: Dict[str, Any],
+    span: Optional[Span] = None,
+) -> Optional[Span]:
+    return (
+        span.new(
+            name="image-generation",
+            attributes={
+                "observation_type": "generation",
+                "model": model_name,
+                "input": {"prompt": prompt},
+                "model_parameters": model_parameters,
             },
         )
         if span
@@ -51,10 +75,15 @@ def end_span(
     function_call: Optional[Any] = None,
     log_probs: Optional[List[Any]] = None,
     reasoning_summary: Optional[str] = None,
+    model: Optional[str] = None,
 ):
     if span:
         span.end(
             attributes={
+                # The model that served the request. Differs from the one the span
+                # was opened with behind routing deployments (e.g. Azure model
+                # router), and Langfuse prices the generation by this value.
+                **({"model": model} if model else {}),
                 "output": {
                     "role": role,
                     "content": content,

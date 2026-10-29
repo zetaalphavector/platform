@@ -20,6 +20,7 @@ class UserInstructionSourceConfiguration(BaseModel):
 class UserInstructionSource(InstructionSource):
 
     source_name = "user_instructions"
+    source_description = "The user's own custom instructions."
 
     def __init__(self, enabled: bool, instructions: Optional[str]):
         self.enabled = enabled

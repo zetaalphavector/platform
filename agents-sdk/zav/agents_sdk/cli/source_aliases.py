@@ -127,6 +127,31 @@ _PROVIDERS: Tuple[ProviderInfo, ...] = (
         ),
     ),
     ProviderInfo(
+        name="interjections",
+        config_key="interjections_provider_configuration",
+        display_name="Interjections",
+        cli_name="interjection-sources",
+        source_base=(
+            "zav.agents_sdk.adapters.interjections.interjections_provider",
+            "InterjectionSource",
+        ),
+        config_model=(
+            "zav.agents_sdk.adapters.interjections.interjections_provider",
+            "InterjectionsProviderConfiguration",
+        ),
+    ),
+    ProviderInfo(
+        name="repl",
+        config_key="repl_provider_configuration",
+        display_name="Python REPL",
+        cli_name="repl-sandboxes",
+        source_base=("zav.agents_sdk.adapters.repl.repl_sandbox", "ReplSandbox"),
+        config_model=(
+            "zav.agents_sdk.adapters.repl.repl_provider",
+            "ReplProviderConfiguration",
+        ),
+    ),
+    ProviderInfo(
         name="mcp",
         config_key="mcp_tools_provider_configuration",
         display_name="MCP Tools",
@@ -198,6 +223,9 @@ class SourceRegistry:
             "zav.agents_sdk.adapters.agent_delegation",
             "zav.agents_sdk.adapters.message_processing",
             "zav.agents_sdk.adapters.dispatch",
+            "zav.agents_sdk.adapters.interjections",
+            "zav.agents_sdk.adapters.tools.sources.self_improvement",
+            "zav.agents_sdk.adapters.repl",
         ]
         from importlib import import_module
 
@@ -363,6 +391,15 @@ def list_source_aliases(provider: str) -> List[Tuple[str, str, str]]:
         (meta.cli_name, meta.source_name, "")
         for meta in sorted(sources.values(), key=lambda m: m.cli_name)
     ]
+
+
+IMAGE_MODEL_PREFIXES = ("gpt-image-2.5",)
+
+
+def infer_model_type(model_name: str) -> str:
+    if model_name.startswith(IMAGE_MODEL_PREFIXES):
+        return "image"
+    return "chat"
 
 
 def infer_vendor(model_name: str) -> Optional[str]:

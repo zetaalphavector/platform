@@ -165,6 +165,7 @@ class SkillCreationSkillsSource(SkillsSource):
     """Provides instructions for creating new skills as a discoverable skill."""
 
     source_name: ClassVar[str] = "skill_creation_skills"
+    source_description = "How to create new skills."
 
     def __init__(self, enabled: bool):
         self.enabled = enabled

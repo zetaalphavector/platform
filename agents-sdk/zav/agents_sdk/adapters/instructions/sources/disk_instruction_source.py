@@ -4,7 +4,9 @@ from typing import List, Optional
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
-from zav.agents_sdk.adapters.instructions.instruction_source import InstructionSource
+from zav.agents_sdk.adapters.instructions.instruction_source import (
+    WritableInstructionSource,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 
 
@@ -16,9 +18,11 @@ class DiskInstructionSourceConfiguration(BaseModel):
     )
 
 
-class DiskInstructionSource(InstructionSource):
+class DiskInstructionSource(WritableInstructionSource):
 
     source_name = "disk_instructions"
+    source_description = "Instructions read from files on disk."
+    source_gate = "local_files"
 
     def __init__(self, directories: List[str], enabled: bool):
         self.enabled = enabled
@@ -29,6 +33,14 @@ class DiskInstructionSource(InstructionSource):
         if self.__prompt is None:
             self.__prompt = self.__load_prompt()
         return self.__prompt
+
+    async def write_note(self, name: str, content: str) -> None:
+        if not self.__directories:
+            raise ValueError("No instructions directory configured.")
+        directory = Path(self.__directories[0])
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"{name}.md").write_text(content.strip() + "\n")
+        self.__prompt = None
 
     def __load_prompt(self) -> str:
         parts: List[str] = []

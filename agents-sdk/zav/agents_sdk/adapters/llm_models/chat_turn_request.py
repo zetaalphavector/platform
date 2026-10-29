@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from typing import Callable, Dict, List, Optional, Union
 
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
@@ -9,6 +10,41 @@ from zav.agents_sdk.domain.tools import ToolsRegistry
 STREAM_TOOL_EVENTS_DEPRECATION_MESSAGE = (
     "stream_tool_events is deprecated; use stream_tool_progress instead."
 )
+
+
+class InnerLoopContext(BaseModel):
+    """What an inner-loop hook sees. Before a model call: the transcript the
+    model is about to receive. After one: the transcript with the model's
+    response and, if it called tools, their results; the response is also given
+    as ``response``."""
+
+    transcript: List[ChatCompletion]
+    remaining_tool_steps: int
+    response: Optional[ChatCompletion] = None
+
+    if PYDANTIC_V2:
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+    else:
+
+        class Config:
+            arbitrary_types_allowed = True
+
+
+class InnerLoopHooks(ABC):
+    """The two seams of one iteration of the model/tool loop: before the model
+    call, and after the model's response and its tool results (or the final
+    response) are in the transcript. Each returns developer messages to append
+    at that point."""
+
+    @abstractmethod
+    async def before_model_call(
+        self, context: InnerLoopContext
+    ) -> List[ChatCompletion]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def after_model_call(self, context: InnerLoopContext) -> List[ChatCompletion]:
+        raise NotImplementedError
 
 
 class ChatTurnRequest(BaseModel):
@@ -27,6 +63,7 @@ class ChatTurnRequest(BaseModel):
     stream_tool_events: Optional[bool] = None
     preserve_streamed_content_parts: bool = False
     log_fn: Optional[Callable] = None
+    hooks: Optional[InnerLoopHooks] = None
     max_nesting_level: int = 20
     reasoning_effort: Optional[str] = None
     logprobs: Optional[bool] = None

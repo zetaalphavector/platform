@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 
 from zav.pydantic_compat import BaseModel, Field
 
@@ -19,6 +19,7 @@ class InMemoryMemoryStoreConfiguration(BaseModel):
 
 class InMemoryMemoryStore(MemoryStore):
     source_name = "in_memory"
+    source_description = "Memories kept for the session only."
 
     def __init__(self, enabled: bool) -> None:
         self.enabled = enabled
@@ -36,6 +37,10 @@ class InMemoryMemoryStore(MemoryStore):
             )
             for index, entry in enumerate(self.__entries)
         ]
+
+    async def load_recent_context(self, size: int) -> Tuple[List[MemoryEntry], int]:
+        entries = await self.load_context()
+        return list(reversed(entries))[:size], len(entries)
 
     async def save(self, content: str) -> MemoryEntry:
         if not self.enabled:

@@ -5,7 +5,11 @@ from zav.agents_sdk.adapters.llm_models.chat_completion_types import (
     ChatCompletionSender,
     ChatResponse,
 )
-from zav.agents_sdk.domain.chat_message import ContentPart, ContentPartTool
+from zav.agents_sdk.domain.chat_message import (
+    ChatMessage,
+    ContentPart,
+    ContentPartTool,
+)
 
 
 class StreamingResponseAssembler:
@@ -34,6 +38,17 @@ class StreamingResponseAssembler:
         """Record or update the content part for a streamed tool event."""
         self.__record_tool_part(event)
 
+    def record_user_message(self, message: ChatMessage) -> None:
+        """Record a message the user sent mid-turn, where the turn read it."""
+        self.finish_text_segment()
+        self.__content_parts.append(
+            ContentPart(
+                type="user_message",
+                text=ChatCompletion.from_chat_message(message).content,
+                message_id=message.message_id,
+            )
+        )
+
     def reset(self) -> None:
         """Clear all accumulated text and tool content parts."""
         self.__content_parts = []
@@ -41,13 +56,15 @@ class StreamingResponseAssembler:
         self.__tool_part_indexes_by_id = {}
 
     def reset_text(self) -> None:
-        """Drop text parts; keep accumulated tool parts."""
+        """Drop text parts; keep accumulated tool parts and mid-turn messages."""
         new_parts: List[ContentPart] = []
         new_tool_indexes: Dict[str, int] = {}
         for part in self.__content_parts:
             if part.tool is not None:
                 tool_id = part.tool.tool_call_id
                 new_tool_indexes[tool_id] = len(new_parts)
+                new_parts.append(part)
+            elif part.type == "user_message":
                 new_parts.append(part)
         self.__content_parts = new_parts
         self.__current_text_part_index = None

@@ -40,3 +40,12 @@ class AgentSetupRetriever(ABC):
     @abstractmethod
     async def list(self) -> List[AgentSetup]:
         raise NotImplementedError
+
+
+async def require_agent_setup(
+    agent_setup_retriever: AgentSetupRetriever, agent_identifier: str
+) -> AgentSetup:
+    agent_setup = await agent_setup_retriever.get(agent_identifier=agent_identifier)
+    if not agent_setup:
+        raise ValueError(f"Unknown agent: {agent_identifier}")
+    return agent_setup

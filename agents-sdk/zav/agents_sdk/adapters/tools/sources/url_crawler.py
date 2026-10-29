@@ -8,10 +8,9 @@ import httpx
 import pymupdf
 from bs4 import BeautifulSoup, Comment
 from markdownify import markdownify
+from zav.common import url_safety
+from zav.common.url_safety import CrawlBlocked, ResolveHost
 from zav.logging import logger
-
-from zav.agents_sdk.adapters.tools.sources import url_policy
-from zav.agents_sdk.adapters.tools.sources.url_policy import CrawlBlocked, ResolveHost
 
 _MAX_IMAGE_SRC_LENGTH = 200
 _DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -23,7 +22,6 @@ _FETCHED_CONTENT_TAG_RE = re.compile(r"</?fetched_content", re.IGNORECASE)
 
 _REASON_TO_OUTCOME = {
     "blocked_oast": "blocked_oast",
-    "redirect_without_location": "blocked_redirect",
     "too_many_redirects": "blocked_redirect",
     "unsupported_type": "blocked_type",
     "body_too_large": "blocked_size",
@@ -132,40 +130,6 @@ class _HTMLToTextParser(HTMLParser):
 
 LLMExtractor = Callable[[str, str], Coroutine[None, None, str]]
 
-_BLOCKED_HOSTNAMES = frozenset({"metadata.google.internal"})
-
-_BLOCKED_SUFFIXES = (
-    ".internal",
-    ".local",
-    ".svc",
-    ".svc.cluster.local",
-    ".pod.cluster.local",
-)
-
-_OAST_DENYLIST = (
-    ".oastify.com",
-    ".burpcollaborator.net",
-    ".interact.sh",
-    ".oast.fun",
-    ".oast.live",
-    ".oast.pro",
-    ".oast.me",
-    ".oast.site",
-    ".oast.online",
-    ".webhook.site",
-    ".requestbin.com",
-    ".requestbin.net",
-    ".pipedream.net",
-    ".ngrok.io",
-    ".ngrok-free.app",
-    ".ngrok.app",
-    ".ngrok.dev",
-    ".loca.lt",
-    ".serveo.net",
-    ".trycloudflare.com",
-    ".lhr.life",
-)
-
 
 class _TTLCache:
     __slots__ = ("__max_size", "__ttl", "__entries")
@@ -220,7 +184,6 @@ _REMOVE_TAGS = [
     "input",
 ]
 _DROP_ATTRS = frozenset({"style", "srcdoc"})
-_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
 _DEFAULT_ALLOWED_CONTENT_TYPES = frozenset(
     {
@@ -293,30 +256,6 @@ def _resolve_content_type(content_type: str, body: bytes, url: str) -> Optional[
     return _extension_content_type(url)
 
 
-def _apply_ip_pin(request: httpx.Request, host_to_ip: dict[str, str]) -> None:
-    host = request.url.host
-    ip = host_to_ip.get(host)
-    if not ip or ip == host:
-        return
-    # Preserve the original Host header and
-    # pin TLS SNI / certificate verification to the original hostname, while
-    # dialing the validated IP. This closes the DNS-rebinding TOCTOU window
-    # between resolution and connection.
-    request.extensions = dict(request.extensions)
-    request.extensions["sni_hostname"] = host
-    request.url = request.url.copy_with(host=ip)
-
-
-class _IPPinnedTransport(httpx.AsyncHTTPTransport):
-    def __init__(self, host_to_ip: dict[str, str]) -> None:
-        super().__init__()
-        self.__host_to_ip = host_to_ip
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        _apply_ip_pin(request, self.__host_to_ip)
-        return await super().handle_async_request(request)
-
-
 def _sanitize_html(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
@@ -364,7 +303,7 @@ class WebPageCrawler:
         cache_ttl_seconds: float = 900.0,
         timeout_seconds: Optional[float] = None,
         upgrade_to_https: bool = False,
-        http_client: Optional[httpx.AsyncClient] = None,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
         blocked_hostnames: Optional[list[str]] = None,
         allowed_ports: Optional[set[int]] = None,
         allowed_hostnames: Optional[list[str]] = None,
@@ -384,12 +323,16 @@ class WebPageCrawler:
         self.__timeout_seconds = timeout_seconds
         self.__upgrade_to_https = upgrade_to_https
         self.__cache = _TTLCache(cache_max_size, cache_ttl_seconds)
-        self.__http_client = http_client
-        self.__blocked_suffixes = tuple(blocked_hostnames) if blocked_hostnames else ()
-        self.__allowed_ports: set[int] = allowed_ports or {80, 443}
-
-        self.__allowed_hostnames = allowed_hostnames
-        self.__resolve_host = resolve_host or url_policy.resolve_host
+        self.__transport = transport
+        self.__resolve_host = resolve_host or url_safety.resolve_host
+        self.__policy = url_safety.UrlPolicy(
+            allowed_ports=frozenset(allowed_ports or url_safety.DEFAULT_ALLOWED_PORTS),
+            blocked_suffixes=(
+                url_safety.BLOCKED_SUFFIXES
+                + (tuple(blocked_hostnames) if blocked_hostnames else ())
+            ),
+            allowed_hostnames=tuple(allowed_hostnames) if allowed_hostnames else None,
+        )
         self.__max_response_bytes = max_response_bytes
         self.__allowed_content_types: frozenset[str] = (
             frozenset(ct.lower() for ct in allowed_content_types)
@@ -530,74 +473,45 @@ class WebPageCrawler:
     async def __prepare_url(self, url: str) -> str:
         if self.__upgrade_to_https and url.startswith("http://"):
             url = "https://" + url[len("http://") :]
-        parsed, _ = await self.__validate_and_resolve(url)
-        return parsed.url
-
-    async def __validate_and_resolve(
-        self, url: str
-    ) -> tuple[url_policy.ParsedUrl, list[url_policy.IPAddress]]:
-        parsed = url_policy.validate_url(
-            url,
-            allowed_ports=self.__allowed_ports,
-            blocked_exact_hostnames=_BLOCKED_HOSTNAMES,
-            blocked_suffixes=_BLOCKED_SUFFIXES + self.__blocked_suffixes,
-            oast_suffixes=_OAST_DENYLIST,
-            allowed_hostnames=self.__allowed_hostnames,
-        )
-        # When an http_client is injected the caller owns connection safety, so
-        # DNS-resolution validation and IP pinning are skipped.
-        addresses: list[url_policy.IPAddress] = []
-        if self.__http_client is None and not parsed.is_ip_literal:
-            addresses = list(await self.__resolve_host(parsed.hostname))
-            if not url_policy.addresses_are_safe(addresses):
-                raise CrawlBlocked("blocked_resolved_ip")
-        return parsed, addresses
+        return self.__policy.validate(url).url
 
     async def __fetch(self, url: str) -> tuple[str, int, str, bytes]:
         timeout = (
             httpx.Timeout(self.__timeout_seconds) if self.__timeout_seconds else None
         )
-        if self.__http_client is not None:
-            return await self.__follow_and_read(self.__http_client, url, timeout)
-        host_to_ip: dict[str, str] = {}
-        transport = _IPPinnedTransport(host_to_ip)
-        async with httpx.AsyncClient(transport=transport) as client:
-            return await self.__follow_and_read(
-                client, url, timeout, host_to_ip=host_to_ip
-            )
-
-    async def __follow_and_read(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        timeout: Optional[httpx.Timeout],
-        *,
-        host_to_ip: Optional[dict[str, str]] = None,
-    ) -> tuple[str, int, str, bytes]:
-        current = url
-        for _ in range(_MAX_REDIRECT_HOPS + 1):
-            parsed, addresses = await self.__validate_and_resolve(current)
-            if host_to_ip is not None and addresses:
-                host_to_ip[parsed.hostname] = str(addresses[0])
-            async with client.stream(
-                "GET",
-                parsed.url,
-                headers=self.__headers,
-                timeout=timeout,
-                follow_redirects=False,
-            ) as response:
-                if response.status_code in _REDIRECT_STATUS_CODES:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise CrawlBlocked("redirect_without_location")
-                    current = str(httpx.URL(parsed.url).join(location))
-                    continue
-                response.raise_for_status()
-                content_type = response.headers.get("content-type", "")
-                cap = self.__size_cap_for(content_type, str(parsed.url))
-                body = await self.__read_body(response, cap)
-                return str(parsed.url), response.status_code, content_type, body
-        raise CrawlBlocked("too_many_redirects")
+        # The transport validates, resolves and IP-pins every hop (redirects
+        # included), so httpx follows redirects on its own. When a transport is
+        # injected the caller owns connection safety, so resolution and pinning
+        # are skipped and only URL validation runs.
+        transport = url_safety.SafeAsyncTransport(
+            resolve_host=self.__resolve_host,
+            inner=self.__transport,
+            policy=self.__policy,
+            resolve_and_pin=self.__transport is None,
+        )
+        async with httpx.AsyncClient(
+            transport=transport, max_redirects=_MAX_REDIRECT_HOPS
+        ) as client:
+            try:
+                async with client.stream(
+                    "GET",
+                    url,
+                    headers=self.__headers,
+                    timeout=timeout,
+                    follow_redirects=True,
+                ) as response:
+                    response.raise_for_status()
+                    content_type = response.headers.get("content-type", "")
+                    cap = self.__size_cap_for(content_type, str(response.url))
+                    body = await self.__read_body(response, cap)
+                    return (
+                        str(response.url),
+                        response.status_code,
+                        content_type,
+                        body,
+                    )
+            except httpx.TooManyRedirects:
+                raise CrawlBlocked("too_many_redirects")
 
     def __size_cap_for(self, content_type: str, url: str) -> int:
         declared = content_type.split(";")[0].strip().lower()

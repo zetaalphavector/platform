@@ -44,6 +44,7 @@ class UserWorkspaceContextSource(ContextSource):
     """
 
     source_name = "user_workspace"
+    source_description = "A short snapshot of the user's workspace."
 
     def __init__(
         self,

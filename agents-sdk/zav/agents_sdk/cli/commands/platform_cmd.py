@@ -4,6 +4,7 @@ import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
+from zav.agents_sdk.cli.project_config import ProjectConfigError
 from zav.agents_sdk.cli.require import require_project, resolve_project_dir
 
 console = Console()
@@ -32,7 +33,8 @@ def platform_login(
     ] = None,
 ):
     """
-    Set platform credentials for deployment and remote features.
+    Log in to a tenant. One login per tenant is kept; the latest is the current
+    one, used for deployment and for agents whose tenant has no login of its own.
     """
     project_dir = resolve_project_dir(project_dir)
     if base_url is None:
@@ -47,6 +49,27 @@ def platform_login(
     console.print("  [green]✅ Platform credentials saved[/]")
 
 
+@platform_app.command("use")
+def platform_use(
+    tenant: Annotated[str, typer.Argument(help="Tenant of a saved login.")],
+    project_dir: Annotated[
+        Optional[str],
+        typer.Option("--project-dir", help="Project directory."),
+    ] = None,
+):
+    """
+    Make a saved login the current one.
+    """
+    project_dir = resolve_project_dir(project_dir)
+    config = require_project(project_dir)
+    try:
+        config.use_platform_login(tenant)
+    except ProjectConfigError as error:
+        console.print(f"  [red]{error}[/]")
+        raise typer.Exit(code=1)
+    console.print(f"  [green]✅ Current login: {tenant}[/]")
+
+
 @platform_app.command("show")
 def platform_show(
     project_dir: Annotated[
@@ -55,7 +78,7 @@ def platform_show(
     ] = None,
 ):
     """
-    Show platform credentials (API key masked).
+    Show the current login and the other saved logins (API keys masked).
     """
     project_dir = resolve_project_dir(project_dir)
     config = require_project(project_dir)
@@ -67,21 +90,33 @@ def platform_show(
         return
 
     base_url = platform_cfg.get("base_url", "Not set")
-    api_key = platform_cfg.get("api_key", "")
     tenant = platform_cfg.get("tenant", "")
-
-    if len(api_key) > 9:
-        masked = api_key[:9] + "****"
-    elif not api_key:
-        masked = "Not set"
-    else:
-        masked = "****"
 
     console.print()
     console.print(f"  [bold]Base URL:[/] [cyan]{base_url}[/]")
     console.print(f"  [bold]Tenant:[/]   [cyan]{tenant or 'Not set'}[/]")
-    console.print(f"  [bold]API Key:[/]  [cyan]{masked}[/]")
+    console.print(
+        f"  [bold]API Key:[/]  [cyan]{__masked(platform_cfg.get('api_key', ''))}[/]"
+    )
+    others = {
+        name: login
+        for name, login in config.platform_logins().items()
+        if name != tenant
+    }
+    if others:
+        console.print("  [bold]Other logins:[/]")
+        for name, login in sorted(others.items()):
+            console.print(
+                f"    [cyan]{name}[/]  {login.get('base_url', '')}  "
+                f"[dim]{__masked(login.get('api_key', ''))}[/]"
+            )
     console.print()
+
+
+def __masked(api_key: str) -> str:
+    if len(api_key) > 9:
+        return api_key[:9] + "****"
+    return "****" if api_key else "Not set"
 
 
 @platform_app.command("reset")

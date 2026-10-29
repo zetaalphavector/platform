@@ -3,28 +3,47 @@ from typing import Any, Dict, List, Optional
 
 from zav.api.errors import UnknownException
 from zav.logging import logger
-from zav.pydantic_compat import BaseModel
+from zav.pydantic_compat import Field
 
 from zav.agents_sdk.adapters.agent_state.citation import CitationStore
-from zav.agents_sdk.adapters.tools.sources.index_tools_source import IndexToolsSource
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.sources.index_tools_source import (
+    IndexToolsSource,
+    hide_response,
+    show_search_results,
+)
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.adapters.user_documents.user_documents_service import (
     UserDocumentCreateRequest,
     UserDocumentMetadata,
     UserDocumentsService,
+    create_new_document,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.tools import Tool, hide, streamable
+from zav.agents_sdk.domain.tools import Tool, hide, include_fields, streamable
 
 
-class UserDocumentToolsSourceConfiguration(BaseModel):
+class UserDocumentToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = False
     list_page_size: int = 20
+    show_results: bool = Field(
+        False,
+        description=(
+            "Stream search_my_documents' query and top hits (title, link), and"
+            " the created document's card, to the chat timeline. Off streams"
+            " none of them."
+        ),
+    )
 
 
 class UserDocumentToolsSource(ToolsSource):
 
     source_name = "user_document_tools"
+    source_description = (
+        "Search, add and manage the user's own uploaded documents (My Documents)."
+    )
 
     def __init__(
         self,
@@ -37,22 +56,30 @@ class UserDocumentToolsSource(ToolsSource):
         self.__user_documents_service = user_documents_service
         self.__config = user_document_tools_source_configuration
         self.__citation_store = citation_store
+        self.defer_tools = user_document_tools_source_configuration.defer_tools
         self.enabled = user_document_tools_source_configuration.enabled
 
     async def get_tools(self) -> List[Tool]:
+        search_tool = Tool.from_callable(
+            name="search_my_documents",
+            executable=self.search_my_documents,
+        )
+        create_tool = Tool.from_callable(
+            name="create_my_document",
+            executable=self.create_my_document,
+        )
+        if self.__config.show_results:
+            search_tool = show_search_results(search_tool)
+        else:
+            # The created document's card shows only with results on.
+            create_tool = hide_response(create_tool)
         return [
-            Tool.from_callable(
-                name="search_my_documents",
-                executable=self.search_my_documents,
-            ),
+            search_tool,
             Tool.from_callable(
                 name="list_my_documents",
                 executable=self.list_my_documents,
             ),
-            Tool.from_callable(
-                name="create_my_document",
-                executable=self.create_my_document,
-            ),
+            create_tool,
             Tool.from_callable(
                 name="update_my_document",
                 executable=self.update_my_document,
@@ -164,7 +191,7 @@ class UserDocumentToolsSource(ToolsSource):
             "Indexed '{{ title }}' into My Documents (status: {{ status }})."
         ),
         params_transform=hide,
-        response_transform=hide,
+        response_transform=include_fields("document_id", "status", "title"),
     )
     async def create_my_document(
         self,
@@ -190,9 +217,27 @@ class UserDocumentToolsSource(ToolsSource):
         Returns:
             Dict with 'document_id' (uri_hash), 'status', and 'title'.
         """
-        base64_content = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        return await self.create_document(
+            title=title,
+            file_name=f"{title}.md",
+            file_bytes=content.encode("utf-8"),
+            source=source,
+            authors=authors,
+            year=year,
+        )
+
+    async def create_document(
+        self,
+        title: str,
+        file_name: str,
+        file_bytes: bytes,
+        source: Optional[str],
+        authors: Optional[List[str]],
+        year: Optional[int],
+    ) -> Dict[str, Any]:
         try:
-            document = await self.__user_documents_service.create_document(
+            document = await create_new_document(
+                self.__user_documents_service,
                 UserDocumentCreateRequest(
                     document_metadata=UserDocumentMetadata(
                         title=title,
@@ -200,9 +245,9 @@ class UserDocumentToolsSource(ToolsSource):
                         authors=authors,
                         year=year,
                     ),
-                    content_file_name=f"{title}.md",
-                    base64_content=base64_content,
-                )
+                    content_file_name=file_name,
+                    base64_content=base64.b64encode(file_bytes).decode("ascii"),
+                ),
             )
         except Exception as e:
             logger.exception(f"Error creating user document: {e}")

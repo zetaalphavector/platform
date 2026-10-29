@@ -37,18 +37,20 @@ def init_command(
     scaffold_project(project_dir, __version__)
     config = ProjectConfig(project_dir)
     public_setup, secret_setup = prompt_agent_setup("agent", config)
-    config.add_agent(public_setup, secret_setup)
+    config.add_agent(
+        public_setup, secret_setup if secret_setup.get("agent_configuration") else None
+    )
 
     tree = Tree(f"[bold green]{project_dir}/[/]")
     tree.add(
         "[cyan]agent_setups.json[/]       ← agents (reference LLM configs by name)"
     )
     tree.add("[cyan]llm_configurations.json[/] ← named LLM configurations")
+    tree.add("[dim]env/secrets.json[/]         ← credentials, by name (gitignored)")
     tree.add("[cyan]__init__.py[/]             ← extend with custom agent code")
     tree.add("[cyan]skills/[/]                  ← skill folders")
     tree.add("[cyan]specs/[/]                   ← behavior tests")
     tree.add("[dim]memories/[/]                  ← local memory (gitignored)")
-    tree.add("[dim]env/[/]                       ← secrets (gitignored)")
 
     console.print()
     console.print(

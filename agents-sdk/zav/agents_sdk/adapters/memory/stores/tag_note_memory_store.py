@@ -30,6 +30,7 @@ class TagNoteMemoryStoreConfiguration(BaseModel):
 
 class TagNoteMemoryStore(MemoryStore):
     source_name = "tag_notes"
+    source_description = "Memories stored as notes in a tag."
 
     def __init__(
         self,

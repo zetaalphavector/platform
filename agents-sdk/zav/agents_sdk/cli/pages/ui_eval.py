@@ -1,18 +1,10 @@
 import hashlib
 import json
-from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-from ragelo import (
-    AgentAnswer,
-    Document,
-    Query,
-    get_agent_ranker,
-    get_answer_evaluator,
-    get_retrieval_evaluator,
-)
+from ragelo import AgentAnswer, Document, Query
 from ragelo.types.configurations import (
     CustomPromptAnswerEvaluatorConfig,
     EloAgentRankerConfig,
@@ -31,22 +23,28 @@ from zav.agents_sdk.cli.models import (
     EvaluationFileContent,
     RageloEvaluation,
 )
-from zav.agents_sdk.cli.pages.ui_collect import (
-    get_eval_file_names,
-    retrieve_eval_file_content,
-    storage_path,
-    store_eval_file_content,
+from zav.agents_sdk.cli.ragelo_evaluation import (
+    DEFAULT_CUSTOM_PROMPT_CONFIG,
+    DEFAULT_ELO_RANKER_CONFIG,
+    DEFAULT_PAIRWISE_CONFIG,
+    DEFAULT_REASONER_CONFIG,
+    judge,
+    rank_agents,
 )
 from zav.agents_sdk.cli.ui_app import (
     ChatEntry,
     ChatMessageItem,
     EvaluatorItem,
     agent_display_name,
+    get_eval_file_names,
     llm_configuration_for,
     render_chat_configuration_item,
     render_entry,
+    retrieve_eval_file_content,
     retrieve_trace_file_content,
     start_new_conversation,
+    storage_path,
+    store_eval_file_content,
 )
 from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
 
@@ -124,16 +122,7 @@ def __construct_ragelo_queries(eval_file_content: EvaluationFileContent) -> List
             logger.exception("No configuration items found in trace")
             continue
 
-        existing_docs = (
-            qid_to_query[answer_trace.qid].retrieved_docs
-            if answer_trace.qid in qid_to_query
-            else []
-        )
-        existing_agent_answers = (
-            qid_to_query[answer_trace.qid].answers
-            if answer_trace.qid in qid_to_query
-            else []
-        )
+        ragelo_query = qid_to_query[answer_trace.qid]
         llm_contexts = next(
             (
                 d["llm_contexts"]
@@ -155,17 +144,10 @@ def __construct_ragelo_queries(eval_file_content: EvaluationFileContent) -> List
                     else json.dumps(llm_context["content"])
                 )
                 ragelo_did = __hashed(content)
-                existing_doc = next(
-                    (doc for doc in existing_docs if doc.did == ragelo_did),
-                    None,
+                ragelo_query.add_retrieved_doc(
+                    Document(qid=ragelo_query.qid, did=ragelo_did, text=content),
+                    exist_ok=True,
                 )
-                if not existing_doc:
-                    qid_to_query[answer_trace.qid].add_retrieved_doc(
-                        Document(
-                            did=ragelo_did,
-                            text=content,
-                        )
-                    )
                 if evidences:
                     for evidence in evidences:
                         if (
@@ -189,43 +171,64 @@ def __construct_ragelo_queries(eval_file_content: EvaluationFileContent) -> List
                 ragelo_answer = ragelo_answer.replace(
                     evidence.anchor_text, f"[{ragelo_did}]"
                 )
-                if not any(ragelo_did == doc.did for doc in existing_docs):
-                    qid_to_query[answer_trace.qid].add_retrieved_doc(
-                        Document(
-                            did=ragelo_did,
-                            text=evidence.text_extract,
-                        )
-                    )
+                ragelo_query.add_retrieved_doc(
+                    Document(
+                        qid=ragelo_query.qid, did=ragelo_did, text=evidence.text_extract
+                    ),
+                    exist_ok=True,
+                )
         else:
             logger.exception(
                 "No documents or evidences found in trace "
                 f"{answer_trace.trace_file_name}"
             )
 
-        if any(
-            agent_answer.agent == ragelo_agent and agent_answer.text == ragelo_answer
-            for agent_answer in existing_agent_answers
-        ):
-            continue
-        qid_to_query[answer_trace.qid].add_agent_answer(
-            AgentAnswer(
-                agent=ragelo_agent,
-                text=ragelo_answer,
-            )
+        ragelo_query.add_agent_answer(
+            AgentAnswer(qid=ragelo_query.qid, agent=ragelo_agent, text=ragelo_answer),
+            exist_ok=True,
         )
 
     return list(qid_to_query.values())
 
 
-def __parse_relevance_into_score(answer: str):
-    if "very relevant" in answer.lower():
-        return 2
-    if "somewhat relevant" in answer.lower():
-        return 1
-    if "not relevant" in answer.lower():
-        return 0
-    else:
-        raise ValueError(f"Could not parse relevance into score: {answer}")
+def __config_text_area(
+    label: str, value: Dict[str, Any], disabled: bool
+) -> Dict[str, Any]:
+    return json.loads(
+        st.sidebar.text_area(
+            label, value=json.dumps(value, indent=2), disabled=disabled
+        )
+    )
+
+
+def __render_message(sender: ChatMessageSender, content: str):
+    render_entry(
+        entries=st.session_state.entries,
+        entry=ChatEntry.from_message(
+            ChatMessageItem(message=ChatMessage(sender=sender, content=content))
+        ),
+        print_debug_logs=False,
+    )
+
+
+def __render_query(query: Query):
+    start_new_conversation()
+    __render_message(ChatMessageSender.USER, query.query)
+
+
+def __render_cited_documents(query: Query, *answers: AgentAnswer):
+    for doc in query.retrieved_docs.values():
+        if any(doc.did in answer.rendered_text for answer in answers):
+            st.markdown(f"###### [{doc.did}]\n {doc.text}")
+
+
+def __render_verdict(verdict: str, explanation: str):
+    render_entry(
+        entries=st.session_state.entries,
+        entry=ChatEntry.from_evaluator(
+            EvaluatorItem(verdict=verdict, explanation=explanation)
+        ),
+    )
 
 
 st.logo(
@@ -240,15 +243,12 @@ st.sidebar.page_link("pages/ui_eval.py", label="RAGElo Evaluation", icon="🔎")
 sel_existing_eval: Optional[str] = st.sidebar.selectbox(
     "Load previous evaluation", get_eval_file_names(), index=None
 )
-if sel_existing_eval:
-    eval_file_content = retrieve_eval_file_content(sel_existing_eval)
-    ragelo = eval_file_content.ragelo
-else:
-    ragelo = None
-
+ragelo = (
+    retrieve_eval_file_content(sel_existing_eval).ragelo if sel_existing_eval else None
+)
 
 if ragelo:
-    llm_config = LLMClientConfiguration.parse_obj(
+    llm_config: Optional[LLMClientConfiguration] = LLMClientConfiguration.parse_obj(
         json.loads(
             st.sidebar.text_area(
                 "LLM Configuration",
@@ -257,43 +257,6 @@ if ragelo:
             )
         )
     )
-    reasoner_config = ReasonerEvaluatorConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Reasoner Evaluator Configuration",
-                value=format_model_json(ragelo.reasoner_config),
-                disabled=True,
-            )
-        )
-    )
-    custom_agent_eval_config = CustomPromptAnswerEvaluatorConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Custom Prompt Answer Evaluator Configuration",
-                value=format_model_json(ragelo.custom_agent_eval_config),
-                disabled=True,
-            )
-        )
-    )
-    pairwise_evaluator_config = PairwiseEvaluatorConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Pairwise Evaluator Configuration",
-                value=format_model_json(ragelo.pairwise_config),
-                disabled=True,
-            )
-        )
-    )
-    agent_ranker_config = EloAgentRankerConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Elo Ranker Configuration",
-                value=format_model_json(ragelo.elo_ranker_config),
-                disabled=False,
-            )
-        )
-    )
-
 else:
     default_llm_config: Optional[LLMClientConfiguration] = None
     if sel_existing_eval:
@@ -317,127 +280,39 @@ else:
         st.sidebar.error(
             "Invalid LLM configuration. Please provide a valid JSON configuration."
         )
-    reasoner_config = ReasonerEvaluatorConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Reasoner Evaluator Configuration",
-                value=json.dumps({"n_processes": 20}, indent=2),
-            )
-        )
-    )
-    pairwise_evaluator_config = PairwiseEvaluatorConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Pairwise Evaluator Configuration",
-                value=json.dumps(
-                    {
-                        "n_games_per_query": 15,
-                        "has_citations": True,
-                        "include_annotations": True,
-                        "include_raw_documents": True,
-                        "factors": (
-                            "the correctness, completeness, and level of detail of the responses along with their strong grounding to the cited documents. Answers are well grounded if they can be fully supported and justified by the cited documents without containing information that is not present in the cited documents."  # noqa: E501
-                        ),
-                        "document_relevance_threshold": None,
-                        "n_processes": 20,
-                    },
-                    indent=2,
-                ),
-            )
-        )
-    )
-    custom_agent_eval_config = CustomPromptAnswerEvaluatorConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Custom Prompt Answer Evaluator Configuration",
-                value=json.dumps(
-                    {
-                        "prompt": """You are an impartial judge for evaluating the quality of the responses provided by
-an AI assistant tasked to answer user's question about the AI domain.
 
-You will be given the user's question and the answer produced by the assistant.
-The agent's answer was generated based on a set of documents retrieved by a
-search engine.
-You will be provided with the a set of relevant documents that were retrieved by
-the search engine.
-Your task is to evaluate the quality of the answer based on the relevance, accuracy,
-and completeness of the response.
-
-## Rules for evaluating an answer:
-- **Relevance**: Does the answer address the user's question?
-- **Accuracy**: Is the answer factually correct, based on the documents provided?
-- **Completeness**: Does the answer provide all the information needed to answer
-the user's question?
-- **Precision**: If the user's question is about specific terms, does the
-answer provide the answer for those specific terms?
-
-## Steps to evaluate an answer:
-1. **Understand the user's intent**: Explain in your own words what the user's
-intent is, given the question.
-2. **Check if the answer is correct**: Think step-by-step whether the answer
-correctly answers the user's question.
-3. **Evaluate the quality of the answer**: Evaluate the quality of the answer based
-on its relevance, accuracy, and completeness.
-4. **Assign a score**: Produce a single line JSON object with the following keys,
-each with a single score between 0 and 2, where 2 is the highest score on that aspect:
-    - "relevance"
-        - 0: The answer is not relevant to the user's question.
-        - 1: The answer is partially relevant to the user's question.
-        - 2: The answer is fully relevant to the user's question.
-    - "accuracy"
-        - 0: The answer is factually incorrect.
-        - 1: The answer is partially correct.
-        - 2: The answer is fully correct.
-    - "completeness"
-        - 0: The answer does not provide enough information to answer the user's question.
-        - 1: The answer only answers some aspects of the user's question.
-        - 2: The answer fully answers the user's question.
-    - "precision"
-        - 0: The answer does not mention the same terms as the user's question.
-        - 1: The answer mentions a similar terms, but not the same as the user's question.
-        - 2: The answer mentions the exact same terms as the user's question.
-
-The last line of your answer must be a SINGLE LINE JSON object with the keys "relevance",
-"accuracy", "completeness", and "precision", each with a single score between 0 and 2.
-
-DOCUMENTS RETRIEVED:
-{documents}
-
-User Query:
-{query}
-
-Agent answer:
-{answer}
-""",  # noqa: E501
-                        "scoring_keys": [
-                            "relevance",
-                            "accuracy",
-                            "completeness",
-                            "precision",
-                        ],
-                        "n_processes": 20,
-                    },
-                    indent=2,
-                ),
-            )
-        )
-    )
-    agent_ranker_config = EloAgentRankerConfig.parse_obj(
-        json.loads(
-            st.sidebar.text_area(
-                "Elo Ranker Configuration",
-                value=json.dumps(
-                    {"initial_score": 1000, "rounds": 500},
-                    indent=2,
-                ),
-            )
-        )
-    )
+reasoner_config_raw = __config_text_area(
+    "Reasoner Evaluator Configuration",
+    ragelo.reasoner_config if ragelo else DEFAULT_REASONER_CONFIG,
+    disabled=bool(ragelo),
+)
+custom_agent_eval_config_raw = __config_text_area(
+    "Custom Prompt Answer Evaluator Configuration",
+    ragelo.custom_agent_eval_config if ragelo else DEFAULT_CUSTOM_PROMPT_CONFIG,
+    disabled=bool(ragelo),
+)
+pairwise_evaluator_config_raw = __config_text_area(
+    "Pairwise Evaluator Configuration",
+    ragelo.pairwise_config if ragelo else DEFAULT_PAIRWISE_CONFIG,
+    disabled=bool(ragelo),
+)
+agent_ranker_config_raw = __config_text_area(
+    "Elo Ranker Configuration",
+    ragelo.elo_ranker_config if ragelo else DEFAULT_ELO_RANKER_CONFIG,
+    disabled=False,
+)
+reasoner_config = ReasonerEvaluatorConfig.model_validate(reasoner_config_raw)
+custom_agent_eval_config = CustomPromptAnswerEvaluatorConfig.model_validate(
+    custom_agent_eval_config_raw
+)
+pairwise_evaluator_config = PairwiseEvaluatorConfig.model_validate(
+    pairwise_evaluator_config_raw
+)
+agent_ranker_config = EloAgentRankerConfig.model_validate(agent_ranker_config_raw)
 
 if sel_existing_eval:  # noqa
     eval_file_content = retrieve_eval_file_content(sel_existing_eval)
     st.session_state.eval_file_name = f"{storage_path}/agent-evals/{sel_existing_eval}"
-    st.session_state.eval_file_content = eval_file_content
 
     st.subheader("Selected agents")
     for conf in eval_file_content.agent_configurations:
@@ -451,241 +326,104 @@ if sel_existing_eval:  # noqa
                 "Please provide a valid LLM configuration before running evaluation."
             )
             st.stop()
+        if pairwise_clicked and len(eval_file_content.agent_configurations) < 2:
+            st.error(
+                "For a pairwise evaluation, please add at least two agents to "
+                "the evaluator."
+            )
+            st.stop()
+        assert llm_config is not None
         queries = __construct_ragelo_queries(eval_file_content)
+        eval_llm_client_config = llm_config.model_copy(deep=True)
+        eval_llm_provider = ZAVRageloLLMProvider(
+            ChatClientFactory.create(eval_llm_client_config),
+            max_tokens=eval_llm_client_config.model_configuration.max_tokens or 2048,
+        )
+        judge(
+            queries,
+            eval_llm_provider,
+            reasoner_config,
+            pairwise_evaluator_config if pairwise_clicked else custom_agent_eval_config,
+        )
         eval_file_content.ragelo = RageloEvaluation(
             queries=queries,
             llm_config=llm_config,
-            reasoner_config=reasoner_config,
-            custom_agent_eval_config=custom_agent_eval_config,
-            pairwise_config=pairwise_evaluator_config,
-            elo_ranker_config=agent_ranker_config,
-            elo_rankings=ragelo.elo_rankings if ragelo else None,
+            reasoner_config=reasoner_config_raw,
+            custom_agent_eval_config=custom_agent_eval_config_raw,
+            pairwise_config=pairwise_evaluator_config_raw,
+            elo_ranker_config=agent_ranker_config_raw,
+            elo_rankings=(
+                rank_agents(queries, agent_ranker_config)
+                if pairwise_clicked
+                else ragelo.elo_rankings if ragelo else None
+            ),
         )
         store_eval_file_content(eval_file_content)
-
-        eval_llm_client_config = llm_config.model_copy(deep=True)
-        chat_completion_client = ChatClientFactory.create(eval_llm_client_config)
-        eval_llm_provider = ZAVRageloLLMProvider(
-            chat_completion_client,
-            max_tokens=eval_llm_client_config.model_configuration.max_tokens or 2048,
-        )
-        retrieval_evaluator = get_retrieval_evaluator(
-            config=reasoner_config,
-            llm_provider=eval_llm_provider,
-        )
-        queries = retrieval_evaluator.batch_evaluate(queries)
-        for q in queries:
-            for d in q.retrieved_docs:
-                if not d.evaluation or not d.evaluation.raw_answer:
-                    raise Exception(f"No evaluation or raw answer for document {d}")
-                if isinstance(d.evaluation.answer, str):
-                    d.evaluation.answer = __parse_relevance_into_score(
-                        d.evaluation.raw_answer
-                    )
-        eval_file_content.ragelo.queries = queries
-        store_eval_file_content(eval_file_content)
-
-        if pairwise_clicked:
-            if len(eval_file_content.agent_configurations) < 2:
-                st.error(
-                    "For a pairwise evaluation, please add at least two agents to "
-                    "the evaluator."
-                )
-            else:
-                pairwise_evaluator = get_answer_evaluator(
-                    config=pairwise_evaluator_config, llm_provider=eval_llm_provider
-                )
-                result_queries = pairwise_evaluator.batch_evaluate(queries)
-                for result_q, q in zip(result_queries, queries):
-                    q.pairwise_games = result_q.pairwise_games
-        elif pointwise_clicked:
-            pointwise_evaluator = get_answer_evaluator(
-                "custom_prompt",
-                llm_provider=eval_llm_provider,
-                config=custom_agent_eval_config,
-            )
-            result_queries = pointwise_evaluator.batch_evaluate(queries)
-            updated_queries = []
-            for result_q, q in zip(result_queries, queries):
-                q.answers = result_q.answers
-                updated_queries.append(q)
-            queries = updated_queries
-
-        eval_file_content.ragelo.queries = queries
-        store_eval_file_content(eval_file_content)
-
-        if pairwise_clicked:
-            elo_ranker = get_agent_ranker(
-                "elo",
-                verbose=agent_ranker_config.verbose,
-                initial_score=agent_ranker_config.initial_score,
-                rounds=agent_ranker_config.rounds,
-            )
-
-            agent_name_2_elo = elo_ranker.run(queries)
-            eval_file_content.ragelo.elo_rankings = agent_name_2_elo
-            store_eval_file_content(eval_file_content)
 
     if eval_file_content.ragelo:
         if eval_file_content.ragelo.elo_rankings:
             st.subheader("Elo Rankings")
-            elo_rankings = {
-                agent_display_name(agent): elo
-                for agent, elo in eval_file_content.ragelo.elo_rankings.items()
-            }
             elo_rankings_sorted = sorted(
-                elo_rankings.items(), key=lambda x: x[1], reverse=True
+                (
+                    (agent_display_name(agent), elo)
+                    for agent, elo in eval_file_content.ragelo.elo_rankings.items()
+                ),
+                key=lambda x: x[1],
+                reverse=True,
             )
-            elo_rankings_df = pd.DataFrame(
-                elo_rankings_sorted, columns=["Agent", "Elo"]
-            )
-            st.dataframe(elo_rankings_df)
-
-            win_lose_tie_ratios: Dict[str, Dict[str, int]] = defaultdict(
-                lambda: defaultdict(lambda: 0)
-            )
-            ties: Dict[str, Dict[str, int]] = defaultdict(
-                lambda: defaultdict(lambda: 0)
-            )
-            games_played: Dict[str, Dict[str, int]] = defaultdict(
-                lambda: defaultdict(lambda: 0)
-            )
-
-            total_wins: Dict[str, int] = defaultdict(lambda: 0)
-            total_games_played: Dict[str, int] = defaultdict(lambda: 0)
-
-            for q in eval_file_content.ragelo.queries:
-                for game in q.pairwise_games:
-                    if not game.evaluation or not game.evaluation.answer:
-                        raise Exception(f"No answer for game {game}")
-                    agent_a = game.agent_a_answer.agent
-                    agent_b = game.agent_b_answer.agent
-                    answer = game.evaluation.answer
-                    games_played[agent_a][agent_b] += 1
-                    games_played[agent_b][agent_a] += 1
-                    total_games_played[agent_a] += 1
-                    total_games_played[agent_b] += 1
-                    if answer == "A":
-                        win_lose_tie_ratios[agent_a][agent_b] += 1
-                        total_wins[agent_a] += 1
-                    elif answer == "B":
-                        win_lose_tie_ratios[agent_b][agent_a] += 1
-                        total_wins[agent_b] += 1
-                    elif answer == "C":  # a tie
-                        ties[agent_a][agent_b] += 1
-                        ties[agent_b][agent_a] += 1
+            st.dataframe(pd.DataFrame(elo_rankings_sorted, columns=["Agent", "Elo"]))
 
             st.subheader("Pairwise Evaluations")
+            pairwise_evaluator_name = str(pairwise_evaluator_config.evaluator_name)
             for q in eval_file_content.ragelo.queries:
-                start_new_conversation()
-                render_entry(
-                    entries=st.session_state.entries,
-                    entry=ChatEntry.from_message(
-                        ChatMessageItem(
-                            message=ChatMessage(
-                                sender=ChatMessageSender.USER,
-                                content=q.query,
-                            )
-                        )
-                    ),
-                    print_debug_logs=False,
-                )
-                for game in q.pairwise_games:
-                    if (eval := game.evaluation) and eval.answer and eval.raw_answer:
-                        with st.expander(
-                            f"{agent_display_name(game.agent_a_answer.agent)}(A) VS "
-                            f"{agent_display_name(game.agent_b_answer.agent)}(B) \n"
-                            f"--- VERDICT: {eval.answer if eval.answer != 'C' else 'TIE'}"  # noqa: E501
-                        ):
-                            render_entry(
-                                entries=st.session_state.entries,
-                                entry=ChatEntry.from_message(
-                                    ChatMessageItem(
-                                        message=ChatMessage(
-                                            sender=ChatMessageSender.BOT,
-                                            content=game.agent_a_answer.text,
-                                        )
-                                    )
-                                ),
-                            )
-                            render_entry(
-                                entries=st.session_state.entries,
-                                entry=ChatEntry.from_message(
-                                    ChatMessageItem(
-                                        message=ChatMessage(
-                                            sender=ChatMessageSender.BOT,
-                                            content=game.agent_b_answer.text,
-                                        )
-                                    )
-                                ),
-                            )
-                            for doc in q.retrieved_docs:
-                                if (
-                                    doc.did in game.agent_a_answer.text
-                                    or doc.did in game.agent_b_answer.text
-                                ):
-                                    st.markdown(f"###### [{doc.did}]\n {doc.text}")
-                            render_entry(
-                                entries=st.session_state.entries,
-                                entry=ChatEntry.from_evaluator(
-                                    EvaluatorItem(
-                                        verdict=str(eval.answer),
-                                        explanation=eval.raw_answer,
-                                    ),
-                                ),
-                            )
-                    else:
+                __render_query(q)
+                for game in q.pairwise_games.values():
+                    game_result = game.evaluations.get(pairwise_evaluator_name)
+                    if not game_result or not game_result.winner:
                         st.write("No evaluation was generated for this game")
+                        continue
+                    verdict = "TIE" if game_result.winner == "C" else game_result.winner
+                    with st.expander(
+                        f"{agent_display_name(game.agent_a_answer.agent)}(A) VS "
+                        f"{agent_display_name(game.agent_b_answer.agent)}(B) \n"
+                        f"--- VERDICT: {verdict}"
+                    ):
+                        __render_message(
+                            ChatMessageSender.BOT, game.agent_a_answer.rendered_text
+                        )
+                        __render_message(
+                            ChatMessageSender.BOT, game.agent_b_answer.rendered_text
+                        )
+                        __render_cited_documents(
+                            q, game.agent_a_answer, game.agent_b_answer
+                        )
+                        __render_verdict(
+                            game_result.winner,
+                            f"**A:** {game_result.answer_a_analysis}\n\n"
+                            f"**B:** {game_result.answer_b_analysis}\n\n"
+                            f"{game_result.comparison_reasoning}",
+                        )
         else:
             st.write(
                 "Elo rankings are not calculated yet. Click on `Evaluate Pairwise`"
             )
 
         st.subheader("Pointwise Evaluations")
+        pointwise_evaluator_name = str(custom_agent_eval_config.evaluator_name)
         for q in eval_file_content.ragelo.queries:
-            start_new_conversation()
-            render_entry(
-                entries=st.session_state.entries,
-                entry=ChatEntry.from_message(
-                    ChatMessageItem(
-                        message=ChatMessage(
-                            sender=ChatMessageSender.USER,
-                            content=q.query,
-                        )
-                    )
-                ),
-                print_debug_logs=False,
-            )
-            if any(not a.evaluation for a in q.answers):
+            __render_query(q)
+            answer_results = [
+                (answer, answer.evaluations.get(pointwise_evaluator_name))
+                for answer in q.answers.values()
+            ]
+            if not all(result for _, result in answer_results):
                 st.write(f"No pointwise evaluation has been made for query: {q.query}")
                 continue
-            for answer in q.answers:
-                if answer.evaluation:
-                    with st.expander(agent_display_name(answer.agent)):
-                        render_entry(
-                            entries=st.session_state.entries,
-                            entry=ChatEntry.from_message(
-                                ChatMessageItem(
-                                    message=ChatMessage(
-                                        sender=ChatMessageSender.BOT,
-                                        content=answer.text,
-                                    )
-                                )
-                            ),
-                        )
-                        for doc in q.retrieved_docs:
-                            if doc.did in answer.text:
-                                st.markdown(f"###### [{doc.did}]\n {doc.text}")
-                        render_entry(
-                            entries=st.session_state.entries,
-                            entry=ChatEntry.from_evaluator(
-                                EvaluatorItem(
-                                    verdict=(
-                                        f"```{json.dumps(answer.evaluation.answer)}```"
-                                        if isinstance(answer.evaluation.answer, dict)
-                                        else str(answer.evaluation.answer)
-                                    ),
-                                    explanation=answer.evaluation.raw_answer or "",
-                                ),
-                            ),
-                        )
+            for answer, answer_result in answer_results:
+                assert answer_result is not None
+                with st.expander(agent_display_name(answer.agent)):
+                    __render_message(ChatMessageSender.BOT, answer.rendered_text)
+                    __render_cited_documents(q, answer)
+                    __render_verdict(
+                        str(answer_result.score), answer_result.reasoning or ""
+                    )

@@ -1,4 +1,4 @@
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from zav.pydantic_compat import BaseModel, Field
 
@@ -11,10 +11,30 @@ from zav.agents_sdk.domain.chat_message import (
 from zav.agents_sdk.domain.chat_request import ConversationContext
 from zav.agents_sdk.domain.tools import Tool
 
+# What a sub-agent does with a call that needs the user's approval: ask the
+# user through the turn's inbox, decline it, or run it.
+SubAgentApprovals = Literal["ask", "decline", "run"]
+
+_APPROVALS_STRICTNESS = {"run": 0, "ask": 1, "decline": 2}
+
+
+def stricter_approvals(*settings: SubAgentApprovals) -> SubAgentApprovals:
+    """A delegation setting may tighten what the delegating agent allows, never
+    loosen it."""
+    return max(settings, key=_APPROVALS_STRICTNESS.__getitem__)
+
 
 class SubAgentToolResult(BaseModel):
     text: str
     content_parts: List[ContentPart] = Field(default_factory=list)
+
+
+class SubAgentCount:
+    """Agents started with ``task`` and ``delegate`` in one turn. Every agent of
+    the turn's tree holds the same instance, so the count spans all depths."""
+
+    def __init__(self) -> None:
+        self.started = 0
 
 
 class AgentCreator:
@@ -26,6 +46,7 @@ class AgentCreator:
                 Dict[str, Any],
                 Optional[ConversationContext],
                 Optional[Dict[str, Any]],
+                SubAgentApprovals,
             ],
             Awaitable[ChatAgent],
         ],
@@ -41,6 +62,7 @@ class AgentCreator:
         tools: Optional[List[Tool]] = None,
         bot_params: Optional[Dict[str, Any]] = None,
         conversation_context: Optional[ConversationContext] = None,
+        sub_agent_approvals: SubAgentApprovals = "ask",
     ) -> ChatAgent:
         extra_agent_kwargs = {}
         if system_prompt:
@@ -50,6 +72,7 @@ class AgentCreator:
             bot_params or {},
             conversation_context,
             extra_agent_kwargs if extra_agent_kwargs else None,
+            sub_agent_approvals,
         )
         if tools:
             new_agent.tools_registry.tools_index = {
@@ -64,10 +87,14 @@ async def run_sub_agent(
     prompt: str,
     target_identifier: Optional[str] = None,
     bot_params: Optional[Dict[str, Any]] = None,
+    sub_agent_approvals: SubAgentApprovals = "ask",
+    conversation_context: Optional[ConversationContext] = None,
 ) -> ChatMessage:
     agent = await agent_creator.create(
         agent_identifier=target_identifier,
         bot_params=bot_params,
+        conversation_context=conversation_context,
+        sub_agent_approvals=sub_agent_approvals,
     )
 
     conversation = [

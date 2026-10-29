@@ -1,28 +1,42 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from zav.pydantic_compat import BaseModel, Field
+from zav.pydantic_compat import Field
 
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.agent_state.sub_agent_limits import SubAgentLimits
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_creator import (
     AgentCreator,
+    SubAgentApprovals,
     SubAgentToolResult,
     run_sub_agent,
+    stricter_approvals,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
+from zav.agents_sdk.domain.chat_message import ConversationContext
 from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
+
+_SUB_AGENT_TOOLS = "It has your tools and no others"
+_SUB_AGENT_TOOLS_WITHOUT_SPAWNING = (
+    "It has your tools except `task` and `delegate`, and no others"
+)
 
 _MINIMAL_TASK_TOOL_DESCRIPTION = """\
 Launch an isolated sub-agent to perform a focused, well-scoped unit of work. \
 The sub-agent runs in a fresh context with no access to your conversation \
-history. It executes autonomously and returns a single text result as this \
-tool's response.\
+history. {sub_agent_tools}, so it cannot do anything you cannot do yourself. \
+It executes autonomously and returns a single text result as this tool's \
+response.\
 """
 
 _VERBOSE_TASK_TOOL_DESCRIPTION = """\
 Launch an isolated sub-agent to perform a focused, well-scoped unit of work. \
 The sub-agent runs in a fresh context with no access to your conversation \
-history. It executes autonomously and returns a single text result as this \
-tool's response.
+history. {sub_agent_tools}, so it cannot do anything you cannot do yourself. \
+It executes autonomously and returns a single text result as this tool's \
+response.
 
 CRITICAL — Task granularity:
 - Each task should be a SMALL, FOCUSED unit of work — not a restatement of \
@@ -116,7 +130,7 @@ or high-stakes accuracy requirements.\
 """
 
 
-class SubAgentToolSourceConfiguration(BaseModel):
+class SubAgentToolSourceConfiguration(ToolsSourceConfiguration):
     """Configuration for the task tool (self-delegation)."""
 
     enabled: bool = Field(
@@ -151,25 +165,41 @@ class SubAgentToolSourceConfiguration(BaseModel):
             "(within its allowed names)."
         ),
     )
+    sub_agent_approvals: SubAgentApprovals = Field(
+        "ask",
+        description=(
+            "What the sub-agent does with a call that needs the user's "
+            "approval: ask the user in this chat, decline it, or run it."
+        ),
+    )
 
 
 class SubAgentToolSource(ToolsSource):
     """Produces the ``task`` tool that spawns a copy of the current agent."""
 
     source_name = "sub_agent"
+    source_description = "Hand a self-contained task to a copy of this agent."
 
     def __init__(
         self,
         agent_creator: AgentCreator,
+        sub_agent_limits: SubAgentLimits,
         enabled: bool,
         verbose: bool,
         include_in_prompt: bool,
         extra_instructions: Optional[str],
         tool_description: Optional[str],
         allow_llm_selection: bool = False,
+        sub_agent_approvals: SubAgentApprovals = "ask",
+        conversation_context: Optional[ConversationContext] = None,
+        defer_tools: Optional[bool] = None,
     ):
         self.__agent_creator = agent_creator
-        self.enabled = enabled
+        self.__conversation_context = conversation_context
+        self.__sub_agent_approvals = sub_agent_approvals
+        self.__sub_agent_limits = sub_agent_limits
+        self.enabled = enabled and sub_agent_limits.can_spawn
+        self.defer_tools = defer_tools
         self.__verbose = verbose
         self.__include_in_prompt = include_in_prompt
         self.__extra_instructions = extra_instructions
@@ -186,7 +216,9 @@ class SubAgentToolSource(ToolsSource):
             prompt: str,
             description: str,
             llm_configuration_name: Optional[str] = None,
-        ) -> SubAgentToolResult:
+        ) -> Union[SubAgentToolResult, str]:
+            if not self.__sub_agent_limits.try_start():
+                return self.__sub_agent_limits.refusal
             bot_params = None
             if llm_configuration_name and self.__allow_llm_selection:
                 bot_params = {
@@ -198,18 +230,29 @@ class SubAgentToolSource(ToolsSource):
                 agent_creator=self.__agent_creator,
                 prompt=prompt,
                 bot_params=bot_params,
+                sub_agent_approvals=self.__sub_agent_approvals,
+                conversation_context=self.__conversation_context,
             )
             return SubAgentToolResult(
                 text=child.content or "Sub-agent completed but produced no output.",
                 content_parts=child.content_parts or [],
             )
 
+        sub_agent_tools = (
+            _SUB_AGENT_TOOLS
+            if self.__sub_agent_limits.task_sub_agent_can_spawn
+            else _SUB_AGENT_TOOLS_WITHOUT_SPAWNING
+        )
         if self.__tool_description is not None:
             description = self.__tool_description
         elif self.__verbose:
-            description = _VERBOSE_TASK_TOOL_DESCRIPTION
+            description = _VERBOSE_TASK_TOOL_DESCRIPTION.format(
+                sub_agent_tools=sub_agent_tools
+            )
         else:
-            description = _MINIMAL_TASK_TOOL_DESCRIPTION
+            description = _MINIMAL_TASK_TOOL_DESCRIPTION.format(
+                sub_agent_tools=sub_agent_tools
+            )
 
         if self.__extra_instructions:
             description = f"{description}\n\n{self.__extra_instructions}"
@@ -275,13 +318,19 @@ class SubAgentToolSourceFactory(AgentDependencyFactory):
     def create(
         cls,
         agent_creator: AgentCreator,
+        sub_agent_limits: SubAgentLimits,
         sub_agent_tool_source_configuration: SubAgentToolSourceConfiguration = (
             SubAgentToolSourceConfiguration()
         ),
+        # Set on a sub-agent by its delegation: what it starts is as strict.
+        sub_agent_approvals: SubAgentApprovals = "run",
+        conversation_context: Optional[ConversationContext] = None,
     ) -> SubAgentToolSource:
         return SubAgentToolSource(
             agent_creator=agent_creator,
+            sub_agent_limits=sub_agent_limits,
             enabled=sub_agent_tool_source_configuration.enabled,
+            defer_tools=sub_agent_tool_source_configuration.defer_tools,
             verbose=sub_agent_tool_source_configuration.verbose,
             include_in_prompt=sub_agent_tool_source_configuration.include_in_prompt,
             extra_instructions=sub_agent_tool_source_configuration.extra_instructions,
@@ -289,4 +338,9 @@ class SubAgentToolSourceFactory(AgentDependencyFactory):
             allow_llm_selection=(
                 sub_agent_tool_source_configuration.allow_llm_selection
             ),
+            sub_agent_approvals=stricter_approvals(
+                sub_agent_tool_source_configuration.sub_agent_approvals,
+                sub_agent_approvals,
+            ),
+            conversation_context=conversation_context,
         )

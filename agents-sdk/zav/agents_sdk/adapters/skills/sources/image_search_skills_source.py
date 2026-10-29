@@ -62,6 +62,7 @@ class ImageSearchSkillsSourceConfiguration(BaseModel):
 class ImageSearchSkillsSource(SkillsSource):
 
     source_name: ClassVar[str] = "image_search_skills"
+    source_description = "How to search and compare images."
 
     def __init__(
         self,

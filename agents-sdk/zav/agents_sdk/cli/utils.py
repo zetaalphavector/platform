@@ -15,22 +15,14 @@ def to_snake_case(name: str) -> str:
     return name.replace("-", " ").replace("_", " ").replace(" ", "_").lower()
 
 
-def get_default_openai_key(env_agent_setups_file: str) -> str:
-
-    default_openai_api_key = os.getenv("OPENAI_API_KEY", "")
-    if os.path.exists(env_agent_setups_file):
-        with open(env_agent_setups_file, "r") as f:
-            env_setups = json.load(f)
-            for setup in env_setups:
-                if "openai_api_key" in setup.get("llm_client_configuration", {}).get(
-                    "vendor_configuration", {}
-                ).get("openai", {}):
-                    default_openai_api_key = setup["llm_client_configuration"][
-                        "vendor_configuration"
-                    ]["openai"]["openai_api_key"]
-                    break
-
-    return default_openai_api_key
+def get_default_openai_key(project_dir: str) -> str:
+    config = ProjectConfig(project_dir)
+    openai = config.get_llm_vendor_config("default", "openai")
+    ref = openai.get("openai_api_key_ref")
+    stored = config.get_secret_value(ref) if ref else None
+    return str(
+        stored or openai.get("openai_api_key") or os.getenv("OPENAI_API_KEY", "")
+    )
 
 
 def init_project(project_dir: str, sdk_version: str):
@@ -50,11 +42,7 @@ def init_project(project_dir: str, sdk_version: str):
     with open(os.path.join(project_dir, "agent_setups.json"), "w") as f:
         json.dump([], f)
 
-    # Create env/agent_setups.json file
-    env_project_dir = os.path.join(project_dir, "env")
-    os.makedirs(env_project_dir, exist_ok=True)
-    with open(os.path.join(env_project_dir, "agent_setups.json"), "w") as f:
-        json.dump([], f)
+    os.makedirs(os.path.join(project_dir, ENV_DIR), exist_ok=True)
 
 
 def init_dependencies(project_dir: str):
@@ -100,9 +88,7 @@ def create_agent_files(
         agent_name_snake = to_snake_case(agent_name)
         agent_file = os.path.join(project_dir, f"{agent_name_snake}.py")
 
-    # Check for existing OpenAI API key in env/agent_setups.json
-    env_agent_setups_file = os.path.join(project_dir, "env", "agent_setups.json")
-    default_openai_api_key = get_default_openai_key(env_agent_setups_file)
+    default_openai_api_key = get_default_openai_key(project_dir)
 
     # Ask for OpenAI API key
     default_openai_api_key_obscured = default_openai_api_key[:8] + "..."
@@ -153,7 +139,7 @@ class {class_name}(StreamableChatAgent):
             "default",
             "openai",
             {"name": "gpt-5.4-mini", "type": "chat", "temperature": 0.0},
-            {"openai_api_key": openai_api_key, "openai_org": ""},
+            {"openai_api_key": openai_api_key},
         )
     config.add_agent(
         {

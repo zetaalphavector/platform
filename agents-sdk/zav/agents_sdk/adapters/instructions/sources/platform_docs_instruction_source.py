@@ -116,6 +116,7 @@ class PlatformDocsInstructionSourceConfiguration(BaseModel):
 class PlatformDocsInstructionSource(InstructionSource):
 
     source_name = "platform_docs"
+    source_description = "Guidance for answering questions about the platform."
 
     def __init__(self, enabled: bool, instruction_text: str):
         self.enabled = enabled

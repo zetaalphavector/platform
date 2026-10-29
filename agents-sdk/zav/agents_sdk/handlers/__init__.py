@@ -8,3 +8,9 @@ try:
     from zav.agents_sdk.handlers.mcp_oauth import *
 except ImportError:
     pass
+
+try:
+    # Realtime transcription needs the optional ``realtime`` extra.
+    from zav.agents_sdk.handlers.realtime_transcription import *
+except ImportError:
+    pass

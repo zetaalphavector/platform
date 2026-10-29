@@ -93,7 +93,6 @@ class UserDocumentMetadata(ModelNormal):
             'description': (str,),  # noqa: E501
             'resources': ([UserDocumentResource],),  # noqa: E501
             'source': (str,),  # noqa: E501
-            'subject': ([str],),  # noqa: E501
             'title': (str,),  # noqa: E501
             'year': (int,),  # noqa: E501
         }
@@ -110,7 +109,6 @@ class UserDocumentMetadata(ModelNormal):
         'description': 'description',  # noqa: E501
         'resources': 'resources',  # noqa: E501
         'source': 'source',  # noqa: E501
-        'subject': 'subject',  # noqa: E501
         'title': 'title',  # noqa: E501
         'year': 'year',  # noqa: E501
     }
@@ -162,7 +160,6 @@ class UserDocumentMetadata(ModelNormal):
             description (str): [optional]  # noqa: E501
             resources ([UserDocumentResource]): [optional]  # noqa: E501
             source (str): [optional] if omitted the server will use the default value of "private-document"  # noqa: E501
-            subject ([str]): [optional]  # noqa: E501
             title (str): [optional]  # noqa: E501
             year (int): [optional]  # noqa: E501
         """
@@ -252,7 +249,6 @@ class UserDocumentMetadata(ModelNormal):
             description (str): [optional]  # noqa: E501
             resources ([UserDocumentResource]): [optional]  # noqa: E501
             source (str): [optional] if omitted the server will use the default value of "private-document"  # noqa: E501
-            subject ([str]): [optional]  # noqa: E501
             title (str): [optional]  # noqa: E501
             year (int): [optional]  # noqa: E501
         """

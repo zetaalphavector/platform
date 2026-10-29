@@ -22,8 +22,11 @@ from zav.search_api.model.checkbox_filter_value import CheckboxFilterValue
 from zav.search_api.model.client_index_settings import ClientIndexSettings
 from zav.search_api.model.column_width_sizes import ColumnWidthSizes
 from zav.search_api.model.comparison_filter import ComparisonFilter
+from zav.search_api.model.confidentiality_label_restrictions import ConfidentialityLabelRestrictions
+from zav.search_api.model.confidentiality_settings import ConfidentialitySettings
 from zav.search_api.model.creator import Creator
 from zav.search_api.model.date_range_schema import DateRangeSchema
+from zav.search_api.model.dictation_settings import DictationSettings
 from zav.search_api.model.display_settings import DisplaySettings
 from zav.search_api.model.document_asset_response import DocumentAssetResponse
 from zav.search_api.model.document_card import DocumentCard
@@ -64,8 +67,13 @@ from zav.search_api.model.git_hub_repo import GitHubRepo
 from zav.search_api.model.hit import Hit
 from zav.search_api.model.hit_metadata import HitMetadata
 from zav.search_api.model.homepage_settings import HomepageSettings
+from zav.search_api.model.incognito_chat_settings import IncognitoChatSettings
 from zav.search_api.model.index_cluster_string import IndexClusterString
 from zav.search_api.model.is_in_filter import IsInFilter
+from zav.search_api.model.llm_hosting import LLMHosting
+from zav.search_api.model.llm_hosting_provider import LLMHostingProvider
+from zav.search_api.model.llm_selection_settings import LLMSelectionSettings
+from zav.search_api.model.llm_vendor import LLMVendor
 from zav.search_api.model.layout_settings import LayoutSettings
 from zav.search_api.model.list_response import ListResponse
 from zav.search_api.model.nested_checkbox_filter_type_settings import NestedCheckboxFilterTypeSettings
@@ -96,6 +104,7 @@ from zav.search_api.model.search_relevance_configuration import SearchRelevanceC
 from zav.search_api.model.search_response import SearchResponse
 from zav.search_api.model.search_results_configuration import SearchResultsConfiguration
 from zav.search_api.model.search_sorting_settings import SearchSortingSettings
+from zav.search_api.model.selectable_llm_configuration import SelectableLLMConfiguration
 from zav.search_api.model.sort_order_schema import SortOrderSchema
 from zav.search_api.model.sort_params import SortParams
 from zav.search_api.model.sort_schema import SortSchema
@@ -103,6 +112,7 @@ from zav.search_api.model.sorting_configuration import SortingConfiguration
 from zav.search_api.model.sorting_configuration_list import SortingConfigurationList
 from zav.search_api.model.source_list_item import SourceListItem
 from zav.search_api.model.source_list_response import SourceListResponse
+from zav.search_api.model.source_selection_settings import SourceSelectionSettings
 from zav.search_api.model.tags_section import TagsSection
 from zav.search_api.model.tenant_client_settings import TenantClientSettings
 from zav.search_api.model.tenant_settings import TenantSettings

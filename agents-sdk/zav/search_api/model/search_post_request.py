@@ -31,9 +31,9 @@ from zav.search_api.exceptions import ApiAttributeError
 
 def lazy_import():
     from zav.search_api.model.date_range_schema import DateRangeSchema
-    from zav.search_api.model.document_id_string import DocumentIdString
     from zav.search_api.model.facets_configuration import FacetsConfiguration
     from zav.search_api.model.filters_configuration import FiltersConfiguration
+    from zav.search_api.model.guid_string import GUIDString
     from zav.search_api.model.index_cluster_string import IndexClusterString
     from zav.search_api.model.query_string import QueryString
     from zav.search_api.model.retrieval_method_string import RetrievalMethodString
@@ -44,9 +44,9 @@ def lazy_import():
     from zav.search_api.model.uid_string import UIDString
     from zav.search_api.model.year_range_schema import YearRangeSchema
     globals()['DateRangeSchema'] = DateRangeSchema
-    globals()['DocumentIdString'] = DocumentIdString
     globals()['FacetsConfiguration'] = FacetsConfiguration
     globals()['FiltersConfiguration'] = FiltersConfiguration
+    globals()['GUIDString'] = GUIDString
     globals()['IndexClusterString'] = IndexClusterString
     globals()['QueryString'] = QueryString
     globals()['RetrievalMethodString'] = RetrievalMethodString
@@ -152,7 +152,7 @@ class SearchPostRequest(ModelNormal):
             'cites': (str,),  # noqa: E501
             'authored_by': (str,),  # noqa: E501
             'date': (DateRangeSchema,),  # noqa: E501
-            'doc_ids': ([DocumentIdString],),  # noqa: E501
+            'doc_ids': ([GUIDString],),  # noqa: E501
             'tag_ids': ([str],),  # noqa: E501
             'has_concept': (str,),  # noqa: E501
             'with_content': (bool,),  # noqa: E501
@@ -285,7 +285,7 @@ class SearchPostRequest(ModelNormal):
             cites (str): [optional]  # noqa: E501
             authored_by (str): [optional]  # noqa: E501
             date (DateRangeSchema): [optional]  # noqa: E501
-            doc_ids ([DocumentIdString]): [optional]  # noqa: E501
+            doc_ids ([GUIDString]): [optional]  # noqa: E501
             tag_ids ([str]): [optional]  # noqa: E501
             has_concept (str): [optional]  # noqa: E501
             with_content (bool): [optional] if omitted the server will use the default value of False  # noqa: E501
@@ -409,7 +409,7 @@ class SearchPostRequest(ModelNormal):
             cites (str): [optional]  # noqa: E501
             authored_by (str): [optional]  # noqa: E501
             date (DateRangeSchema): [optional]  # noqa: E501
-            doc_ids ([DocumentIdString]): [optional]  # noqa: E501
+            doc_ids ([GUIDString]): [optional]  # noqa: E501
             tag_ids ([str]): [optional]  # noqa: E501
             has_concept (str): [optional]  # noqa: E501
             with_content (bool): [optional] if omitted the server will use the default value of False  # noqa: E501

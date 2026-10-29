@@ -32,17 +32,21 @@ from zav.agents_sdk.adapters.llm_models.chat_completion_types import (
     parse_chat_message,
 )
 from zav.agents_sdk.adapters.llm_models.chat_request_builder import ChatRequestBuilder
+from zav.agents_sdk.adapters.llm_models.chat_turn_request import InnerLoopHooks
 from zav.agents_sdk.adapters.llm_models.chat_turn_runner import ChatTurnRunner
 from zav.agents_sdk.adapters.llm_models.context_window_manager import (
     ContextWindowManager,
 )
+from zav.agents_sdk.adapters.llm_models.turn_inbox import ToolApprovals
 from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
     ResumableZAVChatCompletionClient,
     ZAVChatCompletionClient,
 )
+from zav.agents_sdk.adapters.tool_policy import ToolPolicyProvider
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.chat_message import ChatMessage, FunctionCallRequest
 from zav.agents_sdk.domain.tools import Tool, ToolsRegistry, ToolStreamingConfig
+from zav.agents_sdk.domain.turn_inbox import TurnInbox
 
 REPLAY_EXHAUSTED_MESSAGE = (
     "The replay recording is exhausted: every scripted completion has already "
@@ -849,6 +853,7 @@ class ReplayResumableZAVChatCompletionClient(ResumableZAVChatCompletionClient):
         stream_tool_progress: bool = False,
         preserve_streamed_content_parts: bool = False,
         log_fn: Optional[Callable] = None,
+        hooks: Optional[InnerLoopHooks] = None,
         max_nesting_level: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
         logprobs: Optional[bool] = None,
@@ -881,6 +886,7 @@ class ReplayResumableZAVChatCompletionClient(ResumableZAVChatCompletionClient):
             stream_tool_progress=stream_tool_progress,
             preserve_streamed_content_parts=preserve_streamed_content_parts,
             log_fn=log_fn,
+            hooks=hooks,
             max_nesting_level=max_nesting_level,
             reasoning_effort=reasoning_effort,
             logprobs=logprobs,
@@ -914,6 +920,8 @@ class ReplayResumableZAVChatCompletionClientFactory(AgentDependencyFactory):
         replay_seed: int = 7,
         replay_time_scale: float = 1.0,
         span: Optional[Span] = None,
+        tool_policy: Optional[ToolPolicyProvider] = None,
+        turn_inbox: Optional[TurnInbox] = None,
     ) -> ReplayResumableZAVChatCompletionClient:
         script = ReplayScript(
             generate_synthetic_completions(steps=replay_steps, seed=replay_seed)
@@ -932,11 +940,14 @@ class ReplayResumableZAVChatCompletionClientFactory(AgentDependencyFactory):
             context_window_manager=context_window_manager,
             max_nesting_level=nesting_level,
             span=span,
+            tool_policy=tool_policy,
         )
         runner = ChatTurnRunner(
             chat_completion_client=replay_chat_client,
             request_builder=ChatRequestBuilder(context_window_manager),
             span=span,
+            tool_policy=tool_policy,
+            approvals=ToolApprovals(inbox=turn_inbox),
         )
         return ReplayResumableZAVChatCompletionClient(
             client,

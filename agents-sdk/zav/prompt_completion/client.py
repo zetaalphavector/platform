@@ -2,12 +2,22 @@ import enum
 import math
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union, overload
+from typing import Any, Dict, List, Optional, Tuple, Union, overload
 
 from typing_extensions import AsyncIterator, Literal, NotRequired, TypedDict
-from zav.llm_domain import LLMModelConfiguration
+from zav.llm_domain import (
+    LLMModelConfiguration,
+    ToolSearchMethodSettings,
+    ToolSearchMode,
+)
 from zav.llm_tracing import Span
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, root_validator
+from zav.pydantic_compat import (
+    PYDANTIC_V2,
+    BaseModel,
+    ConfigDict,
+    Field,
+    root_validator,
+)
 
 TokenScore = Dict[str, float]
 
@@ -164,6 +174,22 @@ class PromptTooLargeError(Exception):
         self.extra_tokens = extra_tokens
 
 
+class RateLimitError(Exception):
+    """Raised when the API provider rejects the request for exceeding a rate limit."""
+
+    def __init__(self, message: str, retry_after_seconds: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ContentFilterError(Exception):
+    """The provider blocked the request under its content/safety policy.
+
+    Deterministic and terminal: unlike a rate limit, retrying the same input
+    produces the same block, so callers must not requeue it.
+    """
+
+
 class BaseCompletionClient(ABC):
     @classmethod
     @abstractmethod
@@ -173,6 +199,58 @@ class BaseCompletionClient(ABC):
         model_configuration: LLMModelConfiguration,
         span: Optional[Span] = None,
     ) -> "BaseCompletionClient":
+        raise NotImplementedError
+
+    @classmethod
+    def warm_up(cls) -> None:
+        """Pay the client's one-time per-process costs before the first request."""
+
+
+class ImageGenerationRequest(BaseModel):
+    prompt: str
+    aspect_ratio: Tuple[int, int] = (1, 1)
+    background: Optional[Literal["transparent", "opaque"]] = Field(
+        None,
+        description="Unset leaves it to the vendor. Ignored by clients whose "
+        "vendor has no such option.",
+    )
+    user: Optional[str] = None
+    timeout_seconds: Optional[float] = None
+
+    @root_validator()
+    @classmethod
+    def check_aspect_ratio(cls, values):
+        if PYDANTIC_V2:
+            aspect_ratio = values.aspect_ratio
+        else:
+            aspect_ratio = values.get("aspect_ratio", (1, 1))
+        if min(aspect_ratio) < 1:
+            raise ValueError("aspect_ratio sides must be positive")
+        return values
+
+
+class ImageUsage(BaseModel):
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+
+class ImageGenerationResult(BaseModel):
+    image_bytes: bytes
+    mime_type: str
+    width: int
+    height: int
+    revised_prompt: Optional[str] = None
+    usage: Optional[ImageUsage] = None
+
+
+class ImageGenerationClient(BaseCompletionClient):
+    """Raises RateLimitError when the provider throttles the call and
+    ContentFilterError when its safety system rejects the prompt or the
+    generated image; other provider errors propagate unchanged."""
+
+    @abstractmethod
+    async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
         raise NotImplementedError
 
 
@@ -205,6 +283,12 @@ class ChatClientRequest(TypedDict):
     seed: NotRequired[int]
     reasoning_effort: NotRequired[str]
     verbosity: NotRequired[str]
+    # The caller's enabled tool search methods for deferred tools, preferred
+    # first; the first one the model supports is used.
+    tool_search: NotRequired[List[ToolSearchMethodSettings]]
+    # Set by the tool search client for the vendor adapter: the method whose
+    # vendor protocol encodes the deferred tools.
+    tool_search_method: NotRequired[ToolSearchMode]
 
 
 class ChatCompletionClient(BaseCompletionClient):

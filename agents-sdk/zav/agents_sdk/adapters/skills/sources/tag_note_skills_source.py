@@ -30,6 +30,7 @@ class TagNoteSkillsSourceConfiguration(BaseModel):
 
 class TagNoteSkillsSource(SkillsSource):
     source_name = "tag_notes"
+    source_description = "Skills stored as notes in a tag."
 
     def __init__(
         self,

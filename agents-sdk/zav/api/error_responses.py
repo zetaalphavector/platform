@@ -36,6 +36,7 @@ def error_responses(*errors: ApiError) -> Dict[Union[int, str], Dict[str, Any]]:
 ERROR_BAD_REQUEST = ApiError(400, "Bad request.")
 ERROR_FORBIDDEN = ApiError(403, "Forbidden.")
 ERROR_NOT_FOUND = ApiError(404, "Not found.")
+ERROR_RATE_LIMITED = ApiError(429, "Too many requests.")
 ERROR_INTERNAL = ApiError(500, "Internal server error.")
 
 # The errors the global exception handlers can raise on any route. Applied once

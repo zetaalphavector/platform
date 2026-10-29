@@ -21,6 +21,7 @@ class DateTimeInstructionSourceConfiguration(BaseModel):
 class DateTimeInstructionSource(InstructionSource):
 
     source_name = "datetime"
+    source_description = "Today's date and time."
 
     def __init__(self, enabled: bool, timezone: str):
         self.enabled = enabled

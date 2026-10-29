@@ -12,10 +12,10 @@ from zav.search_api.apis import (
 )
 from zav.search_api.models import (
     DateRangeSchema,
-    DocumentIdString,
     FacetConfiguration,
     FacetsConfiguration,
     FiltersConfiguration,
+    GUIDString,
     ListResponse,
     QueryString,
     RetrievalMethodString,
@@ -242,7 +242,7 @@ class ZAVRetriever:
             **({"index_type": index_type} if index_type else {}),
             **({"collapse": collapse} if collapse != "__NOT_SET" else {}),
             **(
-                {"doc_ids": [DocumentIdString(doc_id) for doc_id in doc_ids]}
+                {"doc_ids": [GUIDString(doc_id) for doc_id in doc_ids]}
                 if doc_ids
                 else {}
             ),

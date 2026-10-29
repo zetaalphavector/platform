@@ -1,6 +1,8 @@
 import re
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from urllib.parse import urldefrag
 
+from zav.common.nested_models import getpathattr
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
@@ -16,6 +18,9 @@ from zav.agents_sdk.adapters.message_processing.message_processor import (
     MessageProcessor,
     StreamItem,
 )
+from zav.agents_sdk.adapters.tools.sources.index_tools_source import (
+    CONTENT_TYPE_FIELD,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.chat_message import (
     ChatMessage,
@@ -26,6 +31,43 @@ from zav.agents_sdk.domain.chat_message import (
     CustomContextItem,
     DocumentContext,
 )
+
+# W3C Media Fragments temporal dimension in NPT: `t=start[,end]`, where each
+# value is seconds (`83.5`), `mm:ss` or `h:mm:ss`, optionally prefixed `npt:`.
+_NPT_TIME = r"(?:\d+:)?\d{1,2}:\d{2}(?:\.\d+)?|\d+(?:\.\d+)?"
+_MEDIA_TIME_FRAGMENT_PATTERN = re.compile(
+    rf"^t=(?P<npt>npt:)?(?P<start>{_NPT_TIME})(?:[,-](?P<end>{_NPT_TIME}))?$"
+)
+
+
+def _npt_to_seconds(value: str) -> float:
+    seconds = 0.0
+    for part in value.split(":"):
+        seconds = seconds * 60 + float(part)
+    return seconds
+
+
+_TIMED_MEDIA_CONTENT_TYPES = ("video/", "audio/")
+
+
+# Transcripts print ranges as `[00:19-00:26]`, so models copy the dash; the
+# W3C form uses a comma.
+def _normalize_media_time_fragment(
+    fragment: str, search_hit: Dict[str, Any]
+) -> Optional[str]:
+    match = _MEDIA_TIME_FRAGMENT_PATTERN.match(fragment)
+    if not match:
+        return None
+    content_type = getpathattr(search_hit, CONTENT_TYPE_FIELD)
+    if not isinstance(content_type, str) or not content_type.startswith(
+        _TIMED_MEDIA_CONTENT_TYPES
+    ):
+        return None
+    start, end = match.group("start"), match.group("end")
+    if end is not None and _npt_to_seconds(start) > _npt_to_seconds(end):
+        return None
+    prefix = f"t={match.group('npt') or ''}{start}"
+    return prefix if end is None else f"{prefix},{end}"
 
 
 class ResolvedCitation(BaseModel):
@@ -47,6 +89,7 @@ class CitationProcessor(MessageProcessor):
     """
 
     source_name = "citation_processor"
+    source_description = "Turns citations in the answer into linked evidence."
 
     _INLINE_URL_PATTERN = re.compile(r'\[\[(\d+)\]\]\(([^)\s]+)(?:\s+"([^"]*)")?\)')
     _SUP_NUMERIC_PATTERN = re.compile(r"<sup>(\d+)</sup>")
@@ -108,11 +151,13 @@ class CitationProcessor(MessageProcessor):
 
         for match in self._INLINE_URL_PATTERN.finditer(content):
             citation_number = match.group(1)
-            source_url = match.group(2)
+            source_url, time_fragment = self.__split_time_fragment(match.group(2))
             full_match = match.group(0)
             text_extract = match.group(3)
             anchor_text = f"[[{citation_number}]]"
-            registered = self.__resolve_citation(source_url, anchor_text, text_extract)
+            registered = self.__resolve_citation(
+                source_url, anchor_text, text_extract, time_fragment
+            )
             if not registered:
                 continue
 
@@ -141,7 +186,7 @@ class CitationProcessor(MessageProcessor):
         evidences: List[ChatMessageEvidence] = []
         context = CitationContextContribution()
 
-        bare_pattern = re.compile(r"\[([a-f0-9]{7,8})\]")
+        bare_pattern = re.compile(r"\[([a-f0-9]{7,8})(?:#(t=[^\]\s]+))?\]")
         for match in bare_pattern.finditer(content):
             short_id = match.group(1)
             source_url = short_id_map.get(short_id)
@@ -152,6 +197,7 @@ class CitationProcessor(MessageProcessor):
                 source_url=source_url,
                 anchor_text=match.group(0),
                 text_extract=None,
+                time_fragment=match.group(2),
             )
             if not registered:
                 continue
@@ -203,8 +249,21 @@ class CitationProcessor(MessageProcessor):
 
         return self.__build_enriched_message(message, evidences, context)
 
+    def __split_time_fragment(self, cited_url: str) -> Tuple[str, Optional[str]]:
+        # Federated hits can be registered under a URL that has its own fragment.
+        if self.__store.get_hit(cited_url):
+            return cited_url, None
+        source_url, fragment = urldefrag(cited_url)
+        if not fragment.startswith("t="):
+            return cited_url, None
+        return source_url, fragment
+
     def __resolve_citation(
-        self, source_url: str, anchor_text: str, text_extract: Optional[str]
+        self,
+        source_url: str,
+        anchor_text: str,
+        text_extract: Optional[str],
+        time_fragment: Optional[str] = None,
     ) -> Optional[ResolvedCitation]:
         hit = self.__store.get_hit(source_url)
         if not hit:
@@ -220,6 +279,15 @@ class CitationProcessor(MessageProcessor):
         )
         if not evidence_url:
             return None
+
+        if time_fragment:
+            normalized = _normalize_media_time_fragment(time_fragment, hit.search_hit)
+            if normalized:
+                evidence_url = f"{evidence_url}#{normalized}"
+            else:
+                logger.warning(
+                    f"Dropping invalid media time fragment: {time_fragment[:40]}"
+                )
 
         return ResolvedCitation(
             evidence=ChatMessageEvidence(

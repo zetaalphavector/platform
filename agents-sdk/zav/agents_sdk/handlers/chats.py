@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, AsyncGenerator, Awaitable, Callable, List, Optional, Type
 
 from zav.llm_tracing import TracingBackendFactory
@@ -5,6 +6,7 @@ from zav.logging import logger
 from zav.message_bus import (  # noqa
     CommandHandlerRegistry,
     EventHandlerRegistry,
+    HandlerException,
     Message,
     StreamCommandHandlerRegistry,
 )
@@ -15,6 +17,7 @@ from zav.agents_sdk.adapters.event_publishers.event_publisher import (
 from zav.agents_sdk.domain.agent_async_worker import AgentAsyncWorker
 from zav.agents_sdk.domain.agent_event import AgentEvent
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
+from zav.agents_sdk.domain.agent_setup_retriever import require_agent_setup
 from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
 from zav.agents_sdk.domain.chat_agent_state_store import (
     ChatAgentStateStore,
@@ -35,9 +38,24 @@ from zav.agents_sdk.domain.chat_message import (
     FunctionSpec,
 )
 from zav.agents_sdk.domain.chat_request import ChatRequest
+from zav.agents_sdk.domain.message_inbox import InboxItem, MessageInboxStore
+from zav.agents_sdk.domain.turn_inbox import TurnInbox
 from zav.agents_sdk.handlers import commands, events
 from zav.agents_sdk.mem_utils import cleanup_memory
 from zav.agents_sdk.security import sanitize_bot_params
+
+
+class ChatResponseTimeoutError(Exception):
+    """A non-streaming chat turn exceeded its caller-supplied `request_timeout`.
+
+    The in-flight turn is cancelled when this is raised. Distinct from a server
+    fault so a caller (e.g. the pipeline agent processor) can treat it as
+    transient rather than a hard failure.
+    """
+
+
+class ChatMessageAlreadyReadError(HandlerException):
+    """The message left the conversation's inbox: a turn read it."""
 
 
 async def push_event_to_queue(
@@ -105,13 +123,15 @@ async def resolve_turn_conversation(
     dependency_state: Optional[DependencyState],
     chat_agent_factory: ChatAgentFactory,
     chat_conversation_store: Optional[ChatConversationStore],
+    new_messages: List[DomainChatMessage],
 ) -> List[DomainChatMessage]:
     # On resume the persisted transcript already holds the user's turn, so the
-    # agent runs with an empty conversation and the model/tool loop re-drives
+    # agent runs with only what arrived since and the model/tool loop re-drives
     # from the last checkpoint. With no checkpoint yet (e.g. a crash before the
-    # first save) fall back to a normal fresh turn with the incoming message.
+    # first save) the stored transcript, which holds the user's turn, starts it
+    # again below.
     if cmd.resume and dependency_state:
-        return []
+        return new_messages
     # Two situations need the full stored transcript rather than the single new
     # turn the client sent:
     #
@@ -133,10 +153,7 @@ async def resolve_turn_conversation(
     if (
         cmd.stateful
         and chat_conversation_store is not None
-        and (
-            not chat_agent_factory.resumes_conversation
-            or (not cmd.resume and not dependency_state)
-        )
+        and (not chat_agent_factory.resumes_conversation or not dependency_state)
     ):
         stored = await chat_conversation_store.get_transcript(
             tenant=cmd.tenant,
@@ -145,30 +162,29 @@ async def resolve_turn_conversation(
         )
         if stored:
             return stored
-    return cmd.chat_request.conversation
+    # Nothing stored the user's turn (no checkpoint, no conversation store), so
+    # a resume runs it again from the request.
+    if cmd.resume and not new_messages:
+        return cmd.chat_request.conversation
+    return new_messages
 
 
 async def record_user_turn(
     cmd: commands.CreateChatResponse,
     chat_conversation_store: Optional[ChatConversationStore],
+    new_messages: List[DomainChatMessage],
 ) -> None:
     """Open the conversation (creating it on the first turn / migration) and
-    append the incoming user message(s) before the agent runs, so the user's
-    turn is durable even if the producer crashes mid-answer. On resume the user
-    turn is already stored, so it is skipped."""
-    if (
-        not cmd.stateful
-        or cmd.resume
-        or chat_conversation_store is None
-        or not cmd.chat_request.conversation
-    ):
+    append the turn's new user message(s) before the agent runs, so the user's
+    turn is durable even if the producer crashes mid-answer."""
+    if not cmd.stateful or chat_conversation_store is None or not new_messages:
         return
     await chat_conversation_store.append_messages(
         tenant=cmd.tenant,
         requester_uuid=cmd.request_headers.requester_uuid,
         session_id=cmd.session_id,
         agent_identifier=cmd.chat_request.agent_identifier,
-        messages=cmd.chat_request.conversation,
+        messages=new_messages,
         user_roles=cmd.request_headers.user_roles,
         user_tenants=cmd.request_headers.user_tenants,
         user_agent_id=cmd.chat_request.user_agent_id,
@@ -176,6 +192,31 @@ async def record_user_turn(
         last_turn_status="running",
         conversation_context=cmd.chat_request.conversation_context,
     )
+
+
+def request_messages(cmd: commands.CreateChatResponse) -> List[DomainChatMessage]:
+    """The messages a request brings to its turn. On resume the user turn is
+    already stored and the body is ignored."""
+    return [] if cmd.resume else cmd.chat_request.conversation
+
+
+async def take_turn_messages(
+    cmd: commands.CreateChatStream,
+    message_inbox_store: MessageInboxStore,
+    turn_inbox: TurnInbox,
+) -> List[DomainChatMessage]:
+    """The request's messages, and what a send brought, go through the
+    conversation's inbox like any other, so the turn starts with everything
+    nobody has read yet: messages a previous turn left unread included."""
+    items = [InboxItem(message=message) for message in request_messages(cmd)]
+    for item in items + cmd.inbox_items:
+        await message_inbox_store.append(
+            tenant=cmd.tenant,
+            requester_uuid=cmd.request_headers.requester_uuid,
+            session_id=cmd.session_id,
+            item=item,
+        )
+    return await turn_inbox.messages()
 
 
 async def record_bot_turn(
@@ -260,7 +301,13 @@ async def handle_create(
         chat_agent_class_registry,
         agent_dependency_registry,
         llm_configuration_store,
-    ) = await agent_registries_factory.create(tenant=cmd.tenant)
+        secret_store,
+    ) = await agent_registries_factory.create(
+        tenant=cmd.tenant, request_headers=cmd.request_headers
+    )
+    # Before anything of the turn is stored: a caller refused the agent leaves
+    # no message behind.
+    await require_agent_setup(agent_setup_retriever, cmd.chat_request.agent_identifier)
     dependency_state = None
     if cmd.stateful:
         store = _require_agent_state_store(agent_state_store)
@@ -270,7 +317,8 @@ async def handle_create(
             session_id=cmd.session_id,
         )
 
-    await record_user_turn(cmd, chat_conversation_store)
+    new_messages = request_messages(cmd)
+    await record_user_turn(cmd, chat_conversation_store, new_messages)
 
     chat_agent_factory = ChatAgentFactory(
         agent_setup_retriever=agent_setup_retriever,
@@ -288,6 +336,7 @@ async def handle_create(
         },
         agent_dependency_registry=agent_dependency_registry,
         llm_configuration_store=llm_configuration_store,
+        secret_store=secret_store,
         debug_backend=debug_backend,
         publish_event=lambda agent_event: push_event_to_queue(
             cmd, agent_event, event_publisher
@@ -304,6 +353,7 @@ async def handle_create(
             **({"tenant": cmd.tenant} if cmd.tenant else {}),
             **({"request_headers": cmd.request_headers}),
             **({"index_id": cmd.index_id} if cmd.index_id else {}),
+            **({"session_id": cmd.session_id} if cmd.session_id else {}),
         },
     )
 
@@ -315,11 +365,33 @@ async def handle_create(
         )
 
     try:
-        chat_agent_response = await chat_agent.execute(
-            conversation=await resolve_turn_conversation(
-                cmd, dependency_state, chat_agent_factory, chat_conversation_store
-            )
+        conversation = await resolve_turn_conversation(
+            cmd,
+            dependency_state,
+            chat_agent_factory,
+            chat_conversation_store,
+            new_messages,
         )
+        if cmd.request_timeout is not None:
+            # Bound the turn. wait_for cancels execute() on expiry, which unwinds
+            # the in-flight async model call and closes its connection.
+            chat_agent_response = await asyncio.wait_for(
+                chat_agent.execute(conversation=conversation),
+                timeout=cmd.request_timeout,
+            )
+        else:
+            chat_agent_response = await chat_agent.execute(conversation=conversation)
+    except asyncio.TimeoutError as e:
+        # The turn exceeded its caller-supplied budget. Move the conversation off
+        # `running`, then surface a typed timeout the caller can distinguish from
+        # a server fault. Without a budget the timeout is a dependency's own and
+        # stays a server fault.
+        await record_turn_errored(cmd, chat_conversation_store)
+        if cmd.request_timeout is None:
+            raise
+        raise ChatResponseTimeoutError(
+            f"Chat response exceeded its {cmd.request_timeout}s budget."
+        ) from e
     except Exception:
         # Mirror handle_create_stream: an agent failure must move the
         # conversation off `running` so the list view does not show a
@@ -346,6 +418,7 @@ async def handle_create(
                 image_uri=chat_agent_response.image_uri,
                 evidences=chat_agent_response.evidences,
                 reasoning_summary=chat_agent_response.reasoning_summary,
+                llm_configuration_name=chat_agent_factory.llm_configuration_name,
                 function_call_request=(
                     DomainFunctionCallRequest.from_orm(
                         chat_agent_response.function_call_request
@@ -395,14 +468,20 @@ async def handle_create_stream(
     chat_conversation_store: Optional[ChatConversationStore] = None,
     event_publisher: Optional[AbstractEventPublisher] = None,
     debug_backend: Optional[Callable[[Any], Any]] = None,
+    message_inbox_store: Optional[MessageInboxStore] = None,
 ) -> AsyncGenerator[Any, None]:
-
     (
         agent_setup_retriever,
         chat_agent_class_registry,
         agent_dependency_registry,
         llm_configuration_store,
-    ) = await agent_registries_factory.create(tenant=cmd.tenant)
+        secret_store,
+    ) = await agent_registries_factory.create(
+        tenant=cmd.tenant, request_headers=cmd.request_headers
+    )
+    # Before anything of the turn is stored: a caller refused the agent leaves
+    # no message behind.
+    await require_agent_setup(agent_setup_retriever, cmd.chat_request.agent_identifier)
     dependency_state = None
     if cmd.stateful:
         store = _require_agent_state_store(agent_state_store)
@@ -412,7 +491,25 @@ async def handle_create_stream(
             session_id=cmd.session_id,
         )
 
-    await record_user_turn(cmd, chat_conversation_store)
+    # An interactive turn starts with every message in the conversation's
+    # inbox: a send to an idle conversation leaves its message only there.
+    # Approval decisions arrive there too. Whether the turn also reads the
+    # messages sent while it runs is the agent's queued messages provider's
+    # call; unread ones stay for the next turn.
+    turn_inbox: Optional[TurnInbox] = None
+    new_messages = request_messages(cmd)
+    if cmd.stateful and message_inbox_store is not None:
+        turn_inbox = TurnInbox(
+            message_inbox_store,
+            tenant=cmd.tenant,
+            requester_uuid=cmd.request_headers.requester_uuid,
+            session_id=cmd.session_id,
+        )
+        new_messages = await take_turn_messages(cmd, message_inbox_store, turn_inbox)
+        if not new_messages and not cmd.resume:
+            return
+
+    await record_user_turn(cmd, chat_conversation_store, new_messages)
 
     chat_agent_factory = ChatAgentFactory(
         agent_setup_retriever=agent_setup_retriever,
@@ -430,6 +527,7 @@ async def handle_create_stream(
         },
         agent_dependency_registry=agent_dependency_registry,
         llm_configuration_store=llm_configuration_store,
+        secret_store=secret_store,
         debug_backend=debug_backend,
         publish_event=lambda agent_event: push_event_to_queue(
             cmd, agent_event, event_publisher
@@ -437,6 +535,7 @@ async def handle_create_stream(
         message_id=cmd.message_id,
         session_id=cmd.session_id,
         dependency_state=dependency_state,
+        turn_inbox=turn_inbox,
     )
 
     chat_agent = await chat_agent_factory.create_streamable(
@@ -447,15 +546,19 @@ async def handle_create_stream(
             **({"tenant": cmd.tenant} if cmd.tenant else {}),
             **({"request_headers": cmd.request_headers}),
             **({"index_id": cmd.index_id} if cmd.index_id else {}),
+            **({"session_id": cmd.session_id} if cmd.session_id else {}),
         },
     )
 
+    turn_conversation = await resolve_turn_conversation(
+        cmd,
+        dependency_state,
+        chat_agent_factory,
+        chat_conversation_store,
+        new_messages,
+    )
     try:
-        agent_generator = chat_agent.execute_streaming(
-            conversation=await resolve_turn_conversation(
-                cmd, dependency_state, chat_agent_factory, chat_conversation_store
-            )
-        )
+        agent_generator = chat_agent.execute_streaming(conversation=turn_conversation)
     except NotImplementedError:
         agent_name = (
             chat_agent_factory.agent_setup.agent_name
@@ -473,9 +576,12 @@ async def handle_create_stream(
             make_dependency_state_saver(cmd, chat_agent_factory, store)
         )
 
+    llm_configuration_name = chat_agent_factory.llm_configuration_name
     last_message: Optional[DomainChatMessage] = None
     try:
         async for message in agent_generator:
+            if message.sender == DomainChatMessageSender.BOT:
+                message.llm_configuration_name = llm_configuration_name
             last_message = message
             yield message
         # The stream drained to completion: copy the final cumulative assistant
@@ -495,3 +601,28 @@ async def handle_create_stream(
     finally:
         if state_worker is not None:
             await state_worker.finish()
+        if turn_inbox is not None:
+            await turn_inbox.return_unread()
+
+
+@CommandHandlerRegistry.register(commands.RemoveChatMessage)
+async def handle_remove_message(
+    cmd: commands.RemoveChatMessage,
+    queue: List[Message],
+    message_inbox_store: Optional[MessageInboxStore] = None,
+) -> None:
+    if message_inbox_store is None:
+        raise ValueError(
+            "Removing a sent message needs message_inbox_store; this server runs "
+            "without it (stateless)"
+        )
+    removed = await message_inbox_store.remove(
+        tenant=cmd.tenant,
+        requester_uuid=cmd.request_headers.requester_uuid,
+        session_id=cmd.session_id,
+        message_id=cmd.message_id,
+    )
+    if not removed:
+        raise ChatMessageAlreadyReadError(
+            f"Message {cmd.message_id} is no longer in the conversation's inbox"
+        )

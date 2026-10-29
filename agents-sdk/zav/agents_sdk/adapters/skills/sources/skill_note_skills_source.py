@@ -25,6 +25,7 @@ class SkillNoteSkillsSourceConfiguration(BaseModel):
 
 class SkillNoteSkillsSource(SkillsSource):
     source_name = "skill_notes"
+    source_description = "Skills users saved as skill notes."
 
     def __init__(
         self,
@@ -215,7 +216,6 @@ class SkillNoteSkillsSource(SkillsSource):
             await self.__notes_service.update_note(
                 note_id=numeric_note_id,
                 content=content,
-                object_type="skill",
             )
         except Exception as e:
             raise SkillWriteError(f"Failed to update skill '{name}': {e}") from e

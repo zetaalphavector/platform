@@ -5,6 +5,8 @@ import json
 import os
 import re
 import time
+import uuid
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -26,6 +28,7 @@ from zav.agents_sdk import (
     CustomContext,
     CustomContextItem,
     DocumentContext,
+    SecretStoreFromFile,
     TagContext,
 )
 from zav.agents_sdk.adapters import AgentDependencyRegistry
@@ -33,24 +36,38 @@ from zav.agents_sdk.adapters.agent_state import LocalFileChatAgentStateStore
 from zav.agents_sdk.adapters.local_agent_registries_factory import (
     LocalAgentRegistriesFactory,
 )
+from zav.agents_sdk.adapters.message_inbox import LocalFileMessageInboxStore
 from zav.agents_sdk.bootstrap import setup_bootstrap
+from zav.agents_sdk.cli.background_turn import BackgroundTurn, RunningTurn
 from zav.agents_sdk.cli.load_chat_agent_factory import (
     from_string as import_chat_agent_class_registry_from_string,
 )
-from zav.agents_sdk.cli.local_mcp_oauth import setup_local_mcp_oauth
+from zav.agents_sdk.cli.local_mcp_oauth import (
+    setup_local_mcp_configurations,
+    setup_local_mcp_oauth,
+)
+from zav.agents_sdk.cli.local_notifications import setup_local_notifications
 from zav.agents_sdk.cli.models import (
     ChatConfigurationItem,
     ChatEntry,
     ChatMessageItem,
     ComputeChatMessageItem,
+    EvaluationFileContent,
     EvaluatorItem,
     TraceFileContent,
+)
+from zav.agents_sdk.cli.project_config import (
+    SECRETS_FILE,
+    ProjectConfig,
+    get_local_requester_uuid,
+    get_local_tenant,
 )
 from zav.agents_sdk.domain import ChatRequest, RequestHeaders
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
 from zav.agents_sdk.domain.chat_message import (
     extract_internal_document_id_from_evidence_url,
 )
+from zav.agents_sdk.domain.message_inbox import InboxItem, ToolDecision
 from zav.agents_sdk.handlers import commands
 
 st.markdown(
@@ -75,21 +92,30 @@ zav_agent_setup_src = os.getenv("ZAV_AGENT_SETUP_SRC")
 zav_secret_agent_setup_src = os.getenv("ZAV_SECRET_AGENT_SETUP_SRC")
 storage_backend = os.environ["STORAGE_BACKEND"]
 storage_path = os.environ["STORAGE_PATH"]
-local_tenant = os.getenv("ZAV_TENANT", "zetaalpha")
-local_requester_uuid = os.getenv("ZAV_REQUESTER_UUID", "local-user")
+local_tenant = get_local_tenant()
+local_requester_uuid = get_local_requester_uuid()
 MCP_OAUTH_CALLBACK_PATH = "/mcp/oauth/callback"
 
 object_storage_repo = ObjectRepositoryFactory.create(storage_backend)
 agent_state_store = LocalFileChatAgentStateStore(
     base_path=os.path.join(storage_path, "agent-traces", "state")
 )
+message_inbox_store = LocalFileMessageInboxStore(
+    base_path=os.path.join(storage_path, "agent-traces", "inbox")
+)
 
 if os.path.isfile(os.path.join(zav_project_dir, "__init__.py")):
     import_chat_agent_class_registry_from_string(zav_project_dir)
 # No secrets in this retriever, so it's safe to store
 safe_agent_setup_retriever = AgentSetupRetrieverFromFile(file_path=zav_agent_setup_src)
+secret_store = SecretStoreFromFile(os.path.join(zav_project_dir, SECRETS_FILE))
 agent_setup_retriever = AgentSetupRetrieverFromFile(
-    file_path=zav_agent_setup_src, secret_file_path=zav_secret_agent_setup_src
+    file_path=zav_agent_setup_src,
+    secret_file_path=zav_secret_agent_setup_src,
+    agent_configuration_defaults=ProjectConfig(
+        zav_project_dir
+    ).platform_agent_configuration,
+    secret_store=secret_store,
 )
 
 
@@ -100,6 +126,14 @@ def llm_configuration_for(
         return None
     return agent_setup_retriever.llm_configuration_store.get(
         agent_setup.llm_configuration_name
+    )
+
+
+def is_image_configuration(name: str) -> bool:
+    configuration = agent_setup_retriever.llm_configuration_store.get(name)
+    return (
+        configuration is not None
+        and configuration.model_configuration.type == LLMModelType.IMAGE
     )
 
 
@@ -134,17 +168,21 @@ os.environ["OPENAI_API_KEY"] = next(
 
 debug_storage: List[Any] = []
 mcp_oauth_store, mcp_oauth_token_client = setup_local_mcp_oauth(AgentDependencyRegistry)
+setup_local_mcp_configurations(AgentDependencyRegistry, zav_project_dir, secret_store)
+setup_local_notifications(AgentDependencyRegistry)
 bootstrap = setup_bootstrap(
     agent_registries_factory=LocalAgentRegistriesFactory(
         agent_setup_retriever=agent_setup_retriever,
         chat_agent_class_registry=ChatAgentClassRegistry,
         agent_dependency_registry=AgentDependencyRegistry,
         llm_configuration_store=agent_setup_retriever.llm_configuration_store,
+        secret_store=secret_store,
     ),
     debug_backend=debug_storage.append,
     mcp_oauth_store=mcp_oauth_store,
     mcp_oauth_token_client=mcp_oauth_token_client,
     agent_state_store=agent_state_store,
+    message_inbox_store=message_inbox_store,
 )
 
 message_bus = bootstrap.message_bus
@@ -286,6 +324,81 @@ def retrieve_trace_file_content(trace_file_name: str):
     return TraceFileContent.parse_raw(trace_file_content.payload)
 
 
+def new_eval_file_name():
+    time_now = str(datetime.now().isoformat())
+    eval_file_name = f"{storage_path}/agent-evals/{time_now}_eval.json"
+    st.session_state.eval_file_name = eval_file_name
+    return eval_file_name
+
+
+def get_eval_file_names():
+    object_attributes = asyncio.run(
+        object_storage_repo.filter_objects_attributes(
+            url_prefix=f"{storage_path}/agent-evals"
+        )
+    )
+
+    eval_file_names: List[str] = []
+    for object_attribute in object_attributes:
+        if object_attribute.url.endswith(".json"):
+            eval_file_names.append(object_attribute.url.split("/")[-1])
+    return sorted(eval_file_names)
+
+
+def store_eval_file_content(evaluation_file_content: EvaluationFileContent):
+    if "eval_file_name" not in st.session_state:
+        eval_file_name = new_eval_file_name()
+    else:
+        eval_file_name = st.session_state.eval_file_name
+
+    if not getattr(st.session_state, "eval_file_name2content", {}):
+        st.session_state.eval_file_name2content = defaultdict()
+    st.session_state.eval_file_name2content[eval_file_name] = evaluation_file_content
+
+    if PYDANTIC_V2:
+        payload = evaluation_file_content.model_dump_json(indent=2)
+    else:
+        payload = evaluation_file_content.json(indent=2)
+    asyncio.run(
+        object_storage_repo.add(
+            ObjectStorageItem(
+                url=eval_file_name,
+                payload=payload.encode("utf-8"),
+            )
+        )
+    )
+
+
+def retrieve_eval_file_content(eval_file_name: str) -> EvaluationFileContent:
+    if not getattr(st.session_state, "eval_file_name2content", {}):
+        st.session_state.eval_file_name2content = defaultdict()
+    try:
+        url_prefix = f"{storage_path}/agent-evals"
+        if eval_file_name in st.session_state.eval_file_name2content:
+            return st.session_state.eval_file_name2content[eval_file_name]
+
+        eval_file_content_obj = asyncio.run(
+            object_storage_repo.get(
+                f"{url_prefix}/{eval_file_name.replace('agent-evals/', '')}"
+                if not eval_file_name.startswith(url_prefix)
+                else eval_file_name
+            )
+        )
+        if not eval_file_content_obj:
+            return EvaluationFileContent(
+                agent_configurations=[], queries={}, answer_traces=[]
+            )
+        eval_file_content = EvaluationFileContent.parse_raw(
+            eval_file_content_obj.payload
+        )
+        st.session_state.eval_file_name2content[eval_file_name] = eval_file_content
+        return eval_file_content
+    except FileNotFoundError:
+        return EvaluationFileContent(
+            agent_configurations=[], queries={}, answer_traces=[]
+        )
+
+
 def start_new_conversation():
     debug_storage.clear()
     st.session_state.entries = []
@@ -408,12 +521,11 @@ def render_image_uri(st_elem, image_uri: str, caption: str = "Generated plot") -
         st_elem.error(f"Failed to display image: {str(e)}")
 
 
-# `create_plot` embeds charts as `![caption](plot:<id>)` and ships the bytes on
-# the tool response; resolve those inline (st.markdown can't render `plot:`).
-_PLOT_MARKER = re.compile(r"!\[([^\]]*)\]\(plot:([^)\s]+)\)")
+# Resolve plot:<id> and image:<id> markers inline; st.markdown can't render them.
+_IMAGE_MARKER = re.compile(r"!\[([^\]]*)\]\((?:plot|image):([^)\s]+)\)")
 
 
-def collect_plot_images(content: ChatMessage):
+def collect_tool_images(content: ChatMessage):
     keyed: Dict[str, str] = {}
     loose: List[str] = []
     for content_part in content.content_parts or []:
@@ -423,9 +535,13 @@ def collect_plot_images(content: ChatMessage):
         if not image_uri:
             continue
         response = content_part.tool.response or {}
-        plot_id = response.get("plot_id") if isinstance(response, dict) else None
-        if plot_id:
-            keyed[str(plot_id)] = image_uri
+        image_id = (
+            response.get("plot_id") or response.get("image_id")
+            if isinstance(response, dict)
+            else None
+        )
+        if image_id:
+            keyed[str(image_id)] = image_uri
         else:
             # e.g. dataframe plot tools, which return an image but no plot_id.
             loose.append(image_uri)
@@ -449,21 +565,22 @@ def apply_evidence_links(content: ChatMessage, text: str) -> str:
     return text
 
 
-def render_markdown_with_plots(
-    render_target, text: str, keyed_plots: Dict[str, str]
+def render_markdown_with_images(
+    render_target, text: str, keyed_images: Dict[str, str]
 ) -> None:
-    # Render markdown, replacing each `![caption](plot:<id>)` marker with its
-    # chart inline. Charts only appear at their marker, so there is no image dump.
+    # Render markdown, replacing each `![caption](plot:<id>)` or
+    # `![caption](image:<id>)` marker with its picture inline. Pictures only
+    # appear at their marker, so there is no image dump.
     cursor = 0
-    for match in _PLOT_MARKER.finditer(text):
+    for match in _IMAGE_MARKER.finditer(text):
         before = text[cursor : match.start()]
         cursor = match.end()
         if before.strip():
             render_target.markdown(before)
-        caption, plot_id = match.group(1), match.group(2)
-        image_uri = keyed_plots.get(plot_id)
+        caption, image_id = match.group(1), match.group(2)
+        image_uri = keyed_images.get(image_id)
         if image_uri:
-            render_image_uri(render_target, image_uri, caption or "Generated plot")
+            render_image_uri(render_target, image_uri, caption or "Generated image")
         elif caption.strip():
             render_target.markdown(caption)
     remainder = text[cursor:]
@@ -479,7 +596,7 @@ def render_tool_indicator_block(render_target, lines: List[str]) -> None:
 
 def render_chat_message_item_content(st_elem, content: ChatMessage):
     parts = content.content_parts or []
-    keyed_plots, loose_plots = collect_plot_images(content)
+    keyed_images, loose_images = collect_tool_images(content)
     render_target = st_elem.container()
     mcp_oauth_actions: List[dict] = []
     pending_tool_lines: List[str] = []
@@ -499,23 +616,25 @@ def render_chat_message_item_content(st_elem, content: ChatMessage):
         render_tool_indicator_block(render_target, pending_tool_lines)
         pending_tool_lines = []
         if part.type == "text" and part.text:
-            render_markdown_with_plots(
-                render_target, apply_evidence_links(content, part.text), keyed_plots
+            render_markdown_with_images(
+                render_target, apply_evidence_links(content, part.text), keyed_images
             )
             rendered_text = True
+        elif part.type == "user_message" and part.text:
+            render_target.info(f"You, while it worked: {part.text}")
         elif part.type == "table":
-            render_markdown_with_plots(
+            render_markdown_with_images(
                 render_target,
                 apply_evidence_links(content, content.content or ""),
-                keyed_plots,
+                keyed_images,
             )
             rendered_text = True
     render_tool_indicator_block(render_target, pending_tool_lines)
 
     # Agents that return the answer only on `content` (no text content parts).
     if not rendered_text and content.content:
-        render_markdown_with_plots(
-            render_target, apply_evidence_links(content, content.content), keyed_plots
+        render_markdown_with_images(
+            render_target, apply_evidence_links(content, content.content), keyed_images
         )
 
     for action in mcp_oauth_actions:
@@ -524,7 +643,7 @@ def render_chat_message_item_content(st_elem, content: ChatMessage):
     # Dataframe plot tools return an image but no plot_id / marker, so there is
     # nothing to splice them into; render them on their own, as the web's
     # PlotImageRenderer does at the tool node.
-    for image_uri in loose_plots:
+    for image_uri in loose_images:
         render_image_uri(render_target, image_uri)
     if hasattr(content, "image_uri") and content.image_uri:
         render_image_uri(render_target, content.image_uri)
@@ -539,6 +658,148 @@ def render_agent_debug_logs(
         st_elem.caption("Agent debug logs")
         return st_elem.json(debug_storage)
     return None
+
+
+def build_user_message(
+    content: Any, message_context: Optional[ConversationContext]
+) -> ChatMessage:
+    content_parts = []
+    if message_context:
+        content_parts.append(ContentPart(type="context", context=message_context))
+    content_parts.append(ContentPart(type="text", text=content.text))
+    # Only images are attached for now.
+    image_uri: Optional[str] = None
+    for file in content.files or []:
+        if file.type and file.type.startswith("image/"):
+            encoded = base64.b64encode(file.read()).decode("utf-8")
+            image_uri = f"data:{file.type};base64,{encoded}"
+    return ChatMessage(
+        sender=ChatMessageSender.USER,
+        content=content.text,
+        content_parts=content_parts,
+        image_uri=image_uri,
+        message_id=str(uuid.uuid4()),
+    )
+
+
+def chat_stream_command(
+    compute_chat_message_item: ComputeChatMessageItem,
+    conversation: List[ChatMessage],
+    conversation_context: Optional[ConversationContext],
+    stateful: bool,
+    session_id: Optional[str],
+) -> commands.CreateChatStream:
+    agent_setup = compute_chat_message_item.chat_configuration_item.agent_setup
+    agent_configuration = agent_setup.agent_configuration or {}
+    command_kwargs: dict[str, Any] = dict(
+        tenant=get_request_tenant(agent_configuration),
+        index_id=agent_configuration.get("index_id", None),
+        request_headers=get_request_headers(),
+        chat_request=ChatRequest(
+            agent_identifier=agent_setup.agent_identifier,
+            conversation=conversation,
+            conversation_context=conversation_context,
+        ),
+        stateful=stateful,
+    )
+    if session_id:
+        command_kwargs["session_id"] = session_id
+    return commands.CreateChatStream(**command_kwargs)
+
+
+def start_running_turn(
+    compute_chat_message_item: ComputeChatMessageItem,
+    conversation: List[ChatMessage],
+    conversation_context: Optional[ConversationContext],
+    session_id: str,
+) -> None:
+    """A stateful streamed turn runs in the background, so the page can send it
+    messages and approvals while it works."""
+    command = chat_stream_command(
+        compute_chat_message_item, conversation, conversation_context, True, session_id
+    )
+    message_bus = compute_chat_message_item.message_bus
+    st.session_state.running_turn = RunningTurn(
+        turn=BackgroundTurn(lambda: message_bus.handle_stream(command)),
+        tenant=command.tenant,
+        requester_uuid=command.request_headers.requester_uuid,
+        session_id=command.session_id,
+        debug_storage=debug_storage,
+    )
+
+
+def send_to_running_turn(running: RunningTurn, item: InboxItem) -> None:
+    asyncio.run(
+        message_inbox_store.append(
+            tenant=running.tenant,
+            requester_uuid=running.requester_uuid,
+            session_id=running.session_id,
+            item=item,
+        )
+    )
+
+
+APPROVAL_DECISIONS = (
+    ("Allow once", "allow_once"),
+    ("Allow for this chat", "allow_session"),
+    ("Deny", "deny"),
+)
+
+
+def render_approval_buttons(running: RunningTurn, message: ChatMessage) -> None:
+    for part in message.content_parts or []:
+        tool = part.tool
+        if tool is None or (tool.response or {}).get("status") != (
+            "confirmation_required"
+        ):
+            continue
+        st.caption(f"{tool.name} waits for your approval: {json.dumps(tool.params)}")
+        decisions = [
+            (label, decision)
+            for label, decision in APPROVAL_DECISIONS
+            if decision != "allow_session"
+            or (tool.response or {}).get("allow_session", True)
+        ]
+        for column, (label, decision) in zip(st.columns(len(decisions)), decisions):
+            if column.button(label, key=f"approval-{tool.tool_call_id}-{decision}"):
+                send_to_running_turn(
+                    running,
+                    InboxItem(
+                        tool_decision=ToolDecision(
+                            tool_call_id=tool.tool_call_id, decision=decision
+                        )
+                    ),
+                )
+
+
+@st.fragment(run_every=0.5)
+def render_running_turn() -> None:
+    running: Optional[RunningTurn] = st.session_state.get("running_turn")
+    if running is None:
+        return
+    message = running.turn.last_message
+    with st.chat_message(TO_CHAT_MESSAGE_NAME[ChatMessageSender.BOT]):
+        if message is None:
+            st.markdown("Thinking...")
+        else:
+            render_chat_message_item_content(st, message)
+            render_approval_buttons(running, message)
+        if running.turn.error:
+            st.error(f"Agent error: {running.turn.error}")
+    if not running.turn.done:
+        return
+    st.session_state.running_turn = None
+    if message is not None:
+        st.session_state.entries.append(
+            ChatEntry.from_message(
+                ChatMessageItem(message=message, debug_storage=running.debug_storage)
+            )
+        )
+        store_trace_file_content(
+            agent_identifier=st.session_state.agent_identifier,
+            entries=st.session_state.entries,
+        )
+    st.rerun()
 
 
 async def anext(ait):
@@ -579,22 +840,13 @@ async def create_chat_response(
         return results.pop(0)
 
     async def compute_conversation_streaming():
-        agent_setup = compute_chat_message_item.chat_configuration_item.agent_setup
-        agent_configuration = agent_setup.agent_configuration or {}
-        command_kwargs: dict[str, Any] = dict(
-            tenant=get_request_tenant(agent_configuration),
-            index_id=agent_configuration.get("index_id", None),
-            request_headers=get_request_headers(),
-            chat_request=ChatRequest(
-                agent_identifier=agent_setup.agent_identifier,
-                conversation=conversation,
-                conversation_context=conversation_context,
-            ),
-            stateful=stateful,
+        command = chat_stream_command(
+            compute_chat_message_item,
+            conversation,
+            conversation_context,
+            stateful,
+            session_id,
         )
-        if session_id:
-            command_kwargs["session_id"] = session_id
-        command = commands.CreateChatStream(**command_kwargs)
         return compute_chat_message_item.message_bus.handle_stream(command)
 
     agent_debug_logs = None
@@ -816,20 +1068,27 @@ def render_compute_chat_message_item(
     compute_chat_message_item: ComputeChatMessageItem,
     **options,
 ):
+    messages = [chat_message.message for chat_message in previous_chat_messages]
+    # Echo the conversation's session id back in every mode so the traces of all
+    # turns stay grouped; only stateful mode also trims the history to the new
+    # turn (the session transcript is restored server-side).
+    session_id = get_previous_response_session_id(previous_chat_messages)
+    if options.get("stateful_conversation") and messages:
+        messages = [messages[-1]]
+    if options.get("stateful_conversation") and options.get("streaming_mode"):
+        start_running_turn(
+            compute_chat_message_item,
+            messages,
+            conversation_context,
+            session_id or str(uuid.uuid4()),
+        )
+        return None
     with st.chat_message(TO_CHAT_MESSAGE_NAME[ChatMessageSender.BOT]):
         chat_message_item_debug_panel_status = None
         if options.get("print_debug_logs"):
             chat_message_item_debug_panel_status = st.empty()
         chat_message_item_content = st.empty()
         chat_message_item_content.markdown("Thinking...")
-        messages = [chat_message.message for chat_message in previous_chat_messages]
-        # Echo the conversation's session id back in every mode so the traces
-        # of all turns stay grouped; only stateful mode also trims the history
-        # to the new turn (the session transcript is restored server-side).
-        session_id = get_previous_response_session_id(previous_chat_messages)
-        if options.get("stateful_conversation") and messages:
-            messages = [messages[-1]]
-
         created_chat_response = asyncio.run(
             create_chat_response(
                 compute_chat_message_item,
@@ -953,7 +1212,7 @@ with st.sidebar:
         name_options = [
             name
             for name in agent_setup_retriever.llm_configuration_store.names()
-            if not name.startswith("__agent__:")
+            if not name.startswith("__agent__:") and not is_image_configuration(name)
         ]
         if effective_name and effective_name not in name_options:
             name_options.insert(0, effective_name)
@@ -1051,7 +1310,7 @@ with st.sidebar:
         sel_custom_context_items = st.text_area(
             "Items",
             json.dumps([], indent=2),
-            help="Can be combined with tag context (mutually exclusive with document context)",  # noqa: E501
+            help="Combines with document and tag context",
         )
 
     # Build conversation context based on selections
@@ -1207,6 +1466,8 @@ else:
             stateful_conversation=sel_stateful_conversation,
         )
 
+    render_running_turn()
+
     def clear_per_message_context():
         """Callback to clear per-message context after sending."""
         # Per-message context
@@ -1267,81 +1528,55 @@ else:
     if content := st.chat_input(
         "What is up?", accept_file="multiple", on_submit=clear_per_message_context
     ):
-        chat_configuration_item = ChatConfigurationItem(
-            agent_identifier=st.session_state.agent_identifier,
-            agent_setup=st.session_state.agent_setup,
-            conversation_context=st.session_state.conversation_context,
-        )
-        chat_configuration_item_hash = chat_configuration_item.hash()
-        if (
-            "current_chat_configuration_item_hash" not in st.session_state
-            or st.session_state.current_chat_configuration_item_hash
-            != chat_configuration_item_hash
-        ):
-            st.session_state.current_chat_configuration_item_hash = (
-                chat_configuration_item_hash
+        user_message = build_user_message(content, st.session_state.message_context)
+        running_turn: Optional[RunningTurn] = st.session_state.get("running_turn")
+        if running_turn is not None and not running_turn.turn.done:
+            # The running turn reads it before its next model call.
+            send_to_running_turn(running_turn, InboxItem(message=user_message))
+            st.toast("Sent to the running turn")
+        else:
+            chat_configuration_item = ChatConfigurationItem(
+                agent_identifier=st.session_state.agent_identifier,
+                agent_setup=st.session_state.agent_setup,
+                conversation_context=st.session_state.conversation_context,
             )
+            chat_configuration_item_hash = chat_configuration_item.hash()
+            if (
+                "current_chat_configuration_item_hash" not in st.session_state
+                or st.session_state.current_chat_configuration_item_hash
+                != chat_configuration_item_hash
+            ):
+                st.session_state.current_chat_configuration_item_hash = (
+                    chat_configuration_item_hash
+                )
+                render_entry(
+                    entries=st.session_state.entries,
+                    entry=ChatEntry.from_configuration(chat_configuration_item),
+                    print_debug_logs=sel_print_debug_logs,
+                    streaming_mode=sel_streaming_mode,
+                    stateful_conversation=sel_stateful_conversation,
+                )
             render_entry(
                 entries=st.session_state.entries,
-                entry=ChatEntry.from_configuration(chat_configuration_item),
+                entry=ChatEntry.from_message(ChatMessageItem(message=user_message)),
                 print_debug_logs=sel_print_debug_logs,
                 streaming_mode=sel_streaming_mode,
                 stateful_conversation=sel_stateful_conversation,
             )
-
-        # Build content_parts for the user message
-        content_parts = []
-
-        if st.session_state.message_context:
-            content_parts.append(
-                ContentPart(type="context", context=st.session_state.message_context)
+            render_entry(
+                entries=st.session_state.entries,
+                compute_message_item=ComputeChatMessageItem(
+                    message_bus=message_bus,
+                    chat_configuration_item=chat_configuration_item,
+                ),
+                conversation_context=st.session_state.conversation_context,
+                print_debug_logs=sel_print_debug_logs,
+                streaming_mode=sel_streaming_mode,
+                stateful_conversation=sel_stateful_conversation,
             )
-
-        # Always add text content
-        content_parts.append(ContentPart(type="text", text=content.text))
-
-        # Handle file attachments (only images for now)
-        image_uri: Optional[str] = None
-        if content.files:
-            for file in content.files:
-                # Check if file is an image
-                if file.type and file.type.startswith("image/"):
-                    # Read file bytes and convert to base64 data URL
-                    file_bytes = file.read()
-                    encoded = base64.b64encode(file_bytes).decode("utf-8")
-                    image_uri = f"data:{file.type};base64,{encoded}"
-                else:
-                    # TODO
-                    pass
-        render_entry(
-            entries=st.session_state.entries,
-            entry=ChatEntry.from_message(
-                ChatMessageItem(
-                    message=ChatMessage(
-                        sender=ChatMessageSender.USER,
-                        content=content.text,
-                        content_parts=content_parts,
-                        image_uri=image_uri,
-                    )
-                )
-            ),
-            print_debug_logs=sel_print_debug_logs,
-            streaming_mode=sel_streaming_mode,
-            stateful_conversation=sel_stateful_conversation,
-        )
-
-        render_entry(
-            entries=st.session_state.entries,
-            compute_message_item=ComputeChatMessageItem(
-                message_bus=message_bus,
-                chat_configuration_item=chat_configuration_item,
-            ),
-            conversation_context=st.session_state.conversation_context,
-            print_debug_logs=sel_print_debug_logs,
-            streaming_mode=sel_streaming_mode,
-            stateful_conversation=sel_stateful_conversation,
-        )
-        store_trace_file_content(
-            agent_identifier=st.session_state.agent_identifier,
-            entries=st.session_state.entries,
-        )
+            store_trace_file_content(
+                agent_identifier=st.session_state.agent_identifier,
+                entries=st.session_state.entries,
+            )
+            if st.session_state.get("running_turn") is not None:
+                st.rerun()

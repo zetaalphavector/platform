@@ -1,24 +1,41 @@
 import hashlib
 import json
-import re
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+    get_args,
+    overload,
+)
 
 import openai
-from openai import BadRequestError, RateLimitError
+from openai import BadRequestError
+from openai import RateLimitError as OpenAiRateLimitError
+from openai.types.responses import Response, ResponseStreamEvent
 from typing_extensions import AsyncIterator, Literal
 from zav.llm_domain import (
     LLMModelConfiguration,
     LLMModelType,
     LLMProviderName,
     OpenAIConfiguration,
+    ToolSearchMode,
 )
-from zav.llm_tracing import Span
+from zav.llm_tracing import Span, now
 from zav.logging import logger
 
+from zav.prompt_completion.adapters.errors import (
+    generate_content_filter_error,
+    generate_prompt_too_long_error,
+    generate_rate_limit_error,
+)
 from zav.prompt_completion.adapters.openai_clients import (
     OpenAiChatClient2PromptClientAdapter,
-    generate_prompt_too_long_error,
     stream_response_item,
 )
 from zav.prompt_completion.adapters.tracing import create_span, end_span
@@ -36,6 +53,26 @@ from zav.prompt_completion.client_factories import (
     ChatClientFactory,
     PromptClientFactory,
 )
+from zav.prompt_completion.tool_search import (
+    SEARCH_TOOLS_NAME,
+    found_tool_names,
+    is_deferred,
+    namespaces_of,
+    search_call_ids,
+    tool_name,
+)
+
+# Output-only Item fields the input schema rejects; the SDK also dumps unset
+# fields as null, which tool search items do not accept back.
+OUTPUT_ONLY_FIELDS = ("status", "created_by")
+
+
+def replayable(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in item.items()
+        if key not in OUTPUT_ONLY_FIELDS and value is not None
+    }
 
 
 @ChatClientFactory.register(LLMProviderName.OPENAI, LLMModelType.RESPONSES)
@@ -46,6 +83,15 @@ class OpenAiResponsesClient(ChatCompletionClient):
         ChatMessageSender.DEVELOPER: "developer",
         ChatMessageSender.SYSTEM: "system",
     }
+
+    @classmethod
+    def warm_up(cls) -> None:
+        # The openai SDK builds each model's pydantic schema on first use
+        # (DEFER_PYDANTIC_BUILD), and `__response_dict` dumps every stream event:
+        # a fresh process paid that inside its first turn.
+        events = get_args(ResponseStreamEvent)[0]
+        for model in (Response, *get_args(events)):
+            model.model_rebuild()
 
     def __init__(
         self,
@@ -85,9 +131,29 @@ class OpenAiResponsesClient(ChatCompletionClient):
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
         generation_span = None
         try:
-            legacy_tools, modern_tools = self.__tools_from(request)
-            input_items = self.__input_from(conversation=request["conversation"])
-            tools = [*legacy_tools.values(), *modern_tools.values()]
+            method = request.get("tool_search_method")
+            legacy_tools, modern_tools, namespaced = self.__tools_from(request)
+            input_items = self.__input_from(
+                conversation=request["conversation"],
+                deferred=[
+                    t
+                    for t in namespaced
+                    if is_deferred(t) and method == ToolSearchMode.CLIENT
+                ],
+            )
+            tools = [
+                *legacy_tools.values(),
+                *modern_tools.values(),
+                *self.__namespace_tools(
+                    [
+                        t
+                        for t in namespaced
+                        if not (is_deferred(t) and method == ToolSearchMode.CLIENT)
+                    ]
+                ),
+                *self.__tool_search_tools(request),
+            ]
+            modern_tool_names = set(modern_tools) | {tool_name(t) for t in namespaced}
             max_tokens = request.get(
                 "max_tokens", self.__model_configuration.max_tokens
             )
@@ -98,14 +164,12 @@ class OpenAiResponsesClient(ChatCompletionClient):
                     if request.get("functions") is not None
                     else {}
                 ),
-                tools_dict=(
-                    {"tools": request["tools"]}
-                    if request.get("tools") is not None
-                    else {}
-                ),
+                # The tools as sent: deferred ones as namespaces behind tool search.
+                tools_dict={"tools": tools} if tools else {},
                 model_name=self.__model_configuration.name,
                 model_temperature=self.__model_configuration.temperature,
                 api_endpoint="responses",
+                tool_search=method.value if method else None,
                 span=self.__span,
                 max_tokens=max_tokens,
                 json_output=self.__model_configuration.json_output,
@@ -162,14 +226,13 @@ class OpenAiResponsesClient(ChatCompletionClient):
                     stream=cast(AsyncIterator[Any], response),
                     span=generation_span,
                     legacy_tool_names=set(legacy_tools),
-                    modern_tool_names=set(modern_tools),
+                    modern_tool_names=modern_tool_names,
                 )
-            response_data = self.__response_dict(response)
             return self.__completed_response(
-                response_data=response_data,
+                response_data=self.__response_dict(response),
                 span=generation_span,
                 legacy_tool_names=set(legacy_tools),
-                modern_tool_names=set(modern_tools),
+                modern_tool_names=modern_tool_names,
             )
         except Exception as error:
             error_response = self.__error_response(error, generation_span)
@@ -177,9 +240,15 @@ class OpenAiResponsesClient(ChatCompletionClient):
 
     def __tools_from(
         self, request: ChatClientRequest
-    ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    ) -> Tuple[
+        Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], List[Dict[str, Any]]
+    ]:
+        """Legacy functions, function tools, and the tools that go in a namespace
+        when a tool search method is set. The search tool is left out."""
         legacy_tools: Dict[str, Dict[str, Any]] = {}
         modern_tools: Dict[str, Dict[str, Any]] = {}
+        namespaced: List[Dict[str, Any]] = []
+        method = request.get("tool_search_method")
         for function in request.get("functions", []):
             tool = self.__function_tool_from(function)
             name = cast(str, tool["name"])
@@ -195,8 +264,48 @@ class OpenAiResponsesClient(ChatCompletionClient):
             name = cast(str, tool["name"])
             if name in legacy_tools or name in modern_tools:
                 raise ValueError(f"Duplicate function name: {name}")
+            if method == ToolSearchMode.CLIENT and name == SEARCH_TOOLS_NAME:
+                continue
+            if method and source_tool.get("namespace"):
+                namespaced.append(source_tool)
+                continue
             modern_tools[name] = tool
-        return legacy_tools, modern_tools
+        return legacy_tools, modern_tools, namespaced
+
+    def __namespace_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": description,
+                "tools": [
+                    {
+                        **self.__function_tool_from(t["function"]),
+                        **({"defer_loading": True} if is_deferred(t) else {}),
+                    }
+                    for t in members
+                ],
+            }
+            for namespace, (description, members) in namespaces_of(tools).items()
+        ]
+
+    @staticmethod
+    def __tool_search_tools(request: ChatClientRequest) -> List[Dict[str, Any]]:
+        method = request.get("tool_search_method")
+        if method == ToolSearchMode.SERVER:
+            return [{"type": "tool_search"}]
+        if method != ToolSearchMode.CLIENT:
+            return []
+        return [
+            {
+                "type": "tool_search",
+                "execution": "client",
+                "description": tool["function"]["description"],
+                "parameters": tool["function"]["parameters"],
+            }
+            for tool in request.get("tools", [])
+            if tool["function"]["name"] == SEARCH_TOOLS_NAME
+        ]
 
     @staticmethod
     def __function_tool_from(function: Dict[str, Any]) -> Dict[str, Any]:
@@ -223,15 +332,23 @@ class OpenAiResponsesClient(ChatCompletionClient):
     def __input_from(  # noqa: C901
         self,
         conversation: BotConversation,
+        deferred: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
+        """`deferred`: with client tool search, the deferred tools our answers to
+        the model's searches load."""
         input_items: List[Dict[str, Any]] = []
+        searches = search_call_ids(conversation) if deferred else set()
         modern_call_order: List[str] = []
         modern_call_ids: Set[str] = set()
         emitted_output_ids: Set[str] = set()
         pending_legacy_call: Optional[Tuple[str, str]] = None
 
         for message_index, message in enumerate(conversation.messages):
-            if message.response_replay_items is not None:
+            # Anthropic replays messages without a `type`; a conversation that
+            # switched vendors falls back to the message fields.
+            if message.response_replay_items is not None and all(
+                "type" in item for item in message.response_replay_items
+            ):
                 replay_calls: List[Tuple[str, str]] = []
                 for item in message.response_replay_items:
                     if item.get("type") != "function_call":
@@ -254,10 +371,8 @@ class OpenAiResponsesClient(ChatCompletionClient):
                             raise ValueError(f"Duplicate tool call ID: {call_id}")
                         modern_call_ids.add(call_id)
                         modern_call_order.append(call_id)
-                # status is an output-only Item field; the input schema rejects it.
                 input_items.extend(
-                    {key: value for key, value in item.items() if key != "status"}
-                    for item in deepcopy(message.response_replay_items)
+                    replayable(item) for item in deepcopy(message.response_replay_items)
                 )
                 continue
 
@@ -309,6 +424,19 @@ class OpenAiResponsesClient(ChatCompletionClient):
                         raise ValueError(f"Duplicate tool call ID: {tool_call.id}")
                     modern_call_ids.add(tool_call.id)
                     modern_call_order.append(tool_call.id)
+                    if tool_call.id in searches:
+                        input_items.append(
+                            {
+                                "type": "tool_search_call",
+                                "execution": "client",
+                                "call_id": tool_call.id,
+                                "arguments": (
+                                    tool_call.function_call_request.function_params
+                                    or {}
+                                ),
+                            }
+                        )
+                        continue
                     input_items.append(
                         {
                             "type": "function_call",
@@ -342,6 +470,20 @@ class OpenAiResponsesClient(ChatCompletionClient):
                     if call_id in emitted_output_ids:
                         raise ValueError(f"Duplicate tool output ID: {call_id}")
                     tool_response = response_by_id[call_id]
+                    emitted_output_ids.add(call_id)
+                    if call_id in searches:
+                        names = set(found_tool_names(tool_response.tool_response))
+                        input_items.append(
+                            {
+                                "type": "tool_search_output",
+                                "execution": "client",
+                                "call_id": call_id,
+                                "tools": self.__namespace_tools(
+                                    [t for t in deferred if tool_name(t) in names]
+                                ),
+                            }
+                        )
+                        continue
                     input_items.append(
                         {
                             "type": "function_call_output",
@@ -349,7 +491,6 @@ class OpenAiResponsesClient(ChatCompletionClient):
                             "output": tool_response.tool_response or "",
                         }
                     )
-                    emitted_output_ids.add(call_id)
                 continue
 
             input_items.append(self.__message_input_from(message))
@@ -456,10 +597,14 @@ class OpenAiResponsesClient(ChatCompletionClient):
         content = ""
         last_emitted_content: Optional[str] = None
         reasoning_summary = ""
+        started = False
         try:
             async for event in stream:
                 event_data = self.__response_dict(event)
                 event_type = event_data.get("type")
+                if span and not started and event_type == "response.output_item.added":
+                    started = True
+                    span.update(attributes={"completion_start_time": now()})
                 if event_type in (
                     "response.output_text.delta",
                     "response.refusal.delta",
@@ -514,6 +659,12 @@ class OpenAiResponsesClient(ChatCompletionClient):
                         or response_data.get("incomplete_details")
                         or response_data.get("status")
                     )
+                    if (response_data.get("incomplete_details") or {}).get(
+                        "reason"
+                    ) == "content_filter":
+                        raise generate_content_filter_error(
+                            f"Responses stream did not complete: {details}"
+                        )
                     raise ValueError(f"Responses stream did not complete: {details}")
 
                 if event_type == "error":
@@ -541,6 +692,9 @@ class OpenAiResponsesClient(ChatCompletionClient):
         if not chat_message.reasoning_summary and streamed_reasoning_summary:
             chat_message.reasoning_summary = streamed_reasoning_summary
         usage = response_data.get("usage")
+        cached = ((usage or {}).get("input_tokens_details") or {}).get(
+            "cached_tokens"
+        ) or 0
         end_span(
             usage=(
                 {
@@ -549,7 +703,14 @@ class OpenAiResponsesClient(ChatCompletionClient):
                         "output": usage.get("output_tokens", 0),
                         "total": usage.get("total_tokens", 0),
                         "unit": "TOKENS",
-                    }
+                    },
+                    # Langfuse v3's usage buckets, read instead of `usage` by v3
+                    # servers: "input" leaves out the cached ones.
+                    "usage_details": {
+                        "input": (usage.get("input_tokens") or 0) - cached,
+                        "input_cached_tokens": cached,
+                        "output": usage.get("output_tokens") or 0,
+                    },
                 }
                 if usage
                 else {}
@@ -560,6 +721,7 @@ class OpenAiResponsesClient(ChatCompletionClient):
             role="assistant",
             function_call=chat_message.function_call_request,
             reasoning_summary=chat_message.reasoning_summary,
+            model=response_data.get("model"),
         )
         return ChatResponse(error=None, chat_message=chat_message)
 
@@ -574,35 +736,21 @@ class OpenAiResponsesClient(ChatCompletionClient):
                     error=generate_prompt_too_long_error(error.message),
                     chat_message=None,
                 )
+            if getattr(error, "code", None) == "content_filter" or (
+                "content_filter" in (error.message or "")
+            ):
+                return ChatResponse(
+                    error=generate_content_filter_error(error.message),
+                    chat_message=None,
+                )
             return ChatResponse(error=error, chat_message=None)
 
-        if isinstance(error, RateLimitError):
+        if isinstance(error, OpenAiRateLimitError):
             logger.warning(f"Rate limit reached: {error}")
-            self.__end_error_span(span, error.message, level="WARNING")
-            retry_after = (
-                error.response.headers.get("retry-after")
-                or error.response.headers.get("x-ratelimit-reset-requests")
-                or error.response.headers.get("x-ratelimit-reset-tokens")
-            )
-            if retry_after is None:
-                retry_after_match = re.search(
-                    r"retry after (\d+\s*\w+)", error.message, re.IGNORECASE
-                )
-                retry_after = (
-                    retry_after_match.group(1) if retry_after_match else "a moment"
-                )
-            else:
-                retry_after = f"{retry_after} seconds"
+            self.__end_error_span(span, error.message)
             return ChatResponse(
-                error=None,
-                chat_message=ChatMessage(
-                    content=(
-                        "You have reached the token rate limit for this model. "
-                        f"Please retry after {retry_after}. If this issue persists, "
-                        "contact support@zeta-alpha.com for assistance."
-                    ),
-                    sender=ChatMessageSender.BOT,
-                ),
+                error=generate_rate_limit_error(error.message, error.response.headers),
+                chat_message=None,
             )
 
         self.__end_error_span(span, str(error))
@@ -641,11 +789,31 @@ class OpenAiResponsesClient(ChatCompletionClient):
             if not isinstance(item, dict):
                 raise ValueError("Responses API output items must be objects.")
             item_type = item.get("type")
-            if item_type not in ("reasoning", "message", "function_call"):
+            if item_type not in (
+                "reasoning",
+                "message",
+                "function_call",
+                "tool_search_call",
+                "tool_search_output",
+            ):
                 raise ValueError(f"Unsupported Responses output item: {item_type}")
             if item.get("status") not in (None, "completed"):
                 raise ValueError(f"Responses output item did not complete: {item_type}")
-            if item_type == "reasoning":
+            if item_type == "tool_search_call" and item.get("execution") == "client":
+                arguments = item.get("arguments")
+                modern_calls.append(
+                    ToolCallRequest(
+                        id=cast(str, item.get("call_id")),
+                        function_call_request=FunctionCallRequest(
+                            function_name=SEARCH_TOOLS_NAME,
+                            function_params=(
+                                arguments if isinstance(arguments, dict) else {}
+                            ),
+                        ),
+                    )
+                )
+                continue
+            if item_type in ("reasoning", "tool_search_call", "tool_search_output"):
                 continue
             if item_type == "message":
                 item_content = item.get("content")
@@ -660,8 +828,7 @@ class OpenAiResponsesClient(ChatCompletionClient):
                         content.append(cast(str, part.get("refusal", "")))
                     else:
                         raise ValueError(
-                            "Unsupported Responses message content: "
-                            f"{part.get('type')}"
+                            f"Unsupported Responses message content: {part.get('type')}"
                         )
                 continue
 
@@ -727,13 +894,11 @@ class OpenAiResponsesClient(ChatCompletionClient):
         return messages
 
     @staticmethod
-    def __end_error_span(
-        span: Optional[Span], status_message: str, level: str = "ERROR"
-    ) -> None:
+    def __end_error_span(span: Optional[Span], status_message: str) -> None:
         if span:
             span.end(
                 attributes={
-                    "level": level,
+                    "level": "ERROR",
                     "status_message": status_message,
                 }
             )
@@ -746,8 +911,16 @@ class OpenAiResponsesClient(ChatCompletionClient):
         span: Optional[Span] = None,
     ) -> "OpenAiResponsesClient":
         client = openai.AsyncOpenAI(
-            api_key=vendor_configuration.openai_api_key.get_unencrypted_secret(),
-            organization=vendor_configuration.openai_org.get_unencrypted_secret(),
+            api_key=(
+                vendor_configuration.openai_api_key.get_unencrypted_secret()
+                if vendor_configuration.openai_api_key is not None
+                else None
+            ),
+            organization=(
+                vendor_configuration.openai_org.get_unencrypted_secret()
+                if vendor_configuration.openai_org is not None
+                else None
+            ),
             base_url=vendor_configuration.openai_api_base,
         )
         return cls(client=client, model_configuration=model_configuration, span=span)

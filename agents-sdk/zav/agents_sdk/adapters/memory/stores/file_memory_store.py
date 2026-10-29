@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
@@ -23,6 +23,8 @@ class FileMemoryStoreConfiguration(BaseModel):
 
 class FileMemoryStore(MemoryStore):
     source_name = "file"
+    source_description = "Memories stored in a local file."
+    source_gate = "local_files"
 
     def __init__(self, enabled: bool, path: Optional[str] = None) -> None:
         self.enabled = enabled
@@ -49,6 +51,10 @@ class FileMemoryStore(MemoryStore):
         except Exception as e:
             logger.error(f"Failed to read memory file {self.__path}: {e}")
             return []
+
+    async def load_recent_context(self, size: int) -> Tuple[List[MemoryEntry], int]:
+        entries = await self.load_context()
+        return list(reversed(entries))[:size], len(entries)
 
     async def save(self, content: str) -> MemoryEntry:
         if not self.__path:

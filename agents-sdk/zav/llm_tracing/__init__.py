@@ -8,6 +8,7 @@ from zav.llm_tracing.trace_cleanup import TraceCleanupService
 from zav.llm_tracing.trace_cleanup_service_factory import TraceCleanupServiceFactory
 from zav.llm_tracing.tracing_configuration import (
     CaptureConfiguration,
+    FileConfiguration,
     LangfuseConfiguration,
     TracingConfiguration,
     TracingVendorConfiguration,
@@ -32,5 +33,6 @@ __all__ = [
     "TracingVendorName",
     "now",
     "CaptureConfiguration",
+    "FileConfiguration",
     "LocalTraceStore",
 ]

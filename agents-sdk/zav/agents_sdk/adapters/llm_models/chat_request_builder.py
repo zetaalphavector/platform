@@ -1,5 +1,6 @@
-from typing import Dict, List, Optional, Union
+from typing import AbstractSet, Dict, List, Optional, Union
 
+from zav.llm_domain import ToolSearchMethodSettings
 from zav.prompt_completion import BotConversation, ChatClientRequest
 from zav.prompt_completion import ChatMessage as PcChatMessage
 
@@ -10,8 +11,8 @@ from zav.agents_sdk.adapters.llm_models.context_window_manager import (
 from zav.agents_sdk.domain.tools import Tool, ToolsRegistry
 
 
-def tool_to_chat_client_spec(tool: Tool) -> Dict:
-    return {
+def tool_to_chat_client_spec(tool: Tool, on_demand: bool = False) -> Dict:
+    spec: Dict = {
         "type": "function",
         "function": {
             "name": tool.name,
@@ -19,13 +20,31 @@ def tool_to_chat_client_spec(tool: Tool) -> Dict:
             "parameters": tool.get_parameters_spec(),
         },
     }
+    # Tools load on demand by group, as the vendors defer them: a tool without
+    # one (a skills tool, say) is always loaded.
+    if on_demand and tool.namespace:
+        spec["defer_loading"] = True
+        spec["namespace"] = {
+            "name": tool.namespace.name,
+            "description": tool.namespace.description,
+        }
+    return spec
 
 
 class ChatRequestBuilder:
     """Builds prompt-completion requests from turn state and options."""
 
-    def __init__(self, context_window_manager: ContextWindowManager) -> None:
+    def __init__(
+        self,
+        context_window_manager: ContextWindowManager,
+        tool_search: Optional[List[ToolSearchMethodSettings]] = None,
+    ) -> None:
         self.__context_window_manager = context_window_manager
+        self.__tool_search = tool_search or []
+
+    def retrieval_tools(self) -> List[Tool]:
+        """The tools that read back tool output compaction cut."""
+        return self.__context_window_manager.get_tools()
 
     async def build(
         self,
@@ -34,8 +53,13 @@ class ChatRequestBuilder:
         tools: Optional[Union[ToolsRegistry, List[Dict]]],
         tool_choice: Optional[str],
         include_functions: bool,
+        on_demand: AbstractSet[str] = frozenset(),
     ) -> ChatClientRequest:
-        tools_dict = self.__build_tools_dict(tools)
+        """`on_demand`: the tools the tool policy loads on demand this round;
+        without a tool search method they load up front."""
+        tools_dict = self.__build_tools_dict(
+            tools, on_demand if self.__tool_search else frozenset()
+        )
 
         if self.__context_window_manager.needs_compaction(
             pc_messages, request.bot_setup_description
@@ -43,18 +67,6 @@ class ChatRequestBuilder:
             pc_messages = await self.__context_window_manager.compact(
                 pc_messages, request.bot_setup_description
             )
-
-        retrieval_tools = self.__context_window_manager.get_tools()
-        if retrieval_tools and isinstance(tools, ToolsRegistry):
-            new_tools = [
-                tool for tool in retrieval_tools if tool.name not in tools.tools_index
-            ]
-            if new_tools:
-                tools.extend(new_tools)
-                if tools_dict is not None:
-                    tools_dict.extend(
-                        tool_to_chat_client_spec(tool) for tool in new_tools
-                    )
 
         return ChatClientRequest(
             conversation=BotConversation(
@@ -68,6 +80,12 @@ class ChatRequestBuilder:
                 else {}
             ),
             **({"tools": tools_dict} if tools_dict is not None else {}),
+            **(
+                {"tool_search": self.__tool_search}
+                if self.__tool_search
+                and any("defer_loading" in tool for tool in tools_dict or [])
+                else {}
+            ),
             **({"tool_choice": tool_choice} if tool_choice is not None else {}),
             **({"logprobs": request.logprobs} if request.logprobs is not None else {}),
             **({"seed": request.seed} if request.seed is not None else {}),
@@ -89,10 +107,13 @@ class ChatRequestBuilder:
         )
 
     def __build_tools_dict(
-        self, tools: Optional[Union[ToolsRegistry, List[Dict]]]
+        self,
+        tools: Optional[Union[ToolsRegistry, List[Dict]]],
+        on_demand: AbstractSet[str],
     ) -> Optional[List[Dict]]:
         if isinstance(tools, ToolsRegistry):
             return [
-                tool_to_chat_client_spec(tool) for tool in tools.tools_index.values()
+                tool_to_chat_client_spec(tool, tool.name in on_demand)
+                for tool in tools.tools_index.values()
             ]
         return tools

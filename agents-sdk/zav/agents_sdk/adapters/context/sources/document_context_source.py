@@ -25,6 +25,7 @@ class DocumentContextSource(ContextSource):
     """Resolves document context by fetching previews from the retriever."""
 
     source_name = "documents"
+    source_description = "The documents the user has open or selected."
 
     def __init__(
         self,

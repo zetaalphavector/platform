@@ -12,7 +12,13 @@ from rich.rule import Rule
 from rich.table import Table
 from typing_extensions import Annotated
 
-from zav.agents_sdk.cli.project_config import CONFIG_FILE, ENV_DIR, SPECS_DIR
+from zav.agents_sdk.cli.project_config import (
+    CONFIG_FILE,
+    ENV_DIR,
+    SECRETS_FILE,
+    SPECS_DIR,
+    ProjectConfig,
+)
 from zav.agents_sdk.cli.require import require_project, resolve_project_dir
 
 console = Console()
@@ -83,7 +89,7 @@ def __print_run_header(
     pattern,
     project_dir,
     setup_src,
-    secret_setup_src,
+    secrets_src,
     debug,
     version,
 ):
@@ -94,7 +100,7 @@ def __print_run_header(
     info_table.add_row("[bold]pattern[/]", f"[blue]{pattern}[/]")
     info_table.add_row("[bold]project dir[/]", f"[magenta]{project_dir}[/]")
     info_table.add_row("[bold]setup src[/]", f"[magenta]{setup_src}[/]")
-    info_table.add_row("[bold]secret setup src[/]", f"[magenta]{secret_setup_src}[/]")
+    info_table.add_row("[bold]secrets[/]", f"[magenta]{secrets_src}[/]")
     info_table.add_row("[bold]SDK version[/]", f"[green]{version}[/]")
     traces_dir = None
     if debug:
@@ -173,7 +179,11 @@ def test_run(
     """
     from zav.llm_tracing import LocalTraceStore, TracingBackendFactory
 
-    from zav.agents_sdk import AgentDependencyRegistry, AgentSetupRetrieverFromFile
+    from zav.agents_sdk import (
+        AgentDependencyRegistry,
+        AgentSetupRetrieverFromFile,
+        SecretStoreFromFile,
+    )
     from zav.agents_sdk.behavior import TestHarness
     from zav.agents_sdk.cli.load_chat_agent_factory import (
         from_string as import_chat_agent_class_registry_from_string,
@@ -191,8 +201,14 @@ def test_run(
     local_trace_store = LocalTraceStore()
     harness = __create_test_harness(specs_path, pattern, local_trace_store, TestHarness)
 
+    secret_store = SecretStoreFromFile(os.path.join(project_dir, SECRETS_FILE))
     agent_setup_retriever = AgentSetupRetrieverFromFile(
-        file_path=setup_src, secret_file_path=secret_setup_src
+        file_path=setup_src,
+        secret_file_path=secret_setup_src,
+        agent_configuration_defaults=ProjectConfig(
+            project_dir
+        ).platform_agent_configuration,
+        secret_store=secret_store,
     )
     __inject_tracing(agent_setup_retriever, local_trace_store)
 
@@ -208,6 +224,7 @@ def test_run(
         trace_state_params={},
         agent_dependency_registry=AgentDependencyRegistry,
         llm_configuration_store=agent_setup_retriever.llm_configuration_store,
+        secret_store=secret_store,
     )
 
     n_items = len(list(harness.get_spec_paths()))
@@ -217,7 +234,7 @@ def test_run(
         pattern,
         project_dir,
         setup_src,
-        secret_setup_src,
+        os.path.join(project_dir, SECRETS_FILE),
         debug,
         version=__version__,
     )

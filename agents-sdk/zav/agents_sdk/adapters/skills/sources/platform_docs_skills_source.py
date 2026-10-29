@@ -353,6 +353,7 @@ class PlatformDocsSkillsSourceConfiguration(BaseModel):
 class PlatformDocsSkillsSource(SkillsSource):
 
     source_name: ClassVar[str] = "platform_docs_skills"
+    source_description = "Skills for answering questions about the platform."
 
     def __init__(
         self,

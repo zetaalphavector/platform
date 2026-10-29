@@ -96,8 +96,9 @@ def _make_preview(text: str, max_tokens: int, hint: str) -> str:
     return preview + hint
 
 
-def _replace_tool_responses(
+def _replace_tool_response(
     message: PcChatMessage,
+    resp_idx: int,
     store: Dict[str, str],
     preview_tokens: int,
     budget: int,
@@ -106,24 +107,26 @@ def _replace_tool_responses(
     if not message.tool_call_responses:
         return message
 
-    new_responses: list[PcToolCallResponse] = []
-    for tcr in message.tool_call_responses:
-        full_text = tcr.tool_response or ""
-        tool_call_id = tcr.id
-        store[tool_call_id] = full_text
-        total_chars = len(full_text)
-        total_tokens = count_tokens(full_text)
-        suggested_limit = min(_DEFAULT_RETRIEVAL_LIMIT, total_chars)
-        hint = _RETRIEVAL_HINT.format(
-            tool_call_id=tool_call_id,
-            total_chars=total_chars,
-            total_tokens=total_tokens,
-            budget=budget,
-            remaining=remaining,
-            limit=suggested_limit,
-        )
-        preview = _make_preview(full_text, preview_tokens, hint)
-        new_responses.append(PcToolCallResponse(id=tool_call_id, tool_response=preview))
+    tcr = message.tool_call_responses[resp_idx]
+    full_text = tcr.tool_response or ""
+    tool_call_id = tcr.id
+    store.setdefault(tool_call_id, full_text)
+    total_chars = len(full_text)
+    total_tokens = count_tokens(full_text)
+    suggested_limit = min(_DEFAULT_RETRIEVAL_LIMIT, total_chars)
+    hint = _RETRIEVAL_HINT.format(
+        tool_call_id=tool_call_id,
+        total_chars=total_chars,
+        total_tokens=total_tokens,
+        budget=budget,
+        remaining=remaining,
+        limit=suggested_limit,
+    )
+    new_responses = list(message.tool_call_responses)
+    new_responses[resp_idx] = PcToolCallResponse(
+        id=tool_call_id,
+        tool_response=_make_preview(full_text, preview_tokens, hint),
+    )
 
     return PcChatMessage(
         sender=message.sender,
@@ -263,27 +266,27 @@ class ContextWindowManager:
         if tokens_to_free <= 0:
             return messages
 
-        result = list(messages)
+        preview_cost = preview_tokens + 20
+        planned: List[Dict[str, Any]] = []
         freed = 0
-        compacted_msg_indices: set[int] = set()
-
         for entry in entries:
             if freed >= tokens_to_free:
                 break
-
-            msg_idx = entry["msg_idx"]
-            entry_tokens = entry["tokens"]
-            preview_cost = preview_tokens + 20
-
-            if entry_tokens <= preview_cost:
+            if entry["tokens"] <= preview_cost:
                 continue
+            planned.append(entry)
+            freed += entry["tokens"] - preview_cost
 
-            savings = entry_tokens - preview_cost
-            remaining_after = max(0, budget - (total_before - freed - savings))
+        remaining_after = max(0, budget - (total_before - freed))
 
+        result = list(messages)
+        compacted_msg_indices: set[int] = set()
+        for entry in planned:
+            msg_idx = entry["msg_idx"]
             if entry["type"] == "tool_response":
-                result[msg_idx] = _replace_tool_responses(
+                result[msg_idx] = _replace_tool_response(
                     result[msg_idx],
+                    entry["resp_idx"],
                     self.__store,
                     preview_tokens,
                     budget,
@@ -297,8 +300,6 @@ class ContextWindowManager:
                     budget,
                     remaining_after,
                 )
-
-            freed += savings
             compacted_msg_indices.add(msg_idx)
 
         total_after = sum(_estimate_tokens(m) for m in result)

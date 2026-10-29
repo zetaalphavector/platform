@@ -6,6 +6,26 @@ from zav.logging import logger
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 
 
+class NotificationNotDelivered(Exception):
+    pass
+
+
+class UserOptedOutOfEmails(NotificationNotDelivered):
+    pass
+
+
+class UserEmailUnavailable(NotificationNotDelivered):
+    pass
+
+
+class UserLookupFailed(NotificationNotDelivered):
+    pass
+
+
+class EmailDeliveryNotConfigured(NotificationNotDelivered):
+    pass
+
+
 class AbstractNotificationService(ABC):
     @abstractmethod
     async def send_report_notification_email(
@@ -17,7 +37,7 @@ class AbstractNotificationService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def send_agent_notification_email(
+    async def send_scheduled_agent_notification_email(
         self,
         content: str,
         zav_fe_url: str,
@@ -51,12 +71,23 @@ class AbstractNotificationService(ABC):
     ) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    async def send_agent_notification_email(
+        self, subject: str, content: str, session_id: Optional[str] = None
+    ) -> None:
+        """Email the requesting user a notification (markdown ``content``) that
+        links to the chat ``session_id``.
+
+        Raises a ``NotificationNotDelivered`` subclass when nothing was queued.
+        """
+        raise NotImplementedError
+
 
 class LocalNotificationService(AbstractNotificationService):
     async def send_report_notification_email(self, *args, **kwargs) -> None:
         logger.info("Skipping sending notification")
 
-    async def send_agent_notification_email(self, *args, **kwargs) -> None:
+    async def send_scheduled_agent_notification_email(self, *args, **kwargs) -> None:
         logger.info("Skipping sending notification")
 
     async def send_agent_share_notification_email(
@@ -81,6 +112,11 @@ class LocalNotificationService(AbstractNotificationService):
         email_tags: Optional[dict[str, str]] = None,
     ) -> None:
         logger.info("Skipping sending custom notification")
+
+    async def send_agent_notification_email(
+        self, subject: str, content: str, session_id: Optional[str] = None
+    ) -> None:
+        raise EmailDeliveryNotConfigured("No email backend is configured.")
 
 
 class LocalNotificationServiceFactory(AgentDependencyFactory):

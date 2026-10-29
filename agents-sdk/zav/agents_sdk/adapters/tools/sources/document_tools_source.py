@@ -1,15 +1,16 @@
 import re
 from typing import Any, Dict, List
 
-from zav.pydantic_compat import BaseModel
-
 from zav.agents_sdk.adapters.tools.sources.index_tools_source import IndexToolsSource
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, hide, streamable
 
 
-class DocumentToolsSourceConfiguration(BaseModel):
+class DocumentToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = False
     page_size: int = 10
 
@@ -19,6 +20,7 @@ class DocumentTools(ToolsSource):
     locating by fuzzy name, and retrieving structured metadata."""
 
     source_name = "document_tools"
+    source_description = "Read individual documents: full text, sections and pages."
 
     def __init__(
         self,
@@ -27,6 +29,7 @@ class DocumentTools(ToolsSource):
     ):
         self.__index_tools = index_tools
         self.__config = document_tools_source_configuration
+        self.defer_tools = document_tools_source_configuration.defer_tools
         self.enabled = document_tools_source_configuration.enabled
 
     async def get_tools(self) -> List[Tool]:

@@ -64,7 +64,8 @@ from zav.agents_sdk.domain.chat_stream_supervision_store import (
     ChatStreamSupervision,
     ChatStreamSupervisionStore,
 )
-from zav.agents_sdk.handlers.commands import CreateChatStream
+from zav.agents_sdk.domain.message_inbox import MessageInboxStore
+from zav.agents_sdk.handlers.commands import CreateChatStream, SendChatMessage
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -179,6 +180,15 @@ def classify_supervision(
     return None
 
 
+@dataclass
+class ChatSendResult:
+    """The turn that reads what was sent: ``started`` when the send started
+    it. No turn when nothing waits in the inbox and nothing runs."""
+
+    message_id: Optional[str]
+    started: bool
+
+
 class StreamMessageBus(Protocol):
     def handle_stream(
         self,
@@ -291,14 +301,20 @@ class RecordingReplaySource:
                 session_id=self.__session_id,
             )
             if record is not None and record.message_id != self.__message_id:
-                # Recording-only deployments have no supervision row to fence
-                # with; the snapshot's own occupant stamp is the fallback
-                # signal that the conversation moved on.
-                self.__terminal_reason = "gone"
-                return
+                if self.__supervision_store is None:
+                    # Recording-only deployments have no supervision row to
+                    # fence with; the snapshot's own occupant stamp is the
+                    # fallback signal that the conversation moved on.
+                    self.__terminal_reason = "gone"
+                    return
+                # The supervision row just said this turn holds the slot, so
+                # the snapshot is the previous turn's, not yet overwritten by
+                # this turn's first flush. A newer turn taking the slot
+                # surfaces through the next classify as gone.
+                record = None
             advanced = record is not None and record.index > emitted_index
             if record is not None and advanced:
-                target = len(record.message.content)
+                target = self.__answer_chars(record.message)
                 if resuming or target <= emitted_chars:
                     # Resume catch-up, or a structural-only advance (e.g. a tool
                     # part with no new answer text): hand over the whole
@@ -336,14 +352,30 @@ class RecordingReplaySource:
             if emitted < target_chars and tick > 0:
                 await asyncio.sleep(tick)
 
+    @staticmethod
+    def __answer_chars(message: ChatMessage) -> int:
+        # After a tool call ``content`` holds only the current model step's
+        # text, while ``content_parts`` holds every step's: the parts are the
+        # answer the viewer sees.
+        texts = [
+            part.text
+            for part in message.content_parts or []
+            if part.type == "text" and part.text
+        ]
+        if not texts:
+            return len(message.content)
+        return sum(len(text) for text in texts)
+
     def __truncate(self, message: ChatMessage, n_chars: int) -> ChatMessage:
         # Rebuild the cumulative message as it looked at ``n_chars`` of answer
-        # text: trim ``content`` and the trailing text part to the cut, keep the
-        # atomic parts (tool / table / context) that precede it. Tool frames pop
-        # in whole, exactly as they streamed live.
-        if n_chars >= len(message.content) and message.content_parts is None:
+        # text: trim the text parts to the cut, keep the atomic parts (tool /
+        # table / context) that precede it. Tool frames pop in whole, exactly
+        # as they streamed live. ``content`` is the current step's tail of that
+        # text, so it loses the same number of trailing characters.
+        cut = self.__answer_chars(message) - n_chars
+        if cut <= 0:
             return message
-        truncated_content = message.content[:n_chars]
+        truncated_content = message.content[: max(0, len(message.content) - cut)]
         if message.content_parts is None:
             return self.__with_updates(message, {"content": truncated_content})
         new_parts: List[ContentPart] = []
@@ -739,8 +771,10 @@ class ResumableChatStreams:
         persist_interval_seconds: float = DEFAULT_PERSIST_INTERVAL_SECONDS,
         replay_max_gap_seconds: float = DEFAULT_REPLAY_MAX_GAP_SECONDS,
         max_run_seconds: Optional[float] = None,
+        inbox_store: Optional[MessageInboxStore] = None,
     ):
         self.__stream_buffer_registry = stream_buffer_registry
+        self.__inbox_store = inbox_store
         self.__message_bus = message_bus
         self.__recording_store = recording_store
         self.__supervision_store = supervision_store
@@ -780,6 +814,64 @@ class ResumableChatStreams:
             requester_uuid=command.request_headers.requester_uuid,
         )
         return source
+
+    async def send(self, command: SendChatMessage) -> ChatSendResult:
+        """Adds the items to the conversation's inbox. A running turn reads
+        them before its next model call when its agent reads queued messages;
+        with none running, a new turn starts and writes them there once it has
+        found its agent. Sent with no items, it only starts a turn for what an
+        earlier turn left unread."""
+        inbox_store = self.__inbox_store
+        missing = [
+            name
+            for name, store in (
+                ("message_inbox_store", inbox_store),
+                ("chat_stream_supervision_store", self.__supervision_store),
+            )
+            if store is None
+        ]
+        if missing or inbox_store is None:
+            raise ValueError(
+                f"Sending to a conversation needs {' and '.join(missing)}; this "
+                "server runs without them (stateless)"
+            )
+        requester_uuid = command.request_headers.requester_uuid
+        if not command.items and not await inbox_store.has_items(
+            tenant=command.tenant,
+            requester_uuid=requester_uuid,
+            session_id=command.session_id,
+        ):
+            slot = await self.status(
+                session_id=command.session_id,
+                tenant=command.tenant,
+                requester_uuid=requester_uuid,
+            )
+            running = slot is not None and slot.status == "running"
+            return ChatSendResult(
+                message_id=slot.message_id if slot and running else None,
+                started=False,
+            )
+        turn = CreateChatStream(
+            tenant=command.tenant,
+            request_headers=command.request_headers,
+            chat_request=command.chat_request,
+            index_id=command.index_id,
+            session_id=command.session_id,
+            stateful=True,
+            inbox_items=command.items,
+        )
+        try:
+            await self.create(turn)
+        except ChatStreamBusyError as busy:
+            for item in command.items:
+                await inbox_store.append(
+                    tenant=command.tenant,
+                    requester_uuid=requester_uuid,
+                    session_id=command.session_id,
+                    item=item,
+                )
+            return ChatSendResult(message_id=busy.running_message_id, started=False)
+        return ChatSendResult(message_id=turn.message_id, started=True)
 
     async def __claim(self, command: CreateChatStream) -> int:
         # Claim the conversation's slot BEFORE any producer exists, so a busy
@@ -958,9 +1050,53 @@ class ResumableChatStreams:
         message_id: str,
         tenant: str,
         requester_uuid: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> bool:
-        return await self.__stream_buffer_registry.cancel_stream(
+        """Stop a running turn wherever it is produced. ``False`` when there is
+        no running turn ``message_id`` to stop.
+
+        The pod holding the producer stops it at once and releases the
+        conversation's slot, so the next turn or a rewind can claim it right
+        away. Any other pod takes the lease from the producer with a higher
+        epoch: the producer's next heartbeat swap fails and it stops, exactly
+        as a takeover fences a slow producer. That slot keeps the producer's
+        last heartbeat, so it reads dead ``dead_after_seconds`` later: the
+        producer gets a few heartbeats to stop and write its final checkpoint
+        before a rewind can claim the slot. The lease is keyed by
+        conversation, so without ``session_id`` only this pod's producer can
+        be stopped.
+        """
+        stopped_here = await self.__stream_buffer_registry.cancel_stream(
             message_id=message_id,
             tenant=tenant,
             requester_uuid=requester_uuid,
         )
+        if self.__supervision_store is None or session_id is None:
+            return stopped_here
+        supervision = await self.__supervision_store.read(
+            tenant=tenant,
+            requester_uuid=requester_uuid,
+            session_id=session_id,
+        )
+        if (
+            supervision is None
+            or classify_supervision(
+                supervision, message_id, self.__clock(), self.__dead_after_seconds
+            )
+            is not None
+        ):
+            return stopped_here
+        fenced = await self.__supervision_store.compare_and_swap(
+            tenant=tenant,
+            requester_uuid=requester_uuid,
+            session_id=session_id,
+            expected_epoch=supervision.epoch,
+            supervision=ChatStreamSupervision(
+                status=ChatStreamStatus.RUNNING,
+                # A heartbeat at the Unix epoch reads as dead to every reader.
+                heartbeat_at=0.0 if stopped_here else supervision.heartbeat_at,
+                message_id=message_id,
+                epoch=supervision.epoch + 1,
+            ),
+        )
+        return stopped_here or fenced

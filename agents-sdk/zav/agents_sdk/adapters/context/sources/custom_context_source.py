@@ -19,6 +19,7 @@ class CustomContextSource(ContextSource):
     """Pass-through for custom context items."""
 
     source_name = "custom"
+    source_description = "Context the calling app passes as is."
 
     def __init__(self, enabled: bool):
         self.enabled = enabled

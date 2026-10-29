@@ -34,7 +34,7 @@ from zav.llm_tracing.tracing_configuration import LangfuseConfiguration
 class LangfuseClientCache:
     # each key is a tuple of a hash of the config dict plus the public key, secret key,
     # and host
-    __client_cache: Dict[Tuple[int, str, str, str], Langfuse] = {}
+    __client_cache: Dict[Tuple[int, str, Optional[str], str], Langfuse] = {}
 
     @staticmethod
     def get_client(
@@ -60,7 +60,11 @@ class LangfuseClientCache:
         if cache_key not in LangfuseClientCache.__client_cache:
             LangfuseClientCache.__client_cache[cache_key] = Langfuse(
                 public_key=vendor_configuration.public_key,
-                secret_key=vendor_configuration.secret_key.get_unencrypted_secret(),
+                secret_key=(
+                    vendor_configuration.secret_key.get_unencrypted_secret()
+                    if vendor_configuration.secret_key is not None
+                    else None
+                ),
                 host=vendor_configuration.host,
                 release=vendor_configuration.release,
                 debug=vendor_configuration.debug,
@@ -91,6 +95,7 @@ class LangfuseTracingBackend(TracingBackend):
             str,
             Union[StatefulSpanClient, StatefulGenerationClient, StatefulTraceClient],
         ] = {}
+        self.__sent_inputs: Dict[str, object] = {}
 
     def handle_new_trace(self, span: Span):
         submit_tracing_call(self.__handle_new_trace, span)
@@ -125,6 +130,7 @@ class LangfuseTracingBackend(TracingBackend):
             },
         )
         self.__observations_map[span.context.span_id] = observation
+        self.__sent_inputs[span.context.span_id] = span.attributes.get("input")
 
     def __handle_new(self, span: Span):
         observation_type = span.attributes.get("observation_type")
@@ -195,11 +201,13 @@ class LangfuseTracingBackend(TracingBackend):
                 },
             )
         self.__observations_map[span.context.span_id] = observation
+        self.__sent_inputs[span.context.span_id] = span.attributes.get("input")
 
     def __handle_update(self, span: Span):
         observation = self.__observations_map.get(span.context.span_id)
         if not observation:
             return
+        span_input = self.__unsent_input(span)
 
         if isinstance(observation, StatefulSpanClient):
             observation.update(
@@ -209,7 +217,7 @@ class LangfuseTracingBackend(TracingBackend):
                 metadata=span.attributes.get("metadata"),
                 level=span.attributes.get("level"),
                 status_message=span.attributes.get("status_message"),
-                input=span.attributes.get("input"),
+                input=span_input,
                 output=span.attributes.get("output"),
                 version=span.attributes.get("version"),
                 **{
@@ -238,7 +246,7 @@ class LangfuseTracingBackend(TracingBackend):
                 version=span.attributes.get("version"),
                 model=span.attributes.get("model"),
                 model_parameters=span.attributes.get("model_parameters"),
-                input=span.attributes.get("input"),
+                input=span_input,
                 output=span.attributes.get("output"),
                 usage=span.attributes.get("usage"),
                 prompt=span.attributes.get("prompt"),
@@ -268,7 +276,7 @@ class LangfuseTracingBackend(TracingBackend):
                 session_id=span.context.trace_state.get("session_id"),
                 version=span.context.trace_state.get("version"),
                 release=span.context.trace_state.get("release"),
-                input=span.attributes.get("input"),
+                input=span_input,
                 output=span.attributes.get("output"),
                 metadata=span.attributes.get("metadata"),
                 tags=span.attributes.get("tags"),
@@ -279,6 +287,16 @@ class LangfuseTracingBackend(TracingBackend):
                     if k not in {"input", "output", "metadata", "tags"}
                 },
             )
+
+    def __unsent_input(self, span: Span) -> object:
+        # Span.update resends every attribute, and a generation's input is the
+        # whole prompt; Langfuse keeps the fields an update leaves out, so only
+        # send an input that is not the one already sent.
+        span_input = span.attributes.get("input")
+        if span_input is self.__sent_inputs.get(span.context.span_id):
+            return None
+        self.__sent_inputs[span.context.span_id] = span_input
+        return span_input
 
     def __handle_event(self, span: Span):
         last_event = span.events[-1]
