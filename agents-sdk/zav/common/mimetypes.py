@@ -18,8 +18,14 @@ def register_mime_types() -> None:
     mimetypes.add_type("message/rfc822", ".eml")
     # Python knows .rtf only on some platforms; register it for cross-platform safety.
     mimetypes.add_type("application/rtf", ".rtf")
+    # Python's mimetypes module does not know the OneNote section type.
+    mimetypes.add_type("application/onenote", ".one")
     # Python's mimetypes module does not know the modern OOXML Visio family.
     mimetypes.add_type("application/vnd.ms-visio.drawing", ".vsdx")
     mimetypes.add_type("application/vnd.ms-visio.drawing.macroEnabled", ".vsdm")
     mimetypes.add_type("application/vnd.ms-visio.stencil", ".vssx")
     mimetypes.add_type("application/vnd.ms-visio.template", ".vstx")
+    # Python maps .wav and .flac to the non-standard x- types; IANA registers
+    # audio/wav and audio/flac.
+    mimetypes.add_type("audio/wav", ".wav")
+    mimetypes.add_type("audio/flac", ".flac")

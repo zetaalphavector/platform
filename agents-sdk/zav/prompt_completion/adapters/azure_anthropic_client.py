@@ -30,7 +30,11 @@ def build_client(
     if vendor_configuration.auth_type == "api_key":
         assert vendor_configuration.api_key is not None
         return anthropic.AsyncAnthropicFoundry(
-            api_key=vendor_configuration.api_key.api_key.get_unencrypted_secret(),
+            api_key=(
+                vendor_configuration.api_key.api_key.get_unencrypted_secret()
+                if vendor_configuration.api_key.api_key is not None
+                else None
+            ),
             base_url=vendor_configuration.endpoint,
         )
 
@@ -40,11 +44,18 @@ def build_client(
                 "client_secret auth_type requires client_secret configuration"
             )
         creds = vendor_configuration.client_secret
+        client_secret = (
+            creds.client_secret.get_unencrypted_secret()
+            if creds.client_secret is not None
+            else None
+        )
+        if client_secret is None:
+            raise ValueError("client_secret auth_type requires a client_secret value")
         credential: Union[ClientSecretCredential, WorkloadIdentityCredential] = (
             ClientSecretCredential(
                 tenant_id=creds.tenant_id,
                 client_id=creds.client_id,
-                client_secret=creds.client_secret.get_unencrypted_secret(),
+                client_secret=client_secret,
             )
         )
     elif vendor_configuration.auth_type == "workload_identity":

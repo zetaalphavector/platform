@@ -23,6 +23,8 @@ def build_chat_anthropic(config: LLMClientConfiguration) -> ChatAnthropic:
             return ChatAnthropic(
                 anthropic_api_key=(  # type: ignore
                     anthropic_config.anthropic_api_key.get_unencrypted_secret()
+                    if anthropic_config.anthropic_api_key is not None
+                    else None
                 ),
                 anthropic_api_url=anthropic_config.anthropic_api_base,
                 model=config.model_configuration.name,

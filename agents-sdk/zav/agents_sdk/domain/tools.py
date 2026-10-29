@@ -1,10 +1,22 @@
+import asyncio
 import copy
 import inspect
-from typing import Annotated, Any, Callable, Dict, List, Optional, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    get_args,
+    get_origin,
+)
 
 from jinja2 import Undefined
 from jinja2.sandbox import SandboxedEnvironment
-from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
+from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, Field
 
 from zav.agents_sdk.domain.utils import is_union
 
@@ -209,6 +221,54 @@ def _get_json_type(typ):
         return {"type": "string"}  # Default type
 
 
+# Who may invoke a tool: the model, as a tool call ("direct"), or code running in
+# the agent's Python REPL ("sandbox").
+ToolCaller = Literal["direct", "sandbox"]
+ALL_CALLERS: List[ToolCaller] = ["direct", "sandbox"]
+
+
+class ToolDisplay(BaseModel):
+    """How the chat labels a tool: on each step it streams and on the user's
+    confirmation card."""
+
+    app: Optional[str] = None
+    icon_url: Optional[str] = None
+    title: Optional[str] = None
+
+
+class ToolNamespace(BaseModel):
+    """A group of deferred tools the model sees by name and description only,
+    until it loads them (an MCP server, for one)."""
+
+    name: str
+    description: str
+
+
+class ToolOrigin(BaseModel):
+    """Where a tool comes from, as tool rules name it: a tools source or an MCP
+    server, and the tool's own name there (an MCP server's, before namespacing)."""
+
+    provider: str
+    source: str
+    name: str
+
+
+Confirmation = Literal["auto", "ask", "require", "never"]
+
+
+class ToolOptions(BaseModel):
+    """How the turn runs a tool, as the tool rule sources set it."""
+
+    # "require": the user approves each call; no later source or session
+    # approval waives it. "ask": the same, but a later source or the user's
+    # approval for the chat may waive it. "never": a source waived asking.
+    # "auto": no source has an opinion; the model decides from its prompts.
+    confirmation: Confirmation = "auto"
+    # The rule source that set the confirmation; None while auto.
+    confirmation_source: Optional[str] = None
+    on_demand: bool = False
+
+
 class Tool(BaseModel):
     name: str
     description: str
@@ -216,6 +276,21 @@ class Tool(BaseModel):
     parameters_spec: Optional[Dict[str, Any]] = None
     streaming_config: Optional[ToolStreamingConfig] = None
     max_output_tokens: Optional[int] = None
+    allowed_callers: List[ToolCaller] = Field(default_factory=lambda: list(ALL_CALLERS))
+    origin: Optional[ToolOrigin] = None
+    display: Optional[ToolDisplay] = None
+    namespace: Optional[ToolNamespace] = None
+    # Whether the tool only reads: False hides it under a read-only rule; None
+    # (undeclared) leaves it alone.
+    read_only: Optional[bool] = None
+    options: ToolOptions = Field(default_factory=ToolOptions)
+    # Whether the runner tells the model the user edited the call's inputs. A
+    # tool whose executable reports what the edited inputs mean turns it off.
+    reports_edited_inputs: bool = True
+    # Run by the client, not the server: every call goes to the client as a
+    # card, which says whether to ask the user first; the client runs the call
+    # and answers the card with the result.
+    runs_on_client: bool = False
 
     @classmethod
     def from_callable(
@@ -267,7 +342,7 @@ class Tool(BaseModel):
 
         signature = inspect.signature(self.executable)
         for name, param in signature.parameters.items():
-            if name.startswith("_"):
+            if name.startswith("_") or _is_registry(param):
                 continue
             param_schema = {}
             param_type = param.annotation
@@ -356,13 +431,57 @@ def _parse_params(signature: inspect.Signature, params: Optional[Dict[str, Any]]
     return exec_params
 
 
+def _is_registry(param: inspect.Parameter) -> bool:
+    # A tool that calls other tools (the REPL's `run_python`) declares a
+    # parameter of this type; the registry running it passes itself in.
+    return param.annotation in (ToolsRegistry, "ToolsRegistry")
+
+
+ToolListing = Callable[[], Awaitable[List[Tool]]]
+
+
 class ToolsRegistry:
-    def __init__(self):
+    """An agent's tools: the ones added to it, plus the current tools of the
+    providers it reads (``add_provider``). A provider's listing is a cached
+    read, so the turn asks for ``current_tools`` before every model call."""
+
+    def __init__(self, tools: Optional[List[Tool]] = None):
         self.tools_index: Dict[str, Tool] = {}
+        self.__providers: List[ToolListing] = []
+        self.extend(tools or [])
 
     def extend(self, tools: List[Tool]):
         for tool in tools:
             self.tools_index[tool.name] = tool
+
+    def add_provider(self, get_tools: ToolListing) -> None:
+        self.__providers.append(get_tools)
+
+    async def current_tools(self) -> List[Tool]:
+        """The added tools, then each provider's; a name already taken keeps
+        the first tool."""
+        tools = dict(self.tools_index)
+        for listing in await asyncio.gather(*(get() for get in self.__providers)):
+            for tool in listing:
+                tools.setdefault(tool.name, tool)
+        return list(tools.values())
+
+    def offering(self, tools: List[Tool]) -> "ToolsRegistry":
+        """This registry with exactly ``tools`` and no providers; a subclass
+        keeps executing them its own way (a replay serves recorded responses)."""
+        registry = copy.copy(self)
+        registry.tools_index = {tool.name: tool for tool in tools}
+        registry.__providers = []
+        return registry
+
+    def for_caller(self, caller: ToolCaller) -> "ToolsRegistry":
+        """The tools this caller may invoke; the model gets ``direct``, the
+        REPL ``sandbox``."""
+        registry = ToolsRegistry()
+        registry.extend(
+            [t for t in self.tools_index.values() if caller in t.allowed_callers]
+        )
+        return registry
 
     def add(
         self,
@@ -389,14 +508,13 @@ class ToolsRegistry:
 
         try:
             executable = self.tools_index[name].executable
-            # Inspect the executable's parameters
-            sig = inspect.signature(executable)
-            exec_params = _parse_params(signature=sig, params=params)
+            signature = inspect.signature(executable)
+            exec_params = _parse_params(signature=signature, params=params)
+            for param_name, param in signature.parameters.items():
+                if _is_registry(param):
+                    exec_params[param_name] = self
             if inspect.iscoroutinefunction(executable):
-                exec_response = await executable(**exec_params)  # type: ignore
-            else:
-                exec_response = executable(**exec_params)
-
-            return exec_response
+                return await executable(**exec_params)  # type: ignore
+            return executable(**exec_params)
         except Exception as e:
             raise Exception(f"Error in executing tool {name}: {e}")

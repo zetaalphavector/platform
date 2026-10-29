@@ -1,6 +1,6 @@
 [project]
 name = "zetaalpha.rag-agents"
-version = "0.3.0"
+version = "0.4.0"
 description = "Compatibility wrapper — installs zetaalpha.agents. Use 'pip install zetaalpha.agents' for new projects."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -23,6 +23,8 @@ langchain-openai = ["zetaalpha.agents[langchain-openai]"]
 langfuse = ["zetaalpha.agents[langfuse]"]
 mcp = ["zetaalpha.agents[mcp]"]
 openai = ["zetaalpha.agents[openai]"]
+realtime = ["zetaalpha.agents[realtime]"]
+repl = ["zetaalpha.agents[repl]"]
 sql_tools = ["zetaalpha.agents[sql_tools]"]
 web_tools = ["zetaalpha.agents[web_tools]"]
 all = ["zetaalpha.agents[all]"]

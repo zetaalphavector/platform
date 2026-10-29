@@ -1,4 +1,5 @@
-from typing import Callable, Optional, Union
+import inspect
+from typing import Awaitable, Callable, Optional, Union
 
 import openai
 from azure.identity import (
@@ -20,12 +21,14 @@ from zav.prompt_completion.adapters.openai_clients import (
     OpenAiPromptClient,
     OpenAiPromptWithLogitsClient,
 )
+from zav.prompt_completion.adapters.openai_image_client import OpenAiImageClient
 from zav.prompt_completion.adapters.openai_responses_client import (
     OpenAiResponsesClient,
     OpenAiResponsesClient2PromptClientAdapter,
 )
 from zav.prompt_completion.client_factories import (
     ChatClientFactory,
+    ImageClientFactory,
     PromptClientFactory,
     PromptWithLogitsClientFactory,
 )
@@ -37,7 +40,11 @@ def build_client(
     if vendor_configuration.auth_type == "api_key":
         assert vendor_configuration.api_key is not None
         return openai.AsyncAzureOpenAI(
-            api_key=vendor_configuration.api_key.api_key.get_unencrypted_secret(),
+            api_key=(
+                vendor_configuration.api_key.api_key.get_unencrypted_secret()
+                if vendor_configuration.api_key.api_key is not None
+                else None
+            ),
             azure_endpoint=vendor_configuration.endpoint,
             api_version=vendor_configuration.api_version,
         )
@@ -48,11 +55,18 @@ def build_client(
                 "client_secret auth_type requires client_secret configuration"
             )
         creds = vendor_configuration.client_secret
+        client_secret = (
+            creds.client_secret.get_unencrypted_secret()
+            if creds.client_secret is not None
+            else None
+        )
+        if client_secret is None:
+            raise ValueError("client_secret auth_type requires a client_secret value")
         credential: Union[ClientSecretCredential, WorkloadIdentityCredential] = (
             ClientSecretCredential(
                 tenant_id=creds.tenant_id,
                 client_id=creds.client_id,
-                client_secret=creds.client_secret.get_unencrypted_secret(),
+                client_secret=client_secret,
             )
         )
     elif vendor_configuration.auth_type == "workload_identity":
@@ -80,6 +94,20 @@ def build_client(
     )
 
 
+def _async_token_provider(
+    token_provider: Callable[[], Union[str, Awaitable[str]]],
+) -> Callable[[], Awaitable[str]]:
+    # AsyncOpenAI awaits a callable api_key; azure.identity's provider is sync,
+    # azure.identity.aio's is async. Same handling as AsyncAzureOpenAI.
+    async def provide() -> str:
+        token = token_provider()
+        if inspect.isawaitable(token):
+            token = await token
+        return token
+
+    return provide
+
+
 def build_responses_client(
     vendor_configuration: AzureOpenAIConfiguration,
     client_factory: Callable = openai.AsyncOpenAI,
@@ -95,19 +123,32 @@ def build_responses_client(
     if vendor_configuration.auth_type == "api_key":
         if vendor_configuration.api_key is None:
             raise ValueError("api_key auth_type requires api_key configuration")
-        api_key = vendor_configuration.api_key.api_key.get_unencrypted_secret()
+        api_key = (
+            vendor_configuration.api_key.api_key.get_unencrypted_secret()
+            if vendor_configuration.api_key.api_key is not None
+            else None
+        )
     elif vendor_configuration.auth_type == "client_secret":
         if vendor_configuration.client_secret is None:
             raise ValueError(
                 "client_secret auth_type requires client_secret configuration"
             )
         creds = vendor_configuration.client_secret
+        client_secret = (
+            creds.client_secret.get_unencrypted_secret()
+            if creds.client_secret is not None
+            else None
+        )
+        if client_secret is None:
+            raise ValueError("client_secret auth_type requires a client_secret value")
         credential = client_secret_credential_factory(
             tenant_id=creds.tenant_id,
             client_id=creds.client_id,
-            client_secret=creds.client_secret.get_unencrypted_secret(),
+            client_secret=client_secret,
         )
-        api_key = token_provider_factory(credential, "https://ai.azure.com/.default")
+        api_key = _async_token_provider(
+            token_provider_factory(credential, "https://ai.azure.com/.default")
+        )
     elif vendor_configuration.auth_type == "workload_identity":
         if vendor_configuration.workload_identity is None:
             raise ValueError(
@@ -120,7 +161,9 @@ def build_responses_client(
         if creds.client_id:
             kwargs["client_id"] = creds.client_id
         credential = workload_identity_credential_factory(**kwargs)
-        api_key = token_provider_factory(credential, "https://ai.azure.com/.default")
+        api_key = _async_token_provider(
+            token_provider_factory(credential, "https://ai.azure.com/.default")
+        )
     else:
         raise ValueError(f"Unsupported auth_type: {vendor_configuration.auth_type}")
 
@@ -216,3 +259,16 @@ class AzureOpenAiResponsesClient2PromptClientAdapter(
             vendor_configuration, model_configuration, span=span
         )
         return cls(chat_client=chat_client)
+
+
+@ImageClientFactory.register(LLMProviderName.AZURE_OPENAI, LLMModelType.IMAGE)
+class AzureOpenAiImageClient(OpenAiImageClient):
+    @classmethod
+    def from_configuration(
+        cls,
+        vendor_configuration: AzureOpenAIConfiguration,
+        model_configuration: LLMModelConfiguration,
+        span: Optional[Span] = None,
+    ) -> "AzureOpenAiImageClient":
+        client = build_client(vendor_configuration)
+        return cls(client=client, model_configuration=model_configuration, span=span)

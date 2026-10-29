@@ -30,6 +30,7 @@ class ImageContextSourceConfiguration(BaseModel):
 class ImageContextSource(ContextSource):
 
     source_name = "conversation_images"
+    source_description = "Images attached to the conversation."
 
     def __init__(
         self,
@@ -56,21 +57,19 @@ class ImageContextSource(ContextSource):
         items: List[ResolvedContextItem] = []
 
         for message in conversation:
-            if not message.image_uri:
-                continue
-
-            short_id = self.__store.register_image(message.image_uri)
-            display_text = self.__template.render(image_id=short_id)
-            items.append(
-                ResolvedContextItem(
-                    id=short_id,
-                    data={
-                        "image_id": short_id,
-                        "display_text": display_text,
-                    },
-                    item_type="image",
+            for image_uri in message.all_image_uris():
+                short_id = self.__store.register_image(image_uri)
+                display_text = self.__template.render(image_id=short_id)
+                items.append(
+                    ResolvedContextItem(
+                        id=short_id,
+                        data={
+                            "image_id": short_id,
+                            "display_text": display_text,
+                        },
+                        item_type="image",
+                    )
                 )
-            )
 
         return items if items else None
 

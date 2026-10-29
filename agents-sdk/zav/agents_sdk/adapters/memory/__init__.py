@@ -1,3 +1,12 @@
+from zav.agents_sdk.adapters.memory.memory_context import (
+    FullMemoryContextStrategy,
+    FullMemoryContextStrategyFactory,
+    MemoryContextStrategy,
+    MemoryContextStrategyGroup,
+    RecentMemoryContextStrategy,
+    RecentMemoryContextStrategyConfiguration,
+    RecentMemoryContextStrategyFactory,
+)
 from zav.agents_sdk.adapters.memory.memory_provider import (
     MemoryProvider,
     MemoryProviderConfiguration,
@@ -6,10 +15,12 @@ from zav.agents_sdk.adapters.memory.memory_provider import (
 from zav.agents_sdk.adapters.memory.memory_store import (
     MemoryCapability,
     MemoryEntry,
+    MemoryReadError,
     MemorySaveError,
     MemoryStore,
     MemoryStoreGroup,
     MemoryUpdateError,
+    SearchableMemoryStore,
 )
 from zav.agents_sdk.adapters.memory.stores.file_memory_store import (
     FileMemoryStore,
@@ -26,6 +37,11 @@ from zav.agents_sdk.adapters.memory.stores.memory_note_memory_store import (
     MemoryNoteMemoryStoreConfiguration,
     MemoryNoteMemoryStoreFactory,
 )
+from zav.agents_sdk.adapters.memory.stores.searchable_memory_note_memory_store import (
+    SearchableMemoryNoteMemoryStore,
+    SearchableMemoryNoteMemoryStoreConfiguration,
+    SearchableMemoryNoteMemoryStoreFactory,
+)
 from zav.agents_sdk.adapters.memory.stores.tag_note_memory_store import (
     TagNoteMemoryStore,
     TagNoteMemoryStoreConfiguration,
@@ -38,11 +54,22 @@ AgentDependencyRegistry.register(InMemoryMemoryStoreFactory)
 AgentDependencyRegistry.register(FileMemoryStoreFactory)
 AgentDependencyRegistry.register(TagNoteMemoryStoreFactory)
 AgentDependencyRegistry.register(MemoryNoteMemoryStoreFactory)
+AgentDependencyRegistry.register(SearchableMemoryNoteMemoryStoreFactory)
+AgentDependencyRegistry.register(FullMemoryContextStrategyFactory)
+AgentDependencyRegistry.register(RecentMemoryContextStrategyFactory)
 
 __all__ = [
     "FileMemoryStore",
     "FileMemoryStoreConfiguration",
     "FileMemoryStoreFactory",
+    "SearchableMemoryStore",
+    "MemoryContextStrategy",
+    "MemoryContextStrategyGroup",
+    "FullMemoryContextStrategy",
+    "FullMemoryContextStrategyFactory",
+    "RecentMemoryContextStrategy",
+    "RecentMemoryContextStrategyConfiguration",
+    "RecentMemoryContextStrategyFactory",
     "InMemoryMemoryStore",
     "InMemoryMemoryStoreConfiguration",
     "InMemoryMemoryStoreFactory",
@@ -51,6 +78,7 @@ __all__ = [
     "MemoryEntry",
     "MemoryProvider",
     "MemoryProviderFactory",
+    "MemoryReadError",
     "MemorySaveError",
     "MemoryStore",
     "MemoryStoreGroup",
@@ -58,6 +86,9 @@ __all__ = [
     "MemoryNoteMemoryStore",
     "MemoryNoteMemoryStoreConfiguration",
     "MemoryNoteMemoryStoreFactory",
+    "SearchableMemoryNoteMemoryStore",
+    "SearchableMemoryNoteMemoryStoreConfiguration",
+    "SearchableMemoryNoteMemoryStoreFactory",
     "TagNoteMemoryStore",
     "TagNoteMemoryStoreConfiguration",
     "TagNoteMemoryStoreFactory",

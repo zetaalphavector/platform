@@ -37,6 +37,7 @@ class ScheduledTaskContextSourceConfiguration(BaseModel):
 class ScheduledTaskContextSource(ContextSource):
 
     source_name = "scheduled_task"
+    source_description = "The scheduled task this conversation runs for."
 
     def __init__(self, enabled: bool) -> None:
         self.enabled = enabled

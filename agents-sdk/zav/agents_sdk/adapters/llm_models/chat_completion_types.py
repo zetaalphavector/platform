@@ -8,6 +8,8 @@ from zav.prompt_completion import FunctionCallRequest as PcFunctionCallRequest
 from zav.prompt_completion import FunctionCallResponse as PcFunctionCallResponse
 from zav.prompt_completion import ToolCallRequest as PcToolCallRequest
 from zav.prompt_completion import ToolCallResponse as PcToolCallResponse
+from zav.prompt_completion.client import ContentPart as PcContentPart
+from zav.prompt_completion.client import ImageContentPart as PcImageContentPart
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, Field
 
 from zav.agents_sdk.domain.chat_message import (
@@ -50,6 +52,8 @@ class ChatCompletion(BaseModel):
     sender: ChatCompletionSender
     content: str
     image_uri: Optional[str] = None
+    # Every image on the message, `image_uri` included (ChatMessage.image_uris).
+    image_uris: List[str] = Field(default_factory=list)
     function_call_request: Optional[FunctionCallRequest] = None
     function_call_response: Optional[FunctionCallResponse] = None
     tool_call_requests: Optional[List[ToolCallRequest]] = None
@@ -69,6 +73,7 @@ class ChatCompletion(BaseModel):
             sender=ChatCompletionSender(chat_message.sender),
             content=content,
             image_uri=chat_message.image_uri,
+            image_uris=chat_message.all_image_uris(),
             function_call_request=chat_message.function_call_request,
             function_call_response=(
                 FunctionCallResponse(
@@ -131,11 +136,22 @@ def parse_chat_message(message: Union[ChatMessage, ChatCompletion]) -> PcChatMes
     if isinstance(message, ChatMessage) and message.content_parts:
         parts_text = "".join([part.text for part in message.content_parts if part.text])
     content = parts_text or message.content
+    image_uris = (
+        message.all_image_uris()
+        if isinstance(message, ChatMessage)
+        else message.image_uris or ([message.image_uri] if message.image_uri else [])
+    )
+    # Providers read either `content` + `image_uri` or, when set, only
+    # `content_parts`; more than one image needs the parts form.
+    content_parts = ([PcContentPart(text=content)] if content else []) + [
+        PcContentPart(image=PcImageContentPart(image_uri=uri)) for uri in image_uris
+    ]
 
     return PcChatMessage(
         sender=ChatMessageSender(message.sender),
         content=content,
-        image_uri=message.image_uri,
+        image_uri=image_uris[0] if len(image_uris) == 1 else None,
+        content_parts=content_parts if len(image_uris) > 1 else None,
         function_call_request=(
             PcFunctionCallRequest(
                 function_name=message.function_call_request.name,

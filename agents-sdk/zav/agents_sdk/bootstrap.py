@@ -17,7 +17,12 @@ if TYPE_CHECKING:
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
 from zav.agents_sdk.domain.chat_agent_state_store import ChatAgentStateStore
 from zav.agents_sdk.domain.chat_conversation_store import ChatConversationStore
+from zav.agents_sdk.domain.llm_configuration_store import LLMConfigurationStoreFactory
 from zav.agents_sdk.domain.mcp_server_setup import MCPServerSetupRetriever
+from zav.agents_sdk.domain.message_inbox import MessageInboxStore
+from zav.agents_sdk.domain.realtime_transcription import (
+    RealtimeTranscriptionSetupRetriever,
+)
 from zav.agents_sdk.handlers import CommandHandlerRegistry, EventHandlerRegistry
 
 
@@ -31,9 +36,14 @@ def setup_bootstrap(
     event_handler_registry: Optional[Type[EventHandlerRegistry]] = None,
     agent_state_store: Optional[ChatAgentStateStore] = None,
     chat_conversation_store: Optional[ChatConversationStore] = None,
+    message_inbox_store: Optional[MessageInboxStore] = None,
     mcp_oauth_store: Optional[MCPOAuthIntegrationStore] = None,
     mcp_oauth_token_client: Optional[MCPOAuthTokenClient] = None,
     mcp_server_setup_retriever: Optional[MCPServerSetupRetriever] = None,
+    llm_configuration_store_factory: Optional[LLMConfigurationStoreFactory] = None,
+    realtime_transcription_setup_retriever: Optional[
+        RealtimeTranscriptionSetupRetriever
+    ] = None,
 ):
     if tracing_backend_factory:
         for tracing_vendor, tracing_backend in tracing_backend_factory.registry.items():
@@ -63,6 +73,10 @@ def setup_bootstrap(
             name="chat_conversation_store",
             value=chat_conversation_store,
         ),
+        BootstrapDependency(
+            name="message_inbox_store",
+            value=message_inbox_store,
+        ),
     ]
     if mcp_oauth_store is not None:
         bootstrap_deps.append(
@@ -83,6 +97,20 @@ def setup_bootstrap(
             BootstrapDependency(
                 name="mcp_server_setup_retriever",
                 value=mcp_server_setup_retriever,
+            )
+        )
+    if llm_configuration_store_factory is not None:
+        bootstrap_deps.append(
+            BootstrapDependency(
+                name="llm_configuration_store_factory",
+                value=llm_configuration_store_factory,
+            )
+        )
+    if realtime_transcription_setup_retriever is not None:
+        bootstrap_deps.append(
+            BootstrapDependency(
+                name="realtime_transcription_setup_retriever",
+                value=realtime_transcription_setup_retriever,
             )
         )
     if extra_bootstrap_deps is not None:

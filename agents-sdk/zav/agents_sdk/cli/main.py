@@ -221,6 +221,13 @@ def serve(
         str,
         typer.Option(help="Base URL of the Zeta Alpha Front End."),
     ] = "https://search.zeta-alpha.com",
+    storage_path: Annotated[
+        str,
+        typer.Option(
+            help="Path to store stateful conversations: agent state, stream "
+            "recordings and inboxes."
+        ),
+    ] = os.getcwd(),
 ):
     """
     Starts the local REST API server for the agents project.
@@ -234,6 +241,7 @@ def serve(
 
     os.environ["JSON_LOGGING"] = "0"
     os.environ["ZAV_FE_URL"] = zav_fe_url
+    os.environ["STORAGE_PATH"] = os.path.abspath(storage_path)
     if project_dir:
         os.environ["ZAV_PROJECT_DIR"] = project_dir
     if setup_src:

@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         DependencyGroup,
         ResumableAgentDependency,
     )
+    from zav.agents_sdk.domain.agent_position import AgentPosition
     from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
     from zav.agents_sdk.domain.agent_setup_retriever import (
         AgentSetup,
@@ -95,6 +96,11 @@ if TYPE_CHECKING:
     )
     from zav.agents_sdk.domain.mcp_oauth import MCPOAuthCallbackResult
     from zav.agents_sdk.domain.request_headers import RequestHeaders
+    from zav.agents_sdk.domain.secret_store import (
+        SecretStore,
+        SecretStoreFromFile,
+        StaticSecretStore,
+    )
     from zav.agents_sdk.domain.table import Table
     from zav.agents_sdk.domain.tools import (
         Tool,
@@ -141,6 +147,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "AgentCreator",
+    "AgentPosition",
     "AgentRegistriesFactory",
     "AgentCodeBundle",
     "AbstractEventPublisher",
@@ -203,6 +210,9 @@ __all__ = [
     "LLMConfigurationStoreFromFile",
     "LayeredLLMConfigurationStore",
     "StaticLLMConfigurationStore",
+    "SecretStore",
+    "SecretStoreFromFile",
+    "StaticSecretStore",
     "LLMClientFactory",
     "LLMNotConfigured",
     "LLMSelectionConfiguration",

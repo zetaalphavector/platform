@@ -1,11 +1,11 @@
 import asyncio
 import json
-import re
 from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast, overload
 
 import openai
-from openai import BadRequestError, RateLimitError
+from openai import BadRequestError
+from openai import RateLimitError as OpenAiRateLimitError
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     ChatCompletionNamedToolChoiceParam,
@@ -28,6 +28,11 @@ from zav.llm_tracing import Span, now
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel
 
+from zav.prompt_completion.adapters.errors import (
+    generate_content_filter_error,
+    generate_prompt_too_long_error,
+    generate_rate_limit_error,
+)
 from zav.prompt_completion.adapters.tracing import create_span, end_span
 from zav.prompt_completion.client import (
     BotConversation,
@@ -42,7 +47,6 @@ from zav.prompt_completion.client import (
     PromptCompletionClient,
     PromptCompletionWithLogitsClient,
     PromptResponse,
-    PromptTooLargeError,
     ToolCallRequest,
 )
 from zav.prompt_completion.client_factories import (
@@ -82,32 +86,17 @@ class OAILogProb(BaseModel):
     logprob: float
 
 
-def __extract_int_from_text(pattern: str, text: str) -> Optional[int]:
-    """Extract int from text."""
-    match = re.search(pattern, text)
-    if match:
-        return int(match.group(1))
-    return None
-
-
-def generate_prompt_too_long_error(error_message: str):
-    max_tokens_limit = __extract_int_from_text(
-        r"maximum context length is (\d+) tokens", error_message
-    )
-    requested_tokens = __extract_int_from_text(
-        r"resulted in (\d+) tokens", error_message
-    )
-    extra_tokens = (
-        requested_tokens - max_tokens_limit
-        if max_tokens_limit and requested_tokens
+def build_client(vendor_configuration: OpenAIConfiguration):
+    organization = (
+        vendor_configuration.openai_org.get_unencrypted_secret()
+        if vendor_configuration.openai_org is not None
         else None
     )
-    return PromptTooLargeError(error_message, extra_tokens)
-
-
-def build_client(vendor_configuration: OpenAIConfiguration):
-    organization = vendor_configuration.openai_org.get_unencrypted_secret()
-    api_key = vendor_configuration.openai_api_key.get_unencrypted_secret()
+    api_key = (
+        vendor_configuration.openai_api_key.get_unencrypted_secret()
+        if vendor_configuration.openai_api_key is not None
+        else None
+    )
     if vendor_configuration.openai_api_type == "azure":
         if vendor_configuration.openai_api_base:
             return openai.AsyncAzureOpenAI(
@@ -211,7 +200,7 @@ class OpenAiPromptWithLogitsClient(PromptCompletionWithLogitsClient):
             if e.status_code == 400 and (
                 "context_length_exceeded" in e.message or "string too long" in e.message
             ):
-                error = generate_prompt_too_long_error(e.message)
+                error: Exception = generate_prompt_too_long_error(e.message)
             else:
                 error = Exception(f"Prompt completion failed with error: {e.message}")
             return PromptResponse(error=error, prompt_answer=None)
@@ -518,6 +507,7 @@ class OpenAiChatClient(ChatCompletionClient):
                     tool_calls_buffer: List[OAIToolCall] = []
                     tool_calls_buffer_trace: List[OAIToolCall] = []
                     usage_buffer: Dict = {}
+                    model_buffer: Optional[str] = None
                     async for chunk in response:
                         if generation_span and completion_start_time is None:
                             completion_start_time = now()
@@ -527,6 +517,7 @@ class OpenAiChatClient(ChatCompletionClient):
                                 }
                             )
                         if generation_span:
+                            model_buffer = chunk.model or model_buffer
                             usage_buffer = (
                                 {
                                     "usage": {
@@ -542,6 +533,26 @@ class OpenAiChatClient(ChatCompletionClient):
                         choice_chunk = chunk.choices[0] if chunk.choices else None
                         if choice_chunk is None:
                             # This is a completion chunk with no choices, skip it
+                            continue
+
+                        if choice_chunk.finish_reason == "content_filter":
+                            message = "The completion was blocked by a content filter."
+                            if generation_span:
+                                generation_span.end(
+                                    attributes={
+                                        "level": "ERROR",
+                                        "status_message": message,
+                                    }
+                                )
+                            yield ChatResponse(
+                                error=generate_content_filter_error(message),
+                                chat_message=None,
+                            )
+                            return
+
+                        if choice_chunk.delta is None:
+                            # Azure OpenAI emits a choice with a null delta for its
+                            # content-filter annotation chunks; nothing to accumulate.
                             continue
 
                         if choice_chunk.delta.role is not None:
@@ -678,6 +689,7 @@ class OpenAiChatClient(ChatCompletionClient):
                         role=role_buffer,
                         function_call=function_call_buffer_trace,
                         log_probs=log_probs_buffer if log_probs_buffer else None,
+                        model=model_buffer,
                     )
 
                 return stream_response(response)
@@ -746,6 +758,7 @@ class OpenAiChatClient(ChatCompletionClient):
                     role=choice.message.role,
                     function_call=function_call,
                     log_probs=log_probs,
+                    model=response.model,
                 )
                 chat_message = self.__parse_chat_message(
                     content=choice.message.content,
@@ -765,50 +778,29 @@ class OpenAiChatClient(ChatCompletionClient):
             if e.status_code == 400 and (
                 "context_length_exceeded" in e.message or "string too long" in e.message
             ):
-                error = generate_prompt_too_long_error(e.message)
+                error: Exception = generate_prompt_too_long_error(e.message)
+            elif getattr(e, "code", None) == "content_filter" or (
+                "content_filter" in (e.message or "")
+            ):
+                error = generate_content_filter_error(e.message)
             else:
                 error = e
             error_response = ChatResponse(error=error, chat_message=None)
             return stream_response_item(error_response) if stream else error_response
-        except RateLimitError as e:
+        except OpenAiRateLimitError as e:
             logger.warning(f"Rate limit reached: {e}")
             if generation_span:
                 generation_span.end(
                     attributes={
-                        "level": "WARNING",
+                        "level": "ERROR",
                         "status_message": e.message,
                     }
                 )
-            retry_after = (
-                e.response.headers.get("retry-after")
-                or e.response.headers.get("x-ratelimit-reset-requests")
-                or e.response.headers.get("x-ratelimit-reset-tokens")
+            error_response = ChatResponse(
+                error=generate_rate_limit_error(e.message, e.response.headers),
+                chat_message=None,
             )
-            if retry_after is None:
-                retry_after_match = re.search(
-                    r"retry after (\d+\s*\w+)", e.message, re.IGNORECASE
-                )
-                retry_after = (
-                    retry_after_match.group(1) if retry_after_match else "a moment"
-                )
-            else:
-                retry_after = f"{retry_after} seconds"
-            rate_limit_message = ChatMessage(
-                content=(
-                    "You have reached the token rate limit for this model. "
-                    f"Please retry after {retry_after}. If this issue persists, "
-                    "contact support@zeta-alpha.com for assistance."
-                ),
-                sender=ChatMessageSender.BOT,
-            )
-            rate_limit_response = ChatResponse(
-                error=None, chat_message=rate_limit_message
-            )
-            return (
-                stream_response_item(rate_limit_response)
-                if stream
-                else rate_limit_response
-            )
+            return stream_response_item(error_response) if stream else error_response
         except Exception as error:
             if generation_span:
                 generation_span.end(
@@ -891,20 +883,32 @@ class OpenAiChatClient(ChatCompletionClient):
                     )
                 elif message.sender == ChatMessageSender.USER:
                     content: List[Dict[str, Any]] = []
-                    if message.content:
-                        content.append(
-                            {
-                                "type": "text",
-                                "text": message.content,
-                            }
-                        )
-                    if message.image_uri:
-                        content.append(
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": message.image_uri},
-                            }
-                        )
+                    if message.content_parts:
+                        for part in message.content_parts:
+                            if part.text:
+                                content.append({"type": "text", "text": part.text})
+                            if part.image:
+                                content.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": part.image.image_uri},
+                                    }
+                                )
+                    else:
+                        if message.content:
+                            content.append(
+                                {
+                                    "type": "text",
+                                    "text": message.content,
+                                }
+                            )
+                        if message.image_uri:
+                            content.append(
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": message.image_uri},
+                                }
+                            )
                     if len(content) > 0:
                         messages.append(
                             {

@@ -223,6 +223,10 @@ class SkillsSource(ABC):
     """Abstract source for skill discovery. Extend this for custom backends."""
 
     source_name: ClassVar[str]
+    # One line for admins choosing sources, e.g. in the agent editor.
+    source_description: ClassVar[Optional[str]] = None
+    # The tenant gate that hides this source until a tenant enables it.
+    source_gate: ClassVar[Optional[str]] = None
     enabled: bool
 
     @staticmethod

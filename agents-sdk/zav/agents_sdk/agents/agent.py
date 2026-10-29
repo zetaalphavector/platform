@@ -9,6 +9,7 @@ from zav.agents_sdk.adapters.dispatch import DispatchProvider
 from zav.agents_sdk.adapters.instructions.instructions_provider import (
     InstructionsProvider,
 )
+from zav.agents_sdk.adapters.interjections import InterjectionsProvider
 from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
     ChatResponse,
     ResumableZAVChatCompletionClient,
@@ -18,6 +19,7 @@ from zav.agents_sdk.adapters.memory.memory_provider import MemoryProvider
 from zav.agents_sdk.adapters.message_processing.message_processing_provider import (
     MessageProcessingProvider,
 )
+from zav.agents_sdk.adapters.repl import ReplProvider
 from zav.agents_sdk.adapters.skills.skills_provider import SkillsProvider
 from zav.agents_sdk.adapters.tools.tools_provider import ToolsProvider
 from zav.agents_sdk.domain.chat_agent import StreamableChatAgent
@@ -103,6 +105,8 @@ class Agent(StreamableChatAgent):
         message_processing_provider: MessageProcessingProvider,
         dispatch_provider: DispatchProvider,
         instructions_provider: InstructionsProvider,
+        interjections_provider: InterjectionsProvider,
+        repl_provider: ReplProvider,
         conversation_context: Optional[ConversationContext] = None,
         system_prompt: str = _MAIN_SYSTEM_PROMPT,
     ):
@@ -116,8 +120,22 @@ class Agent(StreamableChatAgent):
         self.__message_processing_provider = message_processing_provider
         self.__dispatch_provider = dispatch_provider
         self.__instructions_provider = instructions_provider
+        self.__interjections_provider = interjections_provider
+        self.__repl_provider = repl_provider
         self.__conversation_context = conversation_context
         self.__system_prompt = system_prompt
+        # The turn reads these providers' cached listings before each model
+        # call, so a server connected mid-turn brings its tools to the next one.
+        for provider in (
+            self.__mcp_provider,
+            self.__skills_provider,
+            self.__agent_delegation_provider,
+            self.__tools_provider,
+            self.__memory_provider,
+            self.__context_provider,
+            self.__repl_provider,
+        ):
+            self.tools_registry.add_provider(provider.get_tools)
 
     async def execute_streaming(
         self, conversation: list[ChatMessage]
@@ -133,30 +151,18 @@ class Agent(StreamableChatAgent):
                     yield msg
                 return
 
-        (
-            mcp_tools,
-            skills_tools,
-            delegation_tools,
-            tools_tools,
-            memory_tools,
-            context_tools,
-        ) = await asyncio.gather(
-            self.__mcp_provider.get_tools(),
-            self.__skills_provider.get_tools(),
-            self.__agent_delegation_provider.get_tools(),
-            self.__tools_provider.get_tools(),
-            self.__memory_provider.get_tools(),
-            self.__context_provider.get_tools(),
+        # First: context sources may derive per-turn state that providers read.
+        completions = await self.__context_provider.process_conversation(
+            # Seed the global conversation context into the transcript only on the
+            # first turn. On a resumed stateful turn it is already in the restored
+            # transcript, so re-injecting it would append a duplicate developer
+            # `<context>` message every turn. Per-turn (content_part) and
+            # conversation-derived context are still processed normally.
+            initial_context=(
+                None if self.__client.is_resumed else self.__conversation_context
+            ),
+            conversation=conversation,
         )
-        for provider_tools in (
-            mcp_tools,
-            skills_tools,
-            delegation_tools,
-            tools_tools,
-            memory_tools,
-            context_tools,
-        ):
-            self.tools_registry.extend(provider_tools)
 
         (
             skills_prompt,
@@ -165,6 +171,8 @@ class Agent(StreamableChatAgent):
             instructions_prompt,
             memory_prompt,
             context_prompt,
+            interjections_prompt,
+            repl_prompt,
         ) = await asyncio.gather(
             self.__skills_provider.to_prompt(),
             self.__agent_delegation_provider.to_prompt(),
@@ -174,6 +182,10 @@ class Agent(StreamableChatAgent):
             self.__context_provider.to_prompt(
                 initial_context=self.__conversation_context,
             ),
+            self.__interjections_provider.to_prompt(),
+            self.__repl_provider.to_prompt(
+                await self.tools_registry.current_tools(), completions
+            ),
         )
         for prompt_section in (
             skills_prompt,
@@ -182,6 +194,8 @@ class Agent(StreamableChatAgent):
             instructions_prompt,
             memory_prompt,
             context_prompt,
+            interjections_prompt,
+            repl_prompt,
         ):
             if prompt_section:
                 self.__system_prompt = f"{self.__system_prompt}\n\n{prompt_section}"
@@ -202,20 +216,10 @@ class Agent(StreamableChatAgent):
                     "message_processing": (
                         self.__message_processing_provider.describe_loaded()
                     ),
+                    "interjections": self.__interjections_provider.describe_loaded(),
+                    "repl": self.__repl_provider.describe_loaded(),
                 }
             }
-        )
-
-        completions = await self.__context_provider.process_conversation(
-            # Seed the global conversation context into the transcript only on the
-            # first turn. On a resumed stateful turn it is already in the restored
-            # transcript, so re-injecting it would append a duplicate developer
-            # `<context>` message every turn. Per-turn (content_part) and
-            # conversation-derived context are still processed normally.
-            initial_context=(
-                None if self.__client.is_resumed else self.__conversation_context
-            ),
-            conversation=conversation,
         )
 
         response = await self.__client.complete(
@@ -228,6 +232,7 @@ class Agent(StreamableChatAgent):
             concurrent_tool_execution=True,
             preserve_streamed_content_parts=True,
             log_fn=self.debug,
+            hooks=self.__interjections_provider.hooks,
         )
 
         async def raw_stream() -> (

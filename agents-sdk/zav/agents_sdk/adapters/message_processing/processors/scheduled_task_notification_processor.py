@@ -25,6 +25,7 @@ class ScheduledTaskNotificationProcessorConfiguration(BaseModel):
 class ScheduledTaskNotificationProcessor(MessageProcessor):
 
     source_name = "scheduled_task_notification"
+    source_description = "Sends the result of a scheduled task as a notification."
 
     def __init__(
         self,
@@ -63,7 +64,7 @@ class ScheduledTaskNotificationProcessor(MessageProcessor):
             return
 
         try:
-            await self.__notification_service.send_agent_notification_email(
+            await self.__notification_service.send_scheduled_agent_notification_email(
                 content=last_content,
                 zav_fe_url=self.__zav_fe_url,
                 chat_note_id=self.__chat_note_id,

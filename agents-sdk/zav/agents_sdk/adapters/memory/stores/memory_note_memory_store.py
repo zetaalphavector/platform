@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Tuple
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel
@@ -22,6 +22,7 @@ class MemoryNoteMemoryStoreConfiguration(BaseModel):
 
 class MemoryNoteMemoryStore(MemoryStore):
     source_name = "memory_notes"
+    source_description = "Memories stored as the user's memory notes."
 
     def __init__(
         self,
@@ -57,6 +58,49 @@ class MemoryNoteMemoryStore(MemoryStore):
             )
             all_notes.extend(shared_notes)
 
+        entries = self.__to_entries(all_notes)
+        logger.info(f"Loaded {len(entries)} memory entries from notes")
+        return entries
+
+    async def load_recent_context(self, size: int) -> Tuple[List[MemoryEntry], int]:
+        self.__permissions.clear()
+
+        all_notes: List = []
+        total = 0
+
+        if "own" in self.__include_scopes:
+            own_notes, own_total = (
+                await self.__notes_service.retrieve_notes_with_total_count(
+                    note_object_type="memory",
+                    page=1,
+                    page_size=size,
+                    created_by_me=True,
+                    sort_by=["date_created:desc"],
+                )
+            )
+            all_notes.extend(own_notes)
+            total += own_total
+
+        if "shared_with_me" in self.__include_scopes:
+            shared_notes, shared_total = (
+                await self.__notes_service.retrieve_notes_with_total_count(
+                    note_object_type="memory",
+                    page=1,
+                    page_size=size,
+                    created_by_me=False,
+                    sort_by=["date_created:desc"],
+                )
+            )
+            all_notes.extend(shared_notes)
+            total += shared_total
+
+        all_notes.sort(key=lambda note: note.get("date_created") or "", reverse=True)
+        all_notes = all_notes[:size]
+        entries = self.__to_entries(all_notes)
+        logger.info(f"Loaded {len(entries)} memory entries from notes")
+        return entries, total
+
+    def __to_entries(self, all_notes: List) -> List[MemoryEntry]:
         seen_contents: set = set()
         entries: List[MemoryEntry] = []
 
@@ -84,7 +128,6 @@ class MemoryNoteMemoryStore(MemoryStore):
                 )
             )
 
-        logger.info(f"Loaded {len(entries)} memory entries from notes")
         return entries
 
     async def save(self, content: str) -> MemoryEntry:
@@ -122,7 +165,6 @@ class MemoryNoteMemoryStore(MemoryStore):
             await self.__notes_service.update_note(
                 note_id=note_id,
                 content=content,
-                object_type="memory",
             )
         except Exception as e:
             raise MemoryUpdateError(

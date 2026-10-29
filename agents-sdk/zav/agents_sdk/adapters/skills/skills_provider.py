@@ -1,10 +1,11 @@
 import html
+import re
 from typing import Any, Dict, List, Literal, Optional, Set
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
-from zav.agents_sdk.adapters._filtering import is_source_active
+from zav.agents_sdk.adapters._filtering import active_sources, pick_writable
 from zav.agents_sdk.adapters.skills.skills_source import (
     SkillNotFoundError,
     SkillProperties,
@@ -16,6 +17,8 @@ from zav.agents_sdk.adapters.skills.skills_source import (
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, ToolStreamingConfig
+
+USE_SKILL_TOOL_NAME = "use_skill"
 
 
 class SkillsProviderConfiguration(BaseModel):
@@ -40,6 +43,9 @@ class SkillsProviderConfiguration(BaseModel):
     )
     exclude_sources: Optional[List[str]] = Field(
         None, description="Denylist of skill source names to exclude."
+    )
+    exclude_skills: Optional[List[str]] = Field(
+        None, description="Skill names the agent may not use."
     )
     writable_source: Optional[str] = Field(
         None,
@@ -68,35 +74,36 @@ class SkillsProvider:
         include_sources: Optional[Set[str]] = None,
         exclude_sources: Optional[Set[str]] = None,
         writable_source: Optional[str] = None,
+        exclude_skills: Optional[Set[str]] = None,
     ):
-        self.__sources = sources
         self.__enabled = enabled
+        self.__exclude_skills = exclude_skills or set()
         self.__prompt_format = prompt_format
         self.__include_location = include_location_in_prompt
         self.__injection_mode = injection_mode
-        self.__include_sources = include_sources
-        self.__exclude_sources = exclude_sources
         self.__skills: Optional[Dict[str, SkillProperties]] = None
+        # Built once, as reading resources is I/O; cleared with the skills.
+        self.__tools: Optional[List[Tool]] = None
         self.__skill_sources: Dict[str, SkillsSource] = {}
-        self.__writable_source = self.__resolve_writable(sources, writable_source)
-        self.__cached_active: Optional[List[SkillsSource]] = None
+        self.__active = active_sources(
+            sources, enabled, include_sources, exclude_sources
+        )
+        self.__writable_source = pick_writable(self.__active, writable_source)
         self.__created_skills: List[SkillProperties] = []
         self.__edited_skills: List[SkillProperties] = []
 
+    @property
+    def active_sources(self) -> List[SkillsSource]:
+        return self.__active
+
+    @property
+    def writable_source(self) -> Optional[SkillsSource]:
+        """Where new skills are written, for the agent's `create_skill` tool and
+        for anything else in the build that persists skills on its behalf."""
+        return self.__writable_source
+
     def __active_sources(self) -> List[SkillsSource]:
-        if self.__cached_active is not None:
-            return self.__cached_active
-        self.__cached_active = [
-            source
-            for source in self.__sources
-            if is_source_active(
-                source.source_name,
-                source.enabled,
-                self.__include_sources,
-                self.__exclude_sources,
-            )
-        ]
-        return self.__cached_active
+        return self.__active
 
     def describe_loaded(self) -> Dict[str, Any]:
         return {
@@ -117,6 +124,8 @@ class SkillsProvider:
                 )
                 continue
             for name, props in skills.items():
+                if name in self.__exclude_skills:
+                    continue
                 if name in self.__skills:
                     logger.warning(
                         f"Skill '{name}' already registered"
@@ -128,6 +137,24 @@ class SkillsProvider:
                 self.__skills[name] = props
                 self.__skill_sources[name] = source
         return self.__skills
+
+    async def skills_by_source(self) -> Dict[str, List[str]]:
+        by_source: Dict[str, List[str]] = {
+            source.source_name: [] for source in self.__active_sources()
+        }
+        for name in await self.__ensure_discovered():
+            by_source[self.__skill_sources[name].source_name].append(name)
+        return by_source
+
+    async def allowed_tools_by_skill(self) -> Dict[str, List[str]]:
+        """Each skill's `allowed-tools`, split into tool names or patterns."""
+        if not self.__enabled:
+            return {}
+        return {
+            name: re.split(r"[\s,]+", skill.allowed_tools.strip())
+            for name, skill in (await self.__ensure_discovered()).items()
+            if skill.allowed_tools and skill.allowed_tools.strip()
+        }
 
     async def to_prompt(self, format: Optional[Literal["xml", "text"]] = None) -> str:
         """Generate skill catalog for system prompt injection."""
@@ -187,6 +214,8 @@ class SkillsProvider:
         if self.__injection_mode not in ("tools", "both"):
             return []
 
+        if self.__tools is not None:
+            return self.__tools
         skills = await self.__ensure_discovered()
 
         tools = []
@@ -205,6 +234,7 @@ class SkillsProvider:
         edit_tool = self.__get_edit_skill_content_tool(skills)
         if edit_tool:
             tools.append(edit_tool)
+        self.__tools = tools
         return tools
 
     def __get_skill_tool(self, skills: Dict[str, SkillProperties]) -> Optional[Tool]:
@@ -220,7 +250,7 @@ class SkillsProvider:
             desc_lines.append(f"- {skill.name}: {skill.description}")
 
         return Tool(
-            name="use_skill",
+            name=USE_SKILL_TOOL_NAME,
             description="\n".join(desc_lines),
             executable=self.__invoke_skill,
             parameters_spec={
@@ -325,20 +355,6 @@ class SkillsProvider:
         except (SkillNotFoundError, SkillResourceNotFoundError, SkillReadError) as e:
             return f"Error: {e}"
 
-    @staticmethod
-    def __resolve_writable(
-        sources: List[SkillsSource],
-        writable_source: Optional[str],
-    ) -> Optional[SkillsSource]:
-        if not sources:
-            return None
-        if writable_source:
-            for source in sources:
-                if source.source_name == writable_source:
-                    return source
-            return None
-        return sources[0]
-
     def __get_skill_content_tool(
         self, skills: Dict[str, SkillProperties]
     ) -> Optional[Tool]:
@@ -385,8 +401,6 @@ class SkillsProvider:
 
     def __get_create_skill_tool(self) -> Optional[Tool]:
         if not self.__writable_source:
-            return None
-        if self.__writable_source not in self.__active_sources():
             return None
 
         return Tool(
@@ -453,6 +467,7 @@ class SkillsProvider:
             return {"error": str(e)}
 
         self.__skills = None
+        self.__tools = None
         self.__skill_sources.clear()
         self.__created_skills.append(saved)
 
@@ -468,8 +483,6 @@ class SkillsProvider:
         self, skills: Dict[str, SkillProperties]
     ) -> Optional[Tool]:
         if not self.__writable_source:
-            return None
-        if self.__writable_source not in self.__active_sources():
             return None
         if not skills:
             return None
@@ -607,6 +620,7 @@ class SkillsProvider:
             return {"error": str(e)}
 
         self.__skills = None
+        self.__tools = None
         self.__skill_sources.clear()
         self.__edited_skills.append(saved)
 
@@ -619,6 +633,7 @@ class SkillsProvider:
 
 
 class SkillsProviderFactory(AgentDependencyFactory):
+    __singleton__ = True
 
     @classmethod
     def create(
@@ -628,23 +643,23 @@ class SkillsProviderFactory(AgentDependencyFactory):
             SkillsProviderConfiguration()
         ),
     ) -> SkillsProvider:
+        configuration = skills_provider_configuration
         return SkillsProvider(
             sources=skills_source_group.items,
-            enabled=skills_provider_configuration.enabled,
-            prompt_format=skills_provider_configuration.prompt_format,
-            include_location_in_prompt=(
-                skills_provider_configuration.include_location_in_prompt
-            ),
-            injection_mode=skills_provider_configuration.injection_mode,
+            enabled=configuration.enabled,
+            prompt_format=configuration.prompt_format,
+            include_location_in_prompt=configuration.include_location_in_prompt,
+            injection_mode=configuration.injection_mode,
             include_sources=(
-                set(skills_provider_configuration.include_sources)
-                if skills_provider_configuration.include_sources
+                set(configuration.include_sources)
+                if configuration.include_sources
                 else None
             ),
             exclude_sources=(
-                set(skills_provider_configuration.exclude_sources)
-                if skills_provider_configuration.exclude_sources
+                set(configuration.exclude_sources)
+                if configuration.exclude_sources
                 else None
             ),
-            writable_source=skills_provider_configuration.writable_source,
+            writable_source=configuration.writable_source,
+            exclude_skills=set(configuration.exclude_skills or []),
         )

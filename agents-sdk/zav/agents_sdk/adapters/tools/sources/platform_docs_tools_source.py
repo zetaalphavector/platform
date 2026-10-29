@@ -3,10 +3,13 @@ from typing import Callable, Coroutine, Dict, List, Optional
 import httpx
 from defusedxml import ElementTree
 from zav.logging import logger
-from zav.pydantic_compat import BaseModel, Field
+from zav.pydantic_compat import Field
 
 from zav.agents_sdk.adapters.tools.sources.url_crawler import WebPageCrawler
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, hide, streamable
 
@@ -48,7 +51,7 @@ platform-specific questions.
 """
 
 
-class PlatformDocsToolsSourceConfiguration(BaseModel):
+class PlatformDocsToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = Field(False, description="Enable platform documentation tools.")
     docs_base_url: str = Field(
         "https://docs.zeta-alpha.com",
@@ -126,6 +129,7 @@ def _parse_sitemap(xml_text: str, base_url: str) -> List[_SitemapEntry]:
 class PlatformDocsToolsSource(ToolsSource):
 
     source_name = "platform_docs"
+    source_description = "Look up the platform's own documentation."
 
     def __init__(
         self,
@@ -135,12 +139,14 @@ class PlatformDocsToolsSource(ToolsSource):
         timeout_seconds: float,
         enabled: bool,
         sitemap_fetcher: Optional[SitemapFetcher] = None,
+        defer_tools: Optional[bool] = None,
     ) -> None:
         self.__crawler = crawler
         self.__docs_base_url = docs_base_url.rstrip("/")
         self.__sitemap_url = self.__docs_base_url + sitemap_path
         self.__timeout_seconds = timeout_seconds
         self.enabled = enabled
+        self.defer_tools = defer_tools
         self.__sitemap_fetcher = sitemap_fetcher
         self.__sitemap: Optional[List[_SitemapEntry]] = None
 
@@ -238,4 +244,5 @@ class PlatformDocsToolsSourceFactory(AgentDependencyFactory):
             sitemap_path=cfg.sitemap_path,
             timeout_seconds=cfg.timeout_seconds,
             enabled=cfg.enabled,
+            defer_tools=cfg.defer_tools,
         )

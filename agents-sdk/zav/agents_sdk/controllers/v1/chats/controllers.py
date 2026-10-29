@@ -6,10 +6,16 @@ from fastapi.responses import Response
 from sse_starlette.event import ServerSentEvent
 from sse_starlette.sse import EventSourceResponse
 from zav.api.dependencies import get_message_bus
-from zav.api.error_responses import ApiError, error_responses
-from zav.api.errors import BadRequestException, NotFoundException, UnknownException
+from zav.api.error_responses import ERROR_RATE_LIMITED, ApiError, error_responses
+from zav.api.errors import (
+    BadRequestException,
+    ForbiddenException,
+    NotFoundException,
+    UnknownException,
+)
 from zav.logging import logger
 from zav.message_bus import MessageBus
+from zav.prompt_completion import ContentFilterError, RateLimitError
 from zav.pydantic_compat import PYDANTIC_V2
 
 from zav.agents_sdk.adapters.stream_buffer import (
@@ -20,7 +26,10 @@ from zav.agents_sdk.adapters.stream_buffer.resumable_chat_streams import (
     ResumableChatStreams,
     StreamSource,
 )
+from zav.agents_sdk.controllers.v1.chats.open_responses import OpenResponsesEncoder
 from zav.agents_sdk.controllers.v1.chats.types import (
+    ChatMessageSendForm,
+    ChatMessageSendItem,
     ChatResponseForm,
     ChatResponseItem,
     ChatStreamBusyErrorResponse,
@@ -31,6 +40,7 @@ from zav.agents_sdk.controllers.v1.common import get_headers
 from zav.agents_sdk.dependencies import (
     get_chat_stream_recording_store,
     get_chat_stream_supervision_store,
+    get_message_inbox_store,
     get_stream_buffer_registry,
 )
 from zav.agents_sdk.domain import ChatRequest, RequestHeaders
@@ -41,6 +51,8 @@ from zav.agents_sdk.domain.chat_stream_recording_store import ChatStreamRecordin
 from zav.agents_sdk.domain.chat_stream_supervision_store import (
     ChatStreamSupervisionStore,
 )
+from zav.agents_sdk.domain.message_inbox import InboxItem, MessageInboxStore
+from zav.agents_sdk.exception_handlers import rate_limit_message
 from zav.agents_sdk.handlers import commands
 
 chat_router = APIRouter(tags=["chat"])
@@ -55,12 +67,14 @@ def get_resumable_chat_streams(
     chat_stream_supervision_store: Optional[ChatStreamSupervisionStore] = Depends(
         get_chat_stream_supervision_store
     ),
+    message_inbox_store: Optional[MessageInboxStore] = Depends(get_message_inbox_store),
 ) -> ResumableChatStreams:
     return ResumableChatStreams(
         stream_buffer_registry=stream_buffer_registry,
         message_bus=message_bus,
         recording_store=chat_stream_recording_store,
         supervision_store=chat_stream_supervision_store,
+        inbox_store=message_inbox_store,
     )
 
 
@@ -70,6 +84,7 @@ def extract_create_response_command(
     index_id: Optional[str] = Query(None),
     resume: bool = Query(False),
     message_id: Optional[str] = Query(None),
+    request_timeout: Optional[float] = Query(None),
     request_headers: RequestHeaders = Depends(get_headers),
 ) -> commands.CreateChatResponse:
     cmd = commands.CreateChatResponse(
@@ -81,6 +96,7 @@ def extract_create_response_command(
         ),
         stateful=bool(body.stateful),
         resume=resume,
+        request_timeout=request_timeout,
     )
     if body.session_id is not None:
         cmd.session_id = body.session_id
@@ -90,6 +106,48 @@ def extract_create_response_command(
     if resume and message_id is not None:
         cmd.message_id = message_id
     return cmd
+
+
+def extract_send_message_command(
+    body: ChatMessageSendForm,
+    tenant: str = Query(...),
+    index_id: Optional[str] = Query(None),
+    request_headers: RequestHeaders = Depends(get_headers),
+) -> commands.SendChatMessage:
+    return commands.SendChatMessage(
+        tenant=tenant,
+        request_headers=request_headers,
+        session_id=body.session_id,
+        chat_request=ChatRequest(
+            agent_identifier=body.agent_identifier,
+            conversation=[],
+            conversation_context=body.conversation_context,
+            bot_params=body.bot_params,
+            user_agent_id=body.user_agent_id,
+        ),
+        items=[
+            *(
+                InboxItem(tool_decision=decision)
+                for decision in body.tool_decisions or []
+            ),
+            *([InboxItem(message=body.message)] if body.message else []),
+        ],
+        index_id=index_id,
+    )
+
+
+def extract_remove_message_command(
+    message_id: str,
+    tenant: str = Query(...),
+    session_id: str = Query(...),
+    request_headers: RequestHeaders = Depends(get_headers),
+) -> commands.RemoveChatMessage:
+    return commands.RemoveChatMessage(
+        tenant=tenant,
+        request_headers=request_headers,
+        session_id=session_id,
+        message_id=message_id,
+    )
 
 
 def extract_create_stream_command(
@@ -121,6 +179,7 @@ def extract_create_stream_command(
     "/chats/responses",
     response_model=ChatResponseItem,
     response_model_exclude_none=True,
+    responses=error_responses(ERROR_RATE_LIMITED),
     status_code=201,
     name="create_chat_response",
     operation_id="create_chat_response",
@@ -129,6 +188,7 @@ def extract_create_stream_command(
     "/chat/response",
     response_model=ChatResponseItem,
     response_model_exclude_none=True,
+    responses=error_responses(ERROR_RATE_LIMITED),
     status_code=201,
     name="create_chat",
     operation_id="create_chat",
@@ -147,27 +207,45 @@ async def create_chat_response(
 
 
 def stream_error_code(exc: Exception) -> Tuple[str, str]:
-    """Classify a producer exception into the ``(code, message)`` the SSE
-    ``error`` frame carries. Unknown errors stay generic so no exception text
-    leaks to the client."""
     if isinstance(exc, AgentsStorageNotConfiguredError):
         return ("AGENTS_STORAGE_NOT_CONFIGURED", str(exc))
+    if isinstance(exc, RateLimitError):
+        return ("RATE_LIMITED", rate_limit_message(exc))
+    if isinstance(exc, ContentFilterError):
+        return ("CONTENT_FILTERED", str(exc))
+    if isinstance(exc, ForbiddenException):
+        return ("FORBIDDEN", str(exc))
     return ("INTERNAL", "Internal streaming error")
 
 
-async def stream_response(source: StreamSource, start_index: int = 0):
+async def stream_response(
+    source: StreamSource, start_index: int = 0, delta: bool = False
+):
+    emitted = False
+    encoder = OpenResponsesEncoder() if delta else None
+    event_id = None
     try:
         async for event_index, message in source.iter_events(start_index=start_index):
+            emitted = True
+            event_id = f"{source.message_id}:{event_index}"
             if PYDANTIC_V2:
                 data = message.model_dump_json()
             else:
                 data = message.json()
-            yield ServerSentEvent(
-                data=data,
-                event="new_message",
-                id=f"{source.message_id}:{event_index}",
-                retry=15000,
-            )
+            if encoder is None:
+                yield ServerSentEvent(
+                    data=data, event="new_message", id=event_id, retry=15000
+                )
+                continue
+            for event_type, payload in encoder.encode(json.loads(data)):
+                yield ServerSentEvent(
+                    data=json.dumps(payload), event=event_type, id=event_id
+                )
+        if encoder is not None:
+            for event_type, payload in encoder.finish(source.terminal_reason):
+                yield ServerSentEvent(
+                    data=json.dumps(payload), event=event_type, id=event_id
+                )
     except Exception as e:
         code, error_message = stream_error_code(e)
         logger.error(f"Error in streaming chat messages: {e}", exc_info=True)
@@ -181,6 +259,11 @@ async def stream_response(source: StreamSource, start_index: int = 0):
     # control event so a reconnected client can tell a sealed turn from one
     # whose producing pod died and is therefore resumable.
     terminal_reason = source.terminal_reason
+    if terminal_reason is None and not emitted:
+        # A reconnect at or past the last event of a finished live turn has
+        # nothing to replay. Say it is done rather than close an empty stream,
+        # which a reverse proxy may answer with 502.
+        terminal_reason = "done"
     if terminal_reason is not None:
         yield ServerSentEvent(
             data=json.dumps({"reason": terminal_reason}),
@@ -188,11 +271,34 @@ async def stream_response(source: StreamSource, start_index: int = 0):
         )
 
 
+# The SSE events of a turn, by mode. Each is described once here; the public
+# streaming guide (gen-ai/integrate/guides/streaming.md) has the full contract.
+CHAT_STREAM_DESCRIPTION = (
+    "Server-sent events of one turn. Default: `new_message` events whose data "
+    "is the whole ChatMessage so far (`ChatStreamItem.data`); a replayed "
+    "stream ends with `stream_status` `{reason: done|errored|dead|gone}`. "
+    "With `delta=true`: Open Responses events (https://www.openresponses.org). "
+    "`response.created` carries the whole message as a `response`; then "
+    "`response.output_item.added`, `response.output_text.delta`, "
+    "`response.reasoning_summary_text.delta`, "
+    "`zetaalpha:output_item.updated`, `zetaalpha:message.updated` "
+    "`{set, unset}` and `zetaalpha:snapshot` carry what changed; the turn ends "
+    "with `response.output_text.done`, `response.output_item.done` and "
+    "`response.completed`, or `response.incomplete` for a turn whose producer "
+    "died. In both modes a failure is an `error` event `{code, message}`, code "
+    "one of RATE_LIMITED, CONTENT_FILTERED, AGENTS_STORAGE_NOT_CONFIGURED, "
+    "INTERNAL. Details: "
+    "https://docs.zeta-alpha.com/gen-ai/integrate/guides/streaming"
+)
+
 CHAT_STREAM_BUSY = ApiError(
     409,
     "The conversation already has a turn in flight; attach to the running "
     "stream instead of starting another.",
     model=ChatStreamBusyErrorResponse,
+)
+CHAT_MESSAGE_ALREADY_READ = ApiError(
+    409, "A turn already read the message; it can no longer be removed."
 )
 CHAT_STREAM_GONE = ApiError(
     410,
@@ -212,7 +318,7 @@ CHAT_STREAM_GONE = ApiError(
                     "schema": {"$ref": "#/components/schemas/ChatStreamItem"}
                 }
             },
-            "description": "Chat stream response",
+            "description": CHAT_STREAM_DESCRIPTION,
         },
         **error_responses(CHAT_STREAM_BUSY),
     },
@@ -223,6 +329,11 @@ CHAT_STREAM_GONE = ApiError(
 async def create_chat_streaming(
     command: commands.CreateChatStream = Depends(extract_create_stream_command),
     resumable_chat_streams: ResumableChatStreams = Depends(get_resumable_chat_streams),
+    delta: bool = Query(
+        False,
+        description="Stream Open Responses events: the whole message once, "
+        "then only what changed.",
+    ),
 ):
     try:
         result = await resumable_chat_streams.create(command=command)
@@ -230,7 +341,9 @@ async def create_chat_streaming(
         raise BadRequestException(str(e))
 
     return EventSourceResponse(
-        stream_response(result), media_type="text/event-stream", status_code=201
+        stream_response(result, delta=delta),
+        media_type="text/event-stream",
+        status_code=201,
     )
 
 
@@ -274,7 +387,7 @@ async def get_chat_stream_status(
                     "schema": {"$ref": "#/components/schemas/ChatStreamItem"}
                 }
             },
-            "description": "Chat stream response",
+            "description": CHAT_STREAM_DESCRIPTION,
         },
         **error_responses(CHAT_STREAM_GONE),
     },
@@ -288,6 +401,11 @@ async def get_chat_stream_events(
     start_index: int = Query(0, ge=0),
     session_id: Optional[str] = Query(None),
     partial: bool = Query(False),
+    delta: bool = Query(
+        False,
+        description="Stream Open Responses events: the whole message once, "
+        "then only what changed.",
+    ),
     request_headers: RequestHeaders = Depends(get_headers),
     resumable_chat_streams: ResumableChatStreams = Depends(get_resumable_chat_streams),
 ):
@@ -302,7 +420,7 @@ async def get_chat_stream_events(
         raise NotFoundException("Stream not found or expired")
 
     return EventSourceResponse(
-        stream_response(result, start_index=start_index),
+        stream_response(result, start_index=start_index, delta=delta),
         media_type="text/event-stream",
     )
 
@@ -317,6 +435,11 @@ async def get_chat_stream_events(
 async def cancel_chat_stream(
     message_id: str,
     tenant: str = Query(...),
+    session_id: Optional[str] = Query(
+        None,
+        description="The turn's conversation. With it, any replica stops the "
+        "turn; without it, only the replica producing it can.",
+    ),
     request_headers: RequestHeaders = Depends(get_headers),
     resumable_chat_streams: ResumableChatStreams = Depends(get_resumable_chat_streams),
 ):
@@ -324,7 +447,46 @@ async def cancel_chat_stream(
         message_id=message_id,
         tenant=tenant,
         requester_uuid=request_headers.requester_uuid,
+        session_id=session_id,
     )
     if not cancelled:
         raise NotFoundException("Stream not found or expired")
+    return None
+
+
+@chat_router.post(
+    "/chat/stream/messages",
+    response_model=ChatMessageSendItem,
+    response_model_exclude_none=True,
+    status_code=202,
+    name="send_chat_message",
+    operation_id="send_chat_message",
+)
+async def send_chat_message(
+    command: commands.SendChatMessage = Depends(extract_send_message_command),
+    resumable_chat_streams: ResumableChatStreams = Depends(get_resumable_chat_streams),
+):
+    """Send a message or approval decisions to a stateful conversation, whether
+    or not a turn is running. Returns the turn that reads them."""
+    try:
+        result = await resumable_chat_streams.send(command)
+    except ValueError as e:
+        raise BadRequestException(str(e))
+    return ChatMessageSendItem(message_id=result.message_id, started=result.started)
+
+
+@chat_router.delete(
+    "/chat/stream/messages/{message_id}",
+    response_class=Response,
+    status_code=204,
+    responses=error_responses(CHAT_MESSAGE_ALREADY_READ),
+    name="remove_chat_message",
+    operation_id="remove_chat_message",
+)
+async def remove_chat_message(
+    command: commands.RemoveChatMessage = Depends(extract_remove_message_command),
+    message_bus: MessageBus = Depends(get_message_bus),
+):
+    """Take a sent message out of the inbox before a turn reads it."""
+    await message_bus.handle(command)
     return None

@@ -1,5 +1,7 @@
+import base64
 import json
 import mimetypes
+import os
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -10,6 +12,7 @@ from zav.logging import logger
 from zav.pydantic_compat import BaseModel, ConfigDict, Field
 from zav.user_documents_connector import ApiClient, Configuration
 from zav.user_documents_connector.apis import ExternalDocumentsApi, UserDocumentsApi
+from zav.user_documents_connector.exceptions import ApiException
 from zav.user_documents_connector.models import (
     ItemAccessRights,
     UserDocumentForm,
@@ -82,6 +85,21 @@ class UserDocumentCreateRequest(BaseModel):
     content_file_name: Optional[str] = None
     base64_content: Optional[str] = None
     sharing: Optional[UserDocumentSharing] = UserDocumentSharing()
+
+
+# The service refuses a second private document of an owner with the same metadata,
+# whatever its content, and answers 409 with the existing document's id.
+class UserDocumentAlreadyExists(Exception):
+    def __init__(self, document_id: Optional[str]):
+        super().__init__(f"A document with the same metadata exists: {document_id}")
+        self.document_id = document_id
+
+
+def _existing_document_id(error: ApiException) -> Optional[str]:
+    try:
+        return json.loads(error.body)["detail"]["id"]
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 class UserDocument(BaseModel):
@@ -192,14 +210,19 @@ class UserDocumentsService:
             f"user_tenants: {user_tenants}, user_roles: {user_roles}, "
             f"requester_uuid: {requester_uuid}"
         )
-        user_document = await asyncify(self.__user_documents.create_user_document)(
-            tenant=self.__tenant,
-            user_document_form=document_form,
-            requester_uuid=requester_uuid,
-            user_tenants=user_tenants,
-            user_roles=user_roles,
-            **params,
-        )
+        try:
+            user_document = await asyncify(self.__user_documents.create_user_document)(
+                tenant=self.__tenant,
+                user_document_form=document_form,
+                requester_uuid=requester_uuid,
+                user_tenants=user_tenants,
+                user_roles=user_roles,
+                **params,
+            )
+        except ApiException as e:
+            if e.status == 409:
+                raise UserDocumentAlreadyExists(_existing_document_id(e)) from e
+            raise
         return _parse_user_document_item(user_document)
 
     @handle_api_errors
@@ -290,7 +313,8 @@ class UserDocumentsService:
             page_size=page_size,
         )
 
-    async def __retrieve_document(self, document_id: str) -> UserDocument:
+    @handle_api_errors
+    async def retrieve_document(self, document_id: str) -> UserDocument:
         # The user-documents CRUD endpoints key on the document's own id, while
         # the agent addresses documents by uri_hash everywhere else (search,
         # read, list, tag). Normalize to the "_0" representation like tagging
@@ -324,11 +348,16 @@ class UserDocumentsService:
         source: Optional[str] = None,
         authors: Optional[List[str]] = None,
         year: Optional[int] = None,
+        content: Optional[bytes] = None,
+        content_file_name: Optional[str] = None,
     ) -> None:
+        # A new ``content`` replaces the file (same id) and the connector
+        # re-ingests it; ``content_file_name`` renames the file, which also sets
+        # the document's content type.
         # PATCH replaces document_metadata wholesale, so send the full existing
         # metadata with the changed fields overlaid — the same load-modify-write
         # the web edit form does — rather than only the changed field.
-        existing = await self.__retrieve_document(document_id)
+        existing = await self.retrieve_document(document_id)
         metadata = existing.metadata
         merged: Dict[str, Any] = {
             "title": title if title is not None else metadata.title,
@@ -353,16 +382,45 @@ class UserDocumentsService:
             user_roles=user_roles,
             user_document_patch=UserDocumentPatch(
                 document_metadata=ZavUserDocumentMetadata(**metadata_kwargs),
+                **(
+                    {"base64_content": base64.b64encode(content).decode("ascii")}
+                    if content is not None
+                    else {}
+                ),
+                **(
+                    {"content_file_name": content_file_name}
+                    if content_file_name is not None
+                    else {}
+                ),
             ),
             **params,
         )
+
+    @handle_api_errors
+    async def retrieve_document_content(self, document_id: str) -> bytes:
+        existing = await self.retrieve_document(document_id)
+        params = {
+            **({"index_id": self.__index_id} if self.__index_id else {}),
+        }
+        # The generated client declares a JSON model for this endpoint, but it
+        # streams the original file bytes; read the raw response instead.
+        response = await asyncify(self.__user_documents.retrieve_user_document_content)(
+            document_id=existing.id,
+            tenant=self.__tenant,
+            user_tenants=self.__user_tenants(self.__tenant),
+            requester_uuid=self.__request_headers.requester_uuid or "",
+            user_roles=self.__user_roles_from_request_headers(),
+            _preload_content=False,
+            **params,
+        )
+        return response.data
 
     @handle_api_errors
     async def delete_document(
         self,
         document_id: str,
     ) -> None:
-        existing = await self.__retrieve_document(document_id)
+        existing = await self.retrieve_document(document_id)
         user_tenants = self.__user_tenants(self.__tenant)
         user_roles = self.__user_roles_from_request_headers()
         requester_uuid = self.__request_headers.requester_uuid or ""
@@ -383,6 +441,42 @@ def _api_config(host: str, retries: Optional[int] = None) -> Configuration:
     config = Configuration(host=host)
     config.retries = retries  # type: ignore
     return config
+
+
+MAX_NUMBERED_TITLES = 20
+
+
+def _numbered(
+    document: UserDocumentCreateRequest, number: int
+) -> UserDocumentCreateRequest:
+    file_name = document.content_file_name
+    if file_name:
+        stem, extension = os.path.splitext(file_name)
+        file_name = f"{stem} ({number}){extension}"
+    metadata = document.document_metadata.copy(
+        update={"title": f"{document.document_metadata.title} ({number})"}
+    )
+    return document.copy(
+        update={"document_metadata": metadata, "content_file_name": file_name}
+    )
+
+
+async def create_new_document(
+    service: UserDocumentsService, document: UserDocumentCreateRequest
+) -> UserDocument:
+    """Saves under "<title> (2)", "(3)"... when the owner already has a document with
+    the same title, as a file manager does with a name that is taken."""
+    for number in range(1, MAX_NUMBERED_TITLES + 1):
+        try:
+            return await service.create_document(
+                document if number == 1 else _numbered(document, number)
+            )
+        except UserDocumentAlreadyExists:
+            continue
+    raise UnknownException(
+        f"Documents titled {document.document_metadata.title} up to "
+        f"({MAX_NUMBERED_TITLES}) exist already."
+    )
 
 
 class UserDocumentsServiceFactory(AgentDependencyFactory):

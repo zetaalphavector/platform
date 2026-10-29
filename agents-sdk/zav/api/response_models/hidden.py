@@ -30,7 +30,8 @@ def prune_hidden_fields(schema: dict, _model: Type[BaseModel]) -> None:
         else:
             hidden_fields.add(k)
     if extra_required:
-        schema["required"] = schema.get("required", []) + list(extra_required)
+        # We added a sort so the spec gen is deterministic
+        schema["required"] = schema.get("required", []) + sorted(extra_required)
     required = schema.get("required")
     if required and hidden_fields:
         schema["required"] = [r for r in required if r not in hidden_fields]

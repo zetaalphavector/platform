@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, ClassVar, Tuple
+from typing import AsyncGenerator, ClassVar, Optional, Tuple
 
 from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import ChatResponse
 from zav.agents_sdk.domain.agent_dependency import DependencyGroup
@@ -18,6 +18,10 @@ class MessageProcessor(ABC):
     """
 
     source_name: ClassVar[str]
+    # One line for admins choosing sources, e.g. in the agent editor.
+    source_description: ClassVar[Optional[str]] = None
+    # The tenant gate that hides this source until a tenant enables it.
+    source_gate: ClassVar[Optional[str]] = None
     enabled: bool
 
     @abstractmethod

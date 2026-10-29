@@ -1,6 +1,7 @@
 from zav.agents_sdk.adapters.instructions.instruction_source import (
     InstructionSource,
     InstructionSourceGroup,
+    WritableInstructionSource,
 )
 from zav.agents_sdk.adapters.instructions.instructions_provider import (
     InstructionsProvider,
@@ -78,6 +79,7 @@ __all__ = [
     "InMemoryInstructionSourceFactory",
     "InstructionSource",
     "InstructionSourceGroup",
+    "WritableInstructionSource",
     "InstructionsProvider",
     "InstructionsProviderConfiguration",
     "InstructionsProviderFactory",

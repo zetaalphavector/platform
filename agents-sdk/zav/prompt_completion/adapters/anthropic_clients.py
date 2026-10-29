@@ -1,20 +1,22 @@
 import asyncio
 import json
 import re
+from copy import deepcopy
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, overload
 
 import anthropic
-from anthropic.types import Message as AnthropicMessage
 from typing_extensions import Literal
 from zav.llm_domain import (
     AnthropicConfiguration,
     LLMModelConfiguration,
     LLMModelType,
     LLMProviderName,
+    ToolSearchMode,
 )
 from zav.llm_tracing import Span
 from zav.pydantic_compat import BaseModel
 
+from zav.prompt_completion.adapters.errors import generate_rate_limit_error
 from zav.prompt_completion.adapters.tracing import create_span, end_span
 from zav.prompt_completion.client import (
     BotConversation,
@@ -29,12 +31,21 @@ from zav.prompt_completion.client import (
     PromptResponse,
     PromptTooLargeError,
     ToolCallRequest,
-    ToolCallResponse,
 )
 from zav.prompt_completion.client_factories import (
     ChatClientFactory,
     PromptClientFactory,
 )
+from zav.prompt_completion.tool_search import (
+    found_tool_names,
+    is_deferred,
+    search_call_ids,
+)
+
+TOOL_SEARCH_TOOL = {
+    "type": "tool_search_tool_bm25_20251119",
+    "name": "tool_search_tool_bm25",
+}
 
 
 class AnthropicToolUse(BaseModel):
@@ -68,39 +79,40 @@ def build_client(vendor_configuration: AnthropicConfiguration):
         )
     else:
         return anthropic.AsyncAnthropic(
-            api_key=vendor_configuration.anthropic_api_key.get_unencrypted_secret(),
+            api_key=(
+                vendor_configuration.anthropic_api_key.get_unencrypted_secret()
+                if vendor_configuration.anthropic_api_key is not None
+                else None
+            ),
             base_url=vendor_configuration.anthropic_api_base,
         )
 
 
-def __map_properties_to_input_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Make the tools schems compatible with Anthropic supported json schema."""
-    if "properties" in schema:
-        schema["input_schema"] = schema.pop("properties")
-        for prop in schema["input_schema"].values():
-            if isinstance(prop, dict):
-                __map_properties_to_input_schema(prop)
-    return schema
+def _anthropic_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
+    function = tool["function"]
+    return {
+        "name": function["name"],
+        "description": function.get("description", ""),
+        "input_schema": function.get("parameters")
+        or {"type": "object", "properties": {}},
+    }
 
 
 def _get_tools_dict(request: ChatClientRequest) -> Dict[str, Any]:
     tools_dict: Dict[str, Any] = {}
     if tools := request.get("tools"):
+        method = request.get("tool_search_method")
         anthropic_tools = []
         for tool in tools:
-            if tool.get("type") == "function":
-                function_data = tool["function"]
-                parameters = function_data.get("parameters", {})
-
-                parameters = __map_properties_to_input_schema(parameters)
-                anthropic_tool = {
-                    "name": function_data["name"],
-                    "description": function_data.get("description", ""),
-                    "input_schema": parameters,
-                }
-                anthropic_tools.append(anthropic_tool)
-            else:
+            if tool.get("type") != "function":
                 anthropic_tools.append(tool)
+                continue
+            anthropic_tool = _anthropic_tool(tool)
+            if method and is_deferred(tool):
+                anthropic_tool["defer_loading"] = True
+            anthropic_tools.append(anthropic_tool)
+        if method == ToolSearchMode.SERVER:
+            anthropic_tools.append(TOOL_SEARCH_TOOL)
         tools_dict["tools"] = anthropic_tools
 
     if tool_choice := request.get("tool_choice"):
@@ -116,6 +128,53 @@ def _get_tools_dict(request: ChatClientRequest) -> Dict[str, Any]:
         else:
             tools_dict["tool_choice"] = tool_choice
     return tools_dict
+
+
+def _replays_anthropic_messages(message: ChatMessage) -> bool:
+    # Responses API replay items carry a `type`; Anthropic messages do not, so a
+    # conversation that switched vendors falls back to the message fields.
+    return bool(message.response_replay_items) and all(
+        "role" in item and "type" not in item
+        for item in message.response_replay_items or []
+    )
+
+
+def _block_dict(block: Any) -> Dict[str, Any]:
+    return block.model_dump(mode="json", exclude_none=True)
+
+
+def _usage_details(usage: Any) -> Dict[str, int]:
+    # Langfuse's usage buckets; Anthropic's input_tokens already leaves out the
+    # cached ones.
+    return {
+        "input": usage.input_tokens or 0,
+        "output": usage.output_tokens or 0,
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None) or 0,
+        "cache_creation_input_tokens": getattr(
+            usage, "cache_creation_input_tokens", None
+        )
+        or 0,
+    }
+
+
+def _usage(details: Dict[str, int]) -> Dict[str, Any]:
+    # Langfuse v2 servers read `usage`, v3 servers `usage_details`, which keeps
+    # the cache buckets apart.
+    input_tokens = (
+        details.get("input", 0)
+        + details.get("cache_read_input_tokens", 0)
+        + details.get("cache_creation_input_tokens", 0)
+    )
+    output_tokens = details.get("output", 0)
+    return {
+        "usage": {
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": input_tokens + output_tokens,
+            "unit": "TOKENS",
+        },
+        "usage_details": details,
+    }
 
 
 @ChatClientFactory.register(LLMProviderName.ANTHROPIC, LLMModelType.CHAT)
@@ -150,10 +209,20 @@ class AnthropicChatClient(ChatCompletionClient):
     def __messages_from(
         self,
         conversation: BotConversation,
+        tool_search_method: Optional[ToolSearchMode] = None,
     ) -> Tuple[List[Any], Optional[str]]:
         messages: List[Any] = []
         system_prompt: Optional[str] = conversation.bot_setup_description
+        # Our answers to the model's searches load the found tools by reference.
+        searches = (
+            search_call_ids(conversation)
+            if tool_search_method == ToolSearchMode.CLIENT
+            else set()
+        )
         for message in conversation.messages:
+            if _replays_anthropic_messages(message):
+                messages.extend(deepcopy(message.response_replay_items or []))
+                continue
             content: List[Dict[str, Any]] = []
             if message.content_parts:
                 for part in message.content_parts:
@@ -226,7 +295,17 @@ class AnthropicChatClient(ChatCompletionClient):
                         {
                             "type": "tool_result",
                             "tool_use_id": tool_call_response.id,
-                            "content": tool_call_response.tool_response or "",
+                            "content": (
+                                [
+                                    {"type": "tool_reference", "tool_name": name}
+                                    for name in found_tool_names(
+                                        tool_call_response.tool_response
+                                    )
+                                ]
+                                or tool_call_response.tool_response
+                                if tool_call_response.id in searches
+                                else tool_call_response.tool_response or ""
+                            ),
                         }
                     )
                 content.extend(tool_results)
@@ -252,42 +331,34 @@ class AnthropicChatClient(ChatCompletionClient):
 
         return messages, system_prompt
 
-    def __chat_message_from(self, response: AnthropicMessage) -> ChatMessage:
+    @staticmethod
+    def __chat_message_from(blocks: List[Dict[str, Any]]) -> ChatMessage:
+        """The response as a chat message. A vendor search replays verbatim so
+        later requests keep the tools it loaded."""
         message = ChatMessage(
-            content="",
-            sender=self.__ROLE_TO_SENDER[response.role],
+            content="".join(
+                block.get("text", "") for block in blocks if block.get("type") == "text"
+            ),
+            sender=ChatMessageSender.BOT,
         )
-
-        tool_call_requests: List[ToolCallRequest] = []
-        tool_call_responses: List[ToolCallResponse] = []
-        for block in response.content:
-            if block.type == "text":
-                message.content += block.text
-            elif block.type == "tool_use":
-                message.sender = ChatMessageSender.BOT
-                tool_call_requests.append(
-                    ToolCallRequest(
-                        id=block.id,
-                        function_call_request=FunctionCallRequest(
-                            function_name=block.name,
-                            function_params=block.input,  # type: ignore
-                        ),
-                    )
-                )
-            elif block.type == "tool_result":
-                message.sender = ChatMessageSender.BOT
-                tool_call_responses.append(
-                    ToolCallResponse(
-                        id=block.tool_use_id,  # type: ignore
-                        tool_response=block.content,  # type: ignore
-                    )
-                )
-
+        tool_call_requests = [
+            ToolCallRequest(
+                id=block["id"],
+                function_call_request=FunctionCallRequest(
+                    function_name=block["name"],
+                    function_params=block.get("input") or {},
+                ),
+            )
+            for block in blocks
+            if block.get("type") == "tool_use"
+        ]
         if tool_call_requests:
             message.tool_call_requests = tool_call_requests
-        if tool_call_responses:
-            message.tool_call_responses = tool_call_responses
-
+        if any(
+            block.get("type") in ("server_tool_use", "tool_search_tool_result")
+            for block in blocks
+        ):
+            message.response_replay_items = [{"role": "assistant", "content": blocks}]
         return message
 
     @overload
@@ -313,7 +384,9 @@ class AnthropicChatClient(ChatCompletionClient):
         stream: Union[Literal[True, False], bool] = False,
     ) -> Union[AsyncIterator[ChatResponse], ChatResponse]:
         try:
-            messages, system_prompt = self.__messages_from(request["conversation"])
+            messages, system_prompt = self.__messages_from(
+                request["conversation"], request.get("tool_search_method")
+            )
         except ValueError as e:
             if stream:
 
@@ -324,6 +397,7 @@ class AnthropicChatClient(ChatCompletionClient):
             return ChatResponse(error=e, chat_message=None)
 
         tools_dict = _get_tools_dict(request)
+        tool_search_method = request.get("tool_search_method")
         max_tokens = request.get("max_tokens") or self.__max_tokens or 32000
         generation_span = create_span(
             messages=messages,
@@ -333,6 +407,7 @@ class AnthropicChatClient(ChatCompletionClient):
             max_tokens=max_tokens,
             stream=stream,
             tools_dict=tools_dict,
+            tool_search=tool_search_method.value if tool_search_method else None,
         )
 
         call_kwargs = {
@@ -346,154 +421,111 @@ class AnthropicChatClient(ChatCompletionClient):
             **tools_dict,
         }
 
+        if stream:
+            return self.__stream(call_kwargs, generation_span)
+
         try:
             response = await self.__client.messages.create(**call_kwargs)
-        except anthropic.BadRequestError as e:
-            if generation_span:
-                generation_span.end(
-                    attributes={"level": "ERROR", "status_message": e.message}
-                )
-            err: Exception = e
-            if "exceed context limit" in e.message:
-                extra_tokens = None
-                if m := re.search(
-                    r"exceed context limit: (\d+) \+ (\d+) > (\d+)", e.message
-                ):
-                    input_tokens = int(m.group(1))
-                    max_tokens = int(m.group(2))
-                    context_limit = int(m.group(3))
-                    extra_tokens = (input_tokens + max_tokens) - context_limit
-                err = PromptTooLargeError(e.message, extra_tokens=extra_tokens)
-            if stream:
-
-                async def error_items():
-                    yield ChatResponse(error=err, chat_message=None)
-
-                return error_items()
-            return ChatResponse(error=err, chat_message=None)
         except Exception as error:
-            err = error
-            if generation_span:
-                generation_span.end(
-                    attributes={"level": "ERROR", "status_message": str(err)}
-                )
-            if stream:
-
-                async def error_items():
-                    yield ChatResponse(error=err, chat_message=None)
-
-                return error_items()
-            return ChatResponse(error=err, chat_message=None)
-
-        if not stream:
-            end_span(
-                usage=(
-                    {
-                        "usage": {
-                            "input": response.usage.input_tokens,
-                            "output": response.usage.output_tokens,
-                            "total": response.usage.input_tokens
-                            + response.usage.output_tokens,
-                            "unit": "TOKENS",
-                        }
-                    }
-                    if getattr(response, "usage", None)
-                    else {}
-                ),
-                span=generation_span,
-                content=(
-                    response.content[0].text
-                    if response.content and hasattr(response.content[0], "text")
-                    else None
-                ),
-                role=response.role,
+            return ChatResponse(
+                error=self.__failure(error, generation_span), chat_message=None
             )
-            chat_message = self.__chat_message_from(response)
-            return ChatResponse(error=None, chat_message=chat_message)
+        blocks = [_block_dict(block) for block in response.content]
 
-        # Streaming response: yield partial ChatResponse items and tool call requests
-        async def stream_response(
-            completion: AsyncIterator[Any],
-        ) -> AsyncIterator[ChatResponse]:
-            partial = ChatMessage(content="", sender=ChatMessageSender.BOT)
-            in_tool_block = False
-            tool_id: Optional[str] = None
-            tool_name: Optional[str] = None
-            tool_json = ""
-            pending_tool_calls: List[ToolCallRequest] = []
-            async for chunk in completion:
-                # Tool use start: record id and name
-                if (
-                    getattr(chunk, "type", None) == "content_block_start"
-                    and hasattr(chunk, "content_block")
-                    and getattr(chunk.content_block, "type", None) == "tool_use"
-                ):
-                    in_tool_block = True
-                    tool_id = chunk.content_block.id  # type: ignore
-                    tool_name = chunk.content_block.name  # type: ignore
-                    tool_json = ""
-                    continue
-                # Accumulate tool input JSON
-                if (
-                    in_tool_block
-                    and getattr(chunk, "type", None) == "content_block_delta"
-                    and hasattr(chunk.delta, "partial_json")
-                ):
-                    tool_json += chunk.delta.partial_json  # type: ignore
-                    continue
-                # End of tool use block: accumulate the tool call request
-                if (
-                    in_tool_block
-                    and getattr(chunk, "type", None) == "content_block_stop"
-                ):
-                    in_tool_block = False
-                    try:
-                        params = json.loads(tool_json)
-                    except Exception:
-                        params = {}
-                    pending_tool_calls.append(
-                        ToolCallRequest(
-                            id=tool_id or "",
-                            function_call_request=FunctionCallRequest(
-                                function_name=tool_name or "",
-                                function_params=params,
-                            ),
-                        )
-                    )
-                    continue
-                # Text delta events: accumulate and stream content
-                if getattr(chunk, "type", None) == "content_block_delta" and getattr(
-                    chunk.delta, "text", None
-                ):
-                    partial.content += chunk.delta.text  # type: ignore
+        end_span(
+            usage=(
+                _usage(_usage_details(response.usage))
+                if getattr(response, "usage", None)
+                else {}
+            ),
+            span=generation_span,
+            content=(
+                response.content[0].text
+                if response.content and hasattr(response.content[0], "text")
+                else None
+            ),
+            role=response.role,
+        )
+        return ChatResponse(error=None, chat_message=self.__chat_message_from(blocks))
+
+    @staticmethod
+    def __failure(error: Exception, span: Optional[Span]) -> Exception:
+        if isinstance(error, anthropic.BadRequestError):
+            if span:
+                span.end(attributes={"level": "ERROR", "status_message": error.message})
+            if "exceed context limit" not in error.message:
+                return error
+            extra_tokens = None
+            if m := re.search(
+                r"exceed context limit: (\d+) \+ (\d+) > (\d+)", error.message
+            ):
+                input_tokens = int(m.group(1))
+                max_tokens = int(m.group(2))
+                context_limit = int(m.group(3))
+                extra_tokens = (input_tokens + max_tokens) - context_limit
+            return PromptTooLargeError(error.message, extra_tokens=extra_tokens)
+        err: Exception = (
+            generate_rate_limit_error(error.message, error.response.headers)
+            if isinstance(error, anthropic.RateLimitError)
+            else error
+        )
+        if span:
+            span.end(attributes={"level": "ERROR", "status_message": str(err)})
+        return err
+
+    async def __stream(
+        self, call_kwargs: Dict[str, Any], span: Optional[Span]
+    ) -> AsyncIterator[ChatResponse]:
+        try:
+            completion = await self.__client.messages.create(**call_kwargs)
+        except Exception as error:
+            yield ChatResponse(error=self.__failure(error, span), chat_message=None)
+            return
+        blocks: Dict[int, Dict[str, Any]] = {}
+        partial_json: Dict[int, str] = {}
+        text = ""
+        usage: Dict[str, int] = {}
+        async for chunk in completion:
+            chunk_type = getattr(chunk, "type", None)
+            if chunk_type == "message_start":
+                usage = _usage_details(chunk.message.usage)
+            elif chunk_type == "message_delta":
+                usage["output"] = chunk.usage.output_tokens
+            elif chunk_type == "content_block_start":
+                blocks[chunk.index] = _block_dict(chunk.content_block)
+                if blocks[chunk.index]["type"] in ("tool_use", "server_tool_use"):
+                    partial_json[chunk.index] = ""
+            elif chunk_type == "content_block_delta":
+                delta_type = getattr(chunk.delta, "type", None)
+                if delta_type == "input_json_delta":
+                    partial_json[chunk.index] += chunk.delta.partial_json
+                elif delta_type == "text_delta":
+                    blocks[chunk.index]["text"] += chunk.delta.text
+                    text += chunk.delta.text
                     yield ChatResponse(
                         error=None,
                         chat_message=ChatMessage(
-                            content=partial.content,
-                            sender=ChatMessageSender.BOT,
+                            content=text, sender=ChatMessageSender.BOT
                         ),
                     )
-
-            # After the stream ends, emit all accumulated tool calls in one
-            # ChatResponse so the consumer can execute them together.
-            if pending_tool_calls:
-                yield ChatResponse(
-                    error=None,
-                    chat_message=ChatMessage(
-                        content=partial.content,
-                        sender=ChatMessageSender.BOT,
-                        tool_call_requests=pending_tool_calls,
-                    ),
-                )
-
-            end_span(
-                usage={},
-                span=generation_span,
-                content=partial.content,
-                role=partial.sender.value,
-            )
-
-        return stream_response(response)
+            elif chunk_type == "content_block_stop" and chunk.index in partial_json:
+                try:
+                    blocks[chunk.index]["input"] = json.loads(
+                        partial_json[chunk.index] or "{}"
+                    )
+                except json.JSONDecodeError:
+                    blocks[chunk.index]["input"] = {}
+        message = self.__chat_message_from([blocks[index] for index in sorted(blocks)])
+        # The calls and the replay arrive together once the stream ends, so the
+        # consumer can execute them together.
+        if message.tool_call_requests or message.response_replay_items:
+            yield ChatResponse(error=None, chat_message=message)
+        end_span(
+            usage=_usage(usage) if usage else {},
+            span=span,
+            content=message.content,
+            role=message.sender.value,
+        )
 
     @classmethod
     def from_configuration(

@@ -106,6 +106,7 @@ class DocumentListHit(ModelNormal):
             'image_urls': ([str],),  # noqa: E501
             'content_source_id': (str,),  # noqa: E501
             'content_ingestion_job_id': (str,),  # noqa: E501
+            'confidentiality_level': (str,),  # noqa: E501
             'document_content': (DocumentContentList,),  # noqa: E501
             'document_id': (str,),  # noqa: E501
             'custom_metadata': ({str: (bool, date, datetime, dict, float, int, list, str, none_type)},),  # noqa: E501
@@ -140,6 +141,7 @@ class DocumentListHit(ModelNormal):
         'image_urls': 'image_urls',  # noqa: E501
         'content_source_id': 'content_source_id',  # noqa: E501
         'content_ingestion_job_id': 'content_ingestion_job_id',  # noqa: E501
+        'confidentiality_level': 'confidentiality_level',  # noqa: E501
         'document_content': 'document_content',  # noqa: E501
         'document_id': 'document_id',  # noqa: E501
         'custom_metadata': 'custom_metadata',  # noqa: E501
@@ -211,6 +213,7 @@ class DocumentListHit(ModelNormal):
             image_urls ([str]): [optional]  # noqa: E501
             content_source_id (str): [optional]  # noqa: E501
             content_ingestion_job_id (str): [optional]  # noqa: E501
+            confidentiality_level (str): [optional]  # noqa: E501
             document_content (DocumentContentList): [optional]  # noqa: E501
             document_id (str): [optional]  # noqa: E501
             custom_metadata ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501
@@ -323,6 +326,7 @@ class DocumentListHit(ModelNormal):
             image_urls ([str]): [optional]  # noqa: E501
             content_source_id (str): [optional]  # noqa: E501
             content_ingestion_job_id (str): [optional]  # noqa: E501
+            confidentiality_level (str): [optional]  # noqa: E501
             document_content (DocumentContentList): [optional]  # noqa: E501
             document_id (str): [optional]  # noqa: E501
             custom_metadata ({str: (bool, date, datetime, dict, float, int, list, str, none_type)}): [optional]  # noqa: E501

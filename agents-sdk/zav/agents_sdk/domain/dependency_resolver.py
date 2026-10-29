@@ -18,16 +18,24 @@ from typing import (
 from zav.llm_tracing import Span
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, _BaseModel
 
-from zav.agents_sdk.domain.agent_creator import AgentCreator
+from zav.agents_sdk.domain.agent_creator import (
+    AgentCreator,
+    SubAgentApprovals,
+    SubAgentCount,
+)
 from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyRegistryProtocol,
     DependencyGroup,
 )
+from zav.agents_sdk.domain.agent_position import AgentPosition
 from zav.agents_sdk.domain.agent_setup_retriever import merge_dicts
 from zav.agents_sdk.domain.chat_agent import ChatAgent
 from zav.agents_sdk.domain.chat_request import ConversationContext
 from zav.agents_sdk.domain.llm_client_factory import LLMClientFactory
 from zav.agents_sdk.domain.llm_configuration_store import LLMConfigurationStore
+from zav.agents_sdk.domain.secret_refs import resolve_setup_secret_refs
+from zav.agents_sdk.domain.secret_store import SecretStore
+from zav.agents_sdk.domain.turn_inbox import TurnInbox
 from zav.agents_sdk.domain.utils import (
     check_is_base_model,
     check_is_class,
@@ -65,12 +73,13 @@ class _ResolutionContext:
 
     configuration: Dict[str, Any]
     handler_params: Dict[str, Any]
-    default_agent_identifier: str
+    agent_position: AgentPosition
     conversation_context: Optional[ConversationContext]
     span: Optional[Span]
     sub_agent_mapping: Optional[Dict[str, str]]
     llm_client_factory: Optional[LLMClientFactory]
     track_resumable: bool
+    secret_store: Optional[SecretStore] = None
     resolution_cache: Dict[type, Any] = field(default_factory=dict)
 
 
@@ -87,11 +96,15 @@ class DependencyResolver:
         agent_creation: Optional[AgentCreation] = None,
         on_dependency_resolved: Optional[DependencyResolvedHook] = None,
         llm_configuration_store: Optional[LLMConfigurationStore] = None,
+        secret_store: Optional[SecretStore] = None,
+        turn_inbox: Optional[TurnInbox] = None,
     ):
         self.__dependency_registry = dependency_registry
         self.__agent_creation = agent_creation
         self.__on_dependency_resolved = on_dependency_resolved
         self.__llm_configuration_store = llm_configuration_store
+        self.__secret_store = secret_store
+        self.__turn_inbox = turn_inbox
 
     def __llm_client_factory(
         self,
@@ -103,6 +116,25 @@ class DependencyResolver:
             default_llm_configuration_name=default_llm_configuration_name,
             allowed_llm_configuration_names=allowed_llm_configuration_names,
         )
+
+    @staticmethod
+    def __with_sub_agent_count(handler_params: Dict[str, Any]) -> Dict[str, Any]:
+        # Only the root of a turn's agent tree lacks a count. Every agent it
+        # starts inherits this instance through __child_handler_params.
+        if "sub_agent_count" in handler_params:
+            return handler_params
+        return {**handler_params, "sub_agent_count": SubAgentCount()}
+
+    @staticmethod
+    def __child_handler_params(
+        handler_params: Dict[str, Any],
+        bot_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            **handler_params,
+            **sanitize_bot_params(bot_params),
+            "agent_depth": handler_params.get("agent_depth", 0) + 1,
+        }
 
     async def resolve(
         self,
@@ -121,8 +153,8 @@ class DependencyResolver:
         the given configuration blocks."""
         context = _ResolutionContext(
             configuration=configuration,
-            handler_params=handler_params,
-            default_agent_identifier=key_prefix,
+            handler_params=self.__with_sub_agent_count(handler_params),
+            agent_position=AgentPosition(agent_identifier=key_prefix),
             conversation_context=conversation_context,
             span=span,
             sub_agent_mapping=sub_agent_mapping,
@@ -130,6 +162,7 @@ class DependencyResolver:
                 default_llm_configuration_name, allowed_llm_configuration_names
             ),
             track_resumable=track_resumable,
+            secret_store=self.__secret_store,
         )
         param = inspect.Parameter(
             "__resolved_target",
@@ -160,8 +193,8 @@ class DependencyResolver:
         walk (singletons resolve once across all params)."""
         context = _ResolutionContext(
             configuration=configuration,
-            handler_params=handler_params,
-            default_agent_identifier=key_prefix,
+            handler_params=self.__with_sub_agent_count(handler_params),
+            agent_position=AgentPosition(agent_identifier=key_prefix),
             conversation_context=conversation_context,
             span=span,
             sub_agent_mapping=sub_agent_mapping,
@@ -169,6 +202,7 @@ class DependencyResolver:
                 default_llm_configuration_name, allowed_llm_configuration_names
             ),
             track_resumable=track_resumable,
+            secret_store=self.__secret_store,
         )
         return {
             param_name: await self.__resolve_param(
@@ -184,12 +218,14 @@ class DependencyResolver:
         self, context: _ResolutionContext, span: Optional[Span]
     ) -> AgentCreator:
         agent_creation = self.__agent_creation
+        child_handler_params = self.__child_handler_params
 
         async def agent_factory(
             factory_agent_identifier: str,
             bot_params: Dict[str, Any],
             factory_conversation_context: Optional[ConversationContext] = None,
             extra_agent_kwargs: Optional[Dict[str, Any]] = None,
+            sub_agent_approvals: SubAgentApprovals = "ask",
         ):
             if agent_creation is None:
                 raise ValueError("Agent creation is not available for this resolution.")
@@ -204,8 +240,8 @@ class DependencyResolver:
             return await agent_creation.create_agent(
                 agent_identifier=factory_agent_identifier,
                 handler_params={
-                    **context.handler_params,
-                    **sanitize_bot_params(bot_params),
+                    **child_handler_params(context.handler_params, bot_params),
+                    "sub_agent_approvals": sub_agent_approvals,
                 },
                 conversation_context=factory_conversation_context,
                 parent_span=span,
@@ -215,7 +251,7 @@ class DependencyResolver:
 
         return AgentCreator(
             agent_factory=agent_factory,
-            default_agent_identifier=context.default_agent_identifier,
+            default_agent_identifier=context.agent_position.agent_identifier,
         )
 
     async def __resolve_sub_agent(
@@ -231,7 +267,7 @@ class DependencyResolver:
                 raise ValueError("Agent creation is not available for this resolution.")
             return await self.__agent_creation.create_agent(
                 agent_identifier=sub_agent_identifier,
-                handler_params=context.handler_params,
+                handler_params=self.__child_handler_params(context.handler_params),
                 conversation_context=context.conversation_context,
                 parent_span=context.span,
                 track_resumable=context.track_resumable,
@@ -302,23 +338,26 @@ class DependencyResolver:
             # Try to parse the value as a Pydantic model
             if isinstance(param_value, dict):
                 if PYDANTIC_V2:
-                    return param_annotation.model_validate(param_value)
+                    model = param_annotation.model_validate(param_value)
                 else:
-                    return param_annotation.parse_obj(param_value)
+                    model = param_annotation.parse_obj(param_value)
             elif isinstance(param_value, str):
                 if PYDANTIC_V2:
-                    return param_annotation.model_validate_json(param_value)
+                    model = param_annotation.model_validate_json(param_value)
                 else:
-                    return param_annotation.parse_raw(param_value)
+                    model = param_annotation.parse_raw(param_value)
             elif isinstance(param_value, _BaseModel):
                 if PYDANTIC_V2:
-                    return param_annotation.model_validate(param_value)
+                    model = param_annotation.model_validate(param_value)
                 else:
-                    return param_annotation.from_orm(param_value)
+                    model = param_annotation.from_orm(param_value)
             else:
                 raise ValueError(
                     f"Unsupported type for {param_name}: {type(param_value)}"
                 )
+            return resolve_setup_secret_refs(
+                model, configuration.get(param_name), context.secret_store
+            )
         else:
             # We assume this is a value that can be directly passed
             return param_value
@@ -422,6 +461,8 @@ class DependencyResolver:
         )
         if is_conversation_context:
             return context.conversation_context
+        if is_class and issubclass(param_annotation, AgentPosition):
+            return context.agent_position
         # Parse sub agent
         is_chat_agent = is_class and issubclass(param_annotation, ChatAgent)
         if is_chat_agent:
@@ -443,6 +484,11 @@ class DependencyResolver:
         )
         if is_llm_client_factory:
             return context.llm_client_factory
+
+        # The interactive turn's inbox is one per turn, shared by the root
+        # agent and its sub-agents.
+        if is_class and issubclass(param_annotation, TurnInbox):
+            return self.__turn_inbox
 
         is_span = is_class and issubclass(param_annotation, Span)
         if is_span:

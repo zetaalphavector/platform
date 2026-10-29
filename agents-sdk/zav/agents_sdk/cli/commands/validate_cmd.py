@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -8,6 +8,7 @@ from typing_extensions import Annotated
 from zav.agents_sdk.cli.project_config import (
     CONFIG_FILE,
     INSTRUCTIONS_DIR,
+    SECRETS_FILE,
     SKILLS_DIR,
     SPECS_DIR,
     ProjectConfig,
@@ -18,6 +19,29 @@ from zav.agents_sdk.cli.source_aliases import (
 )
 
 console = Console()
+
+
+def _credential_refs(vendor_config: Dict[str, Any]) -> List[str]:
+    refs: List[str] = []
+    for key, value in vendor_config.items():
+        if key.endswith("_ref") and isinstance(value, str) and value:
+            refs.append(value)
+        elif isinstance(value, dict):
+            refs.extend(_credential_refs(value))
+    return refs
+
+
+def _has_legacy_key(
+    config: ProjectConfig, identifier: str, vendor: Optional[str]
+) -> bool:
+    vendor_config = config.get_vendor_config(vendor, identifier) if vendor else {}
+    for key, value in vendor_config.items():
+        if isinstance(value, dict):
+            if any("key" in k.lower() and v for k, v in value.items()):
+                return True
+        elif "key" in key.lower() and value:
+            return True
+    return False
 
 
 def run_validation(project_dir: str, agent: Optional[str] = None) -> Tuple[int, int]:
@@ -72,25 +96,26 @@ def run_validation(project_dir: str, agent: Optional[str] = None) -> Tuple[int, 
         errors += 1
 
     identifier = agent_setup.get("agent_identifier", "")
-    secret = config.get_secret(identifier)
-    if secret:
-        vendor_cfg = secret.get("llm_client_configuration", {}).get(
-            "vendor_configuration", {}
-        )
-        has_key = False
-        for v_cfg in vendor_cfg.values():
-            if isinstance(v_cfg, dict):
-                for k, v in v_cfg.items():
-                    if "key" in k.lower() and v:
-                        has_key = True
-                        break
-        if has_key:
-            console.print("  [green]✅ API key configured in env/[/]")
-        else:
-            console.print("  [yellow]⚠️  No API key found in env/agent_setups.json[/]")
+    refs = _credential_refs(
+        config.get_vendor_config(vendor, identifier) if vendor else {}
+    )
+    legacy_key = _has_legacy_key(config, identifier, vendor)
+    if refs:
+        missing = [ref for ref in refs if ref not in config.secret_names()]
+        if missing:
+            console.print(
+                f"  [yellow]⚠️  Secrets {', '.join(missing)} are referenced but not in "
+                f"{SECRETS_FILE}[/]"
+            )
             warnings += 1
-    else:
-        console.print("  [yellow]⚠️  No secret configuration found for agent[/]")
+        else:
+            console.print(f"  [green]✅ Credentials resolve from {SECRETS_FILE}[/]")
+    elif legacy_key:
+        console.print("  [green]✅ API key configured in env/[/]")
+    elif vendor and vendor not in ("ollama",):
+        console.print(
+            "  [yellow]⚠️  No credentials configured. Run 'model configure'.[/]"
+        )
         warnings += 1
 
     skills_dir = os.path.join(project_dir, SKILLS_DIR)

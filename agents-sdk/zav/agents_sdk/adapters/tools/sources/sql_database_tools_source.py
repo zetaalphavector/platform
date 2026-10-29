@@ -11,7 +11,10 @@ from sqlalchemy.sql.selectable import Subquery
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field, model_validator
 
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool
 
@@ -131,7 +134,7 @@ class QueryPlan(BaseModel):
         return self
 
 
-class SQLDatabaseToolsSourceConfiguration(BaseModel):
+class SQLDatabaseToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = Field(False, description="Enable SQL database tools source.")
     connection_string: str = ""
     allowed_tables: Optional[List[str]] = None
@@ -155,12 +158,14 @@ def _create_sql_engine(config: SQLDatabaseToolsSourceConfiguration) -> Engine:
 
 class SQLDatabaseToolsSource(ToolsSource):
     source_name = "sql_database_tools"
+    source_description = "Query a connected SQL database."
 
     def __init__(
         self,
         config: SQLDatabaseToolsSourceConfiguration,
         engine: Optional[Engine] = None,
     ):
+        self.defer_tools = config.defer_tools
         self.enabled = config.enabled and bool(config.connection_string)
         self.__config = config
         self.__engine = engine

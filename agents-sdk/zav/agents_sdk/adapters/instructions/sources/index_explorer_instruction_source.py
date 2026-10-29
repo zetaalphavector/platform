@@ -150,6 +150,7 @@ class IndexExplorerInstructionSourceConfiguration(BaseModel):
 class IndexExplorerInstructionSource(InstructionSource):
 
     source_name = "index_explorer"
+    source_description = "Guidance for exploring an index."
 
     def __init__(
         self,

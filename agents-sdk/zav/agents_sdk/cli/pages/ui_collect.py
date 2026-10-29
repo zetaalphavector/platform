@@ -1,12 +1,7 @@
-import asyncio
-from collections import defaultdict
-from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import pandas as pd
 import streamlit as st
-from zav.object_storage_repo import ObjectStorageItem
-from zav.pydantic_compat import PYDANTIC_V2
 
 from zav.agents_sdk import ChatMessage, ChatMessageSender
 from zav.agents_sdk.cli.models import (
@@ -19,12 +14,15 @@ from zav.agents_sdk.cli.models import (
 )
 from zav.agents_sdk.cli.ui_app import (
     agent_setup_retriever,
+    get_eval_file_names,
     message_bus,
-    object_storage_repo,
+    new_eval_file_name,
     render_chat_configuration_item,
     render_entry,
+    retrieve_eval_file_content,
     start_new_conversation,
     storage_path,
+    store_eval_file_content,
     store_trace_file_content,
 )
 
@@ -43,81 +41,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-
-def new_eval_file_name():
-    time_now = str(datetime.now().isoformat())
-    eval_file_name = f"{storage_path}/agent-evals/{time_now}_eval.json"
-    st.session_state.eval_file_name = eval_file_name
-    return eval_file_name
-
-
-def get_eval_file_names():
-    object_attributes = asyncio.run(
-        object_storage_repo.filter_objects_attributes(
-            url_prefix=f"{storage_path}/agent-evals"
-        )
-    )
-
-    eval_file_names: List[str] = []
-    for object_attribute in object_attributes:
-        if object_attribute.url.endswith(".json"):
-            eval_file_names.append(object_attribute.url.split("/")[-1])
-    return sorted(eval_file_names)
-
-
-def store_eval_file_content(evaluation_file_content: EvaluationFileContent):
-    if "eval_file_name" not in st.session_state:
-        eval_file_name = new_eval_file_name()
-    else:
-        eval_file_name = st.session_state.eval_file_name
-
-    if not getattr(st.session_state, "eval_file_name2content", {}):
-        st.session_state.eval_file_name2content = defaultdict()
-    st.session_state.eval_file_name2content[eval_file_name] = evaluation_file_content
-
-    if PYDANTIC_V2:
-        payload = evaluation_file_content.model_dump_json(indent=2)
-    else:
-        payload = evaluation_file_content.json(indent=2)
-    asyncio.run(
-        object_storage_repo.add(
-            ObjectStorageItem(
-                url=eval_file_name,
-                payload=payload.encode("utf-8"),
-            )
-        )
-    )
-
-
-def retrieve_eval_file_content(eval_file_name: str) -> EvaluationFileContent:
-    if not getattr(st.session_state, "eval_file_name2content", {}):
-        st.session_state.eval_file_name2content = defaultdict()
-    try:
-        url_prefix = f"{storage_path}/agent-evals"
-        if eval_file_name in st.session_state.eval_file_name2content:
-            return st.session_state.eval_file_name2content[eval_file_name]
-
-        eval_file_content_obj = asyncio.run(
-            object_storage_repo.get(
-                f"{url_prefix}/{eval_file_name.replace('agent-evals/', '')}"
-                if not eval_file_name.startswith(url_prefix)
-                else eval_file_name
-            )
-        )
-        if not eval_file_content_obj:
-            return EvaluationFileContent(
-                agent_configurations=[], queries={}, answer_traces=[]
-            )
-        eval_file_content = EvaluationFileContent.parse_raw(
-            eval_file_content_obj.payload
-        )
-        st.session_state.eval_file_name2content[eval_file_name] = eval_file_content
-        return eval_file_content
-    except FileNotFoundError:
-        return EvaluationFileContent(
-            agent_configurations=[], queries={}, answer_traces=[]
-        )
 
 
 def __get_existing_trace_file(agent_hash: str, qid: str, query: str) -> Optional[str]:

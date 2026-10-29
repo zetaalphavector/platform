@@ -10,12 +10,19 @@ from zav.agents_sdk.domain.agent_dependency import (
     ResumableAgentDependency,
 )
 from zav.agents_sdk.domain.agent_event import AgentEvent
-from zav.agents_sdk.domain.agent_setup_retriever import AgentSetup, AgentSetupRetriever
+from zav.agents_sdk.domain.agent_setup_retriever import (
+    AgentSetup,
+    AgentSetupRetriever,
+    require_agent_setup,
+)
 from zav.agents_sdk.domain.chat_agent import ChatAgent, StreamableChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistryProtocol
 from zav.agents_sdk.domain.chat_request import ConversationContext
 from zav.agents_sdk.domain.dependency_resolver import DependencyResolver
+from zav.agents_sdk.domain.llm_client_factory import LLMClientFactory
 from zav.agents_sdk.domain.llm_configuration_store import LLMConfigurationStore
+from zav.agents_sdk.domain.secret_store import SecretStore
+from zav.agents_sdk.domain.turn_inbox import TurnInbox
 
 
 def init_span(
@@ -68,6 +75,7 @@ class ChatAgentFactory:
         trace_state_params: Dict[str, Any],
         agent_dependency_registry: Optional[AgentDependencyRegistryProtocol] = None,
         llm_configuration_store: Optional[LLMConfigurationStore] = None,
+        secret_store: Optional[SecretStore] = None,
         debug_backend: Optional[Callable[[Any], Any]] = None,
         publish_event: Optional[
             Callable[[AgentEvent], Coroutine[None, None, None]]
@@ -75,6 +83,7 @@ class ChatAgentFactory:
         message_id: Optional[str] = None,
         session_id: Optional[str] = None,
         dependency_state: Optional[Dict[str, Dict[str, Any]]] = None,
+        turn_inbox: Optional[TurnInbox] = None,
     ):
         self.__agent_setup_retriever = agent_setup_retriever
         self.__chat_agent_class_registry = chat_agent_class_registry
@@ -91,8 +100,12 @@ class ChatAgentFactory:
             agent_creation=self,
             on_dependency_resolved=self.__track_resumable_dependency,
             llm_configuration_store=llm_configuration_store,
+            secret_store=secret_store,
+            turn_inbox=turn_inbox,
         )
         self.agent_setup: Optional[AgentSetup] = None
+        # The LLM configuration the top-level agent runs on.
+        self.llm_configuration_name: Optional[str] = None
 
     def __dependency_state_key(
         self,
@@ -153,6 +166,25 @@ class ChatAgentFactory:
             for dependency in self.__resumable_dependencies.values()
         )
 
+    @staticmethod
+    def __llm_configuration_name(
+        agent_setup: AgentSetup, handler_params: Dict[str, Any]
+    ) -> Optional[str]:
+        """The requested model when the setup allows it, else the setup
+        default, as ``LLMClientFactory`` resolves it for the agent's client."""
+        selection = handler_params.get("llm_selection_configuration")
+        requested = (
+            selection.get("llm_configuration_name")
+            if isinstance(selection, dict)
+            else None
+        )
+        return LLMClientFactory(
+            default_llm_configuration_name=agent_setup.llm_configuration_name,
+            allowed_llm_configuration_names=(
+                agent_setup.allowed_llm_configuration_names or ()
+            ),
+        ).resolve_selection(requested=requested)
+
     async def create_agent(
         self,
         agent_identifier: str,
@@ -185,13 +217,14 @@ class ChatAgentFactory:
         extra_agent_kwargs: Optional[Dict[str, Any]] = None,
         track_resumable: bool = True,
     ) -> ChatAgent:
-        agent_setup = await self.__agent_setup_retriever.get(
-            agent_identifier=agent_identifier
+        agent_setup = await require_agent_setup(
+            self.__agent_setup_retriever, agent_identifier
         )
-        if not agent_setup:
-            raise ValueError(f"Unknown agent: {agent_identifier}")
         if self.agent_setup is None:
             self.agent_setup = agent_setup
+            self.llm_configuration_name = self.__llm_configuration_name(
+                agent_setup, handler_params
+            )
 
         if span is None:
             span = init_span(

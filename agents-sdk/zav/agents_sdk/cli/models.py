@@ -2,12 +2,6 @@ from hashlib import sha1
 from typing import Any, Dict, List, Optional
 
 from ragelo import Query
-from ragelo.types.configurations import (
-    CustomPromptAnswerEvaluatorConfig,
-    EloAgentRankerConfig,
-    PairwiseEvaluatorConfig,
-    ReasonerEvaluatorConfig,
-)
 from zav.llm_domain import LLMClientConfiguration
 from zav.message_bus import MessageBus
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict
@@ -89,12 +83,12 @@ class EvaluationAnswerTrace(BaseModel):
 
 class RageloEvaluation(BaseModel):
     llm_config: LLMClientConfiguration
-    reasoner_config: ReasonerEvaluatorConfig
-    pairwise_config: PairwiseEvaluatorConfig
-    custom_agent_eval_config: CustomPromptAnswerEvaluatorConfig
-    elo_ranker_config: EloAgentRankerConfig
+    reasoner_config: Dict[str, Any]
+    pairwise_config: Dict[str, Any]
+    custom_agent_eval_config: Dict[str, Any]
+    elo_ranker_config: Dict[str, Any]
     queries: List[Query]
-    elo_rankings: Optional[Dict[str, int]] = None
+    elo_rankings: Optional[Dict[str, float]] = None
 
 
 class EvaluationFileContent(BaseModel):

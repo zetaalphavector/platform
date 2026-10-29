@@ -9,7 +9,10 @@ from zav.agents_sdk.adapters.tools.sources.plotting import (
     create_plot_image_uri,
     style_axes,
 )
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, exclude_fields, streamable
 
@@ -56,7 +59,7 @@ surrounding text and image as you go — do not batch all plots at the end.
 """.format(max_series=MAX_PLOT_SERIES, max_points=MAX_PLOT_POINTS)
 
 
-class PlotToolsSourceConfiguration(BaseModel):
+class PlotToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = False
 
 
@@ -68,6 +71,7 @@ class PlotSeries(BaseModel):
 class PlotToolsSource(ToolsSource):
 
     source_name = "plot_tools"
+    source_description = "Draw charts from data."
 
     def __init__(
         self,
@@ -75,6 +79,7 @@ class PlotToolsSource(ToolsSource):
             PlotToolsSourceConfiguration()
         ),
     ):
+        self.defer_tools = plot_tools_source_configuration.defer_tools
         self.enabled = plot_tools_source_configuration.enabled
         self.__plot_count = 0
 

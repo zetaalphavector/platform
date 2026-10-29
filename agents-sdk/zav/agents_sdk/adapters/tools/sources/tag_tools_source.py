@@ -2,19 +2,22 @@ from typing import Any, Dict, List, Optional, Union
 
 from zav.api.errors import UnknownException
 from zav.logging import logger
-from zav.pydantic_compat import BaseModel, Field
+from zav.pydantic_compat import Field
 
 from zav.agents_sdk.adapters.tags.tags_service import TagsService
 from zav.agents_sdk.adapters.tools.sources.index_tools_source import IndexToolsSource
 from zav.agents_sdk.adapters.tools.sources.user_document_tools_source import (
     UserDocumentToolsSource,
 )
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import Tool, hide, streamable
 
 
-class TagToolsSourceConfiguration(BaseModel):
+class TagToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = False
     max_documents_per_page: int = Field(
         20,
@@ -30,6 +33,7 @@ class TagTools(ToolsSource):
     browsing documents within a tag."""
 
     source_name = "tag_tools"
+    source_description = "List the user's tags and the documents in them."
 
     def __init__(
         self,
@@ -42,6 +46,7 @@ class TagTools(ToolsSource):
         self.__index_tools = index_tools
         self.__config = tag_tools_source_configuration
         self.__user_document_tools = user_document_tools
+        self.defer_tools = tag_tools_source_configuration.defer_tools
         self.enabled = tag_tools_source_configuration.enabled
 
     async def get_tools(self) -> List[Tool]:

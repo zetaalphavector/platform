@@ -8,6 +8,11 @@ from zav.agents_sdk.adapters.tools.sources.document_tools_source import (
     DocumentToolsFactory,
     DocumentToolsSourceConfiguration,
 )
+from zav.agents_sdk.adapters.tools.sources.image_generation_tools_source import (
+    ImageGenerationToolsSource,
+    ImageGenerationToolsSourceConfiguration,
+    ImageGenerationToolsSourceFactory,
+)
 from zav.agents_sdk.adapters.tools.sources.index_tools_source import (
     IndexToolsSource,
     IndexToolsSourceConfiguration,
@@ -67,12 +72,17 @@ from zav.agents_sdk.adapters.tools.tools_provider import (
     ToolsProviderConfiguration,
     ToolsProviderFactory,
 )
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource, ToolsSourceGroup
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+    ToolsSourceGroup,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
 
 AgentDependencyRegistry.register(ToolsProviderFactory)
 AgentDependencyRegistry.register(DataFrameToolsSourceFactory)
 AgentDependencyRegistry.register(DocumentToolsFactory)
+AgentDependencyRegistry.register(ImageGenerationToolsSourceFactory)
 AgentDependencyRegistry.register(IndexToolsSourceFactory)
 AgentDependencyRegistry.register(NoteToolsFactory)
 AgentDependencyRegistry.register(TagToolsFactory)
@@ -121,6 +131,9 @@ __all__ = [
     "DocumentTools",
     "DocumentToolsSourceConfiguration",
     "DocumentToolsFactory",
+    "ImageGenerationToolsSource",
+    "ImageGenerationToolsSourceConfiguration",
+    "ImageGenerationToolsSourceFactory",
     "IndexToolsSource",
     "IndexToolsSourceConfiguration",
     "IndexToolsSourceFactory",
@@ -147,6 +160,7 @@ __all__ = [
     "ToolsProvider",
     "ToolsProviderFactory",
     "ToolsSource",
+    "ToolsSourceConfiguration",
     "ToolsSourceGroup",
     "UserDocumentToolsSource",
     "UserDocumentToolsSourceConfiguration",

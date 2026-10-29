@@ -13,12 +13,17 @@ from zav.agents_sdk.adapters.agent_state.citation import (
 )
 from zav.agents_sdk.adapters.retrievers.zav_retriever import ZAVRetriever
 from zav.agents_sdk.adapters.tools.sources._filter_translator import FilterTranslator
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.chat_message import CustomContextItem
-from zav.agents_sdk.domain.tools import Tool, hide, streamable
+from zav.agents_sdk.domain.tools import Tool, hide, include_fields, streamable
 
-_CONTENT_TYPE_FIELD = "custom_metadata.document_content_type"
+CONTENT_TYPE_FIELD = "custom_metadata.document_content_type"
+# The DRM sensitivity label is a reserved field surfaced at the search hit root.
+_CONFIDENTIALITY_FIELD = "confidentiality_level"
 
 _DEFAULT_METADATA_FIELDS = [
     "custom_metadata.metadata.title",
@@ -44,7 +49,7 @@ def extract_hit_metadata(
 ) -> Dict[str, Any]:
     data: Dict[str, Any] = {}
 
-    content_type = getpathattr(hit, _CONTENT_TYPE_FIELD)
+    content_type = getpathattr(hit, CONTENT_TYPE_FIELD)
     if content_type:
         data["content_type"] = content_type
 
@@ -61,7 +66,59 @@ def extract_hit_metadata(
     if description:
         data["description"] = str(description)
 
+    confidentiality = getpathattr(hit, _CONFIDENTIALITY_FIELD)
+    if confidentiality:
+        data["confidentiality"] = confidentiality
+
     return data
+
+
+# Persisted in the transcript on every turn, so the timeline gets only the top
+# hits' identity, not their metadata or text.
+_VISIBLE_SEARCH_HITS = 5
+
+
+def visible_search_response(data: Optional[Dict]) -> Optional[Dict]:
+    if data is None:
+        return None
+    return {
+        "results": [
+            {
+                "document_id": hit.get("document_id"),
+                "title": (hit.get("metadata") or {}).get("title"),
+                "url": hit.get("source_url"),
+            }
+            for hit in data.get("results", [])[:_VISIBLE_SEARCH_HITS]
+        ],
+        "total_hits": data.get("total_hits"),
+    }
+
+
+def hide_response(tool: Tool) -> Tool:
+    if tool.streaming_config is None:
+        return tool
+    return tool.copy(
+        update={
+            "streaming_config": tool.streaming_config.copy(
+                update={"response_transform": hide}
+            )
+        }
+    )
+
+
+def show_search_results(tool: Tool) -> Tool:
+    if tool.streaming_config is None:
+        return tool
+    return tool.copy(
+        update={
+            "streaming_config": tool.streaming_config.copy(
+                update={
+                    "params_transform": include_fields("query"),
+                    "response_transform": visible_search_response,
+                }
+            )
+        }
+    )
 
 
 class FilterHint(BaseModel):
@@ -78,11 +135,12 @@ class MetadataFieldConfig(BaseModel):
     )
 
 
-class IndexToolsSourceConfiguration(BaseModel):
+class IndexToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = False
     fe_base_url: str = "https://search.zeta-alpha.com"
     page_size: int = 10
     browse_page_size: int = 20
+    max_facet_terms: int = 1000
     default_retrieval_unit: Literal["document", "chunk"] = "chunk"
     default_retrieval_method: Literal["knn", "keyword", "mixed"] = "mixed"
     default_collapse_key: Optional[str] = None
@@ -96,6 +154,13 @@ class IndexToolsSourceConfiguration(BaseModel):
     known_filters: List[FilterHint] = Field(default_factory=list)
     sort_field_mapping: Dict[str, str] = Field(
         default_factory=lambda: dict(_DEFAULT_SORT_FIELD_MAPPING)
+    )
+    show_results: bool = Field(
+        False,
+        description=(
+            "Stream search and browse's query and top hits (title, link) to the"
+            " chat timeline. Off streams neither."
+        ),
     )
 
     @model_validator(mode="before")
@@ -137,6 +202,7 @@ class IndexToolsSourceConfiguration(BaseModel):
 class IndexToolsSource(ToolsSource):
 
     source_name = "index_tools"
+    source_description = "Search the tenant's indexes and cite what it finds."
 
     def __init__(
         self,
@@ -150,6 +216,7 @@ class IndexToolsSource(ToolsSource):
         self.__citation_config = citation_config
         self.__citation_store = citation_store
         self.__filter_configs: Optional[List[Dict[str, Any]]] = None
+        self.defer_tools = index_tools_source_configuration.defer_tools
         self.enabled = index_tools_source_configuration.enabled
 
     async def get_tools(self) -> List[Tool]:
@@ -166,7 +233,7 @@ class IndexToolsSource(ToolsSource):
         if sort_block:
             browse_desc += f"\n\nAvailable sort_by values: {sort_block}"
 
-        tools = [
+        search_tools = [
             Tool.from_callable(
                 name="search",
                 executable=self.search,
@@ -177,6 +244,12 @@ class IndexToolsSource(ToolsSource):
                 executable=self.browse,
                 description=browse_desc,
             ),
+        ]
+        if self.__config.show_results:
+            search_tools = [show_search_results(tool) for tool in search_tools]
+
+        tools = [
+            *search_tools,
             Tool.from_callable(
                 name="get_filter_options",
                 executable=self.get_filter_options,
@@ -288,6 +361,7 @@ class IndexToolsSource(ToolsSource):
         tag_ids: Optional[List[str]] = None,
         page: int = 1,
         page_size: Optional[int] = None,
+        facets: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Search the knowledge base for documents matching a query.
 
@@ -311,10 +385,18 @@ class IndexToolsSource(ToolsSource):
                 belonging to any of these tags.
             page: Result page number (default: 1).
             page_size: Number of results per page.
+            facets: Faceted field paths to count over every hit of this query
+                and filters, not only this page. Use it
+                to count or list the distinct values behind a question instead
+                of paging through results. Count under exact filters or a
+                quoted term: a loose query counts its loose matches too.
 
         Returns:
             Dict with 'results' (list of document hits with metadata and
-            source_url), 'total_hits', 'page', and 'facet_results'.
+            source_url), 'total_hits', 'page', and 'facet_results': one entry
+            per requested facet with 'distinct' (number of values), 'values'
+            (each value with its hit count) and 'truncated' (more values exist
+            than are listed). Empty when no facets are requested.
         """
         return await self.__execute_search(
             query=query,
@@ -322,6 +404,7 @@ class IndexToolsSource(ToolsSource):
             tag_ids=tag_ids,
             page=page,
             page_size=page_size,
+            facets=facets,
         )
 
     async def search_with_tag_ids(
@@ -333,6 +416,29 @@ class IndexToolsSource(ToolsSource):
     ) -> Dict[str, Any]:
         return await self.__execute_search(
             query=query, tag_ids=tag_ids, page=page, page_size=page_size
+        )
+
+    async def search_notes(
+        self,
+        query: str,
+        filters: Optional[Dict[str, Union[str, List[str]]]] = None,
+        retrieval_method: Optional[Literal["knn", "keyword", "mixed"]] = None,
+        page: int = 1,
+        page_size: Optional[int] = None,
+        metadata_fields: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Search note-type documents. `metadata_fields` are the hit fields
+        returned in each result's metadata (keyed by their leaf name) for the
+        caller to parse. `filters` narrows to a note subtype (e.g. memory
+        notes); `retrieval_method=None` uses the configured one."""
+        return await self.__execute_search(
+            query=query,
+            filters=filters,
+            retrieval_method=retrieval_method,
+            page=page,
+            page_size=page_size,
+            metadata_fields=metadata_fields,
+            document_types=["note"],
         )
 
     async def search_federated(
@@ -741,6 +847,10 @@ class IndexToolsSource(ToolsSource):
         index_id: Optional[str] = None,
         visibility: Optional[List[str]] = None,
         retrieval_unit: Optional[Literal["document", "chunk"]] = None,
+        retrieval_method: Optional[Literal["knn", "keyword", "mixed"]] = None,
+        metadata_fields: Optional[List[str]] = None,
+        document_types: Optional[List[str]] = None,
+        facets: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         merged_filters = (
             FilterTranslator.to_filters_configuration(filters) if filters else None
@@ -750,33 +860,49 @@ class IndexToolsSource(ToolsSource):
 
         effective_page_size = page_size or self.__config.page_size
         effective_unit = retrieval_unit or self.__config.default_retrieval_unit
+        effective_method = retrieval_method or self.__config.default_retrieval_method
 
         try:
             response = await self.__retriever.search(
                 query_string=query,
                 retrieval_unit=effective_unit,
-                retrieval_method=self.__config.default_retrieval_method,
+                retrieval_method=effective_method,
                 filters=merged_filters,
                 page=page,
                 page_size=effective_page_size,
                 sorting=sorting,
-                document_types=["document"],
+                document_types=document_types or ["document"],
                 tag_ids=tag_ids,
                 index_type=index_type,
                 index_id=index_id,
                 visibility=visibility,
                 collapse=self.__config.default_collapse_key,
+                facets=(
+                    [
+                        {
+                            "field_path": field_path,
+                            "max_facet_terms": self.__config.max_facet_terms,
+                        }
+                        for field_path in facets
+                    ]
+                    if facets
+                    else None
+                ),
             )
         except Exception as e:
             logger.exception(f"Error during search: {e}")
             raise Exception(f"Could not perform search: {e}") from e
 
         results = []
-        metadata_fields = self.__config.search_metadata_fields
+        fields = (
+            metadata_fields
+            if metadata_fields is not None
+            else self.__config.search_metadata_fields
+        )
         for hit in response.get("hits", []):
             data = extract_hit_metadata(
                 hit,
-                metadata_fields,
+                fields,
                 self.__config.description_field,
             )
             data["document_id"] = hit.get("id", "")
@@ -795,23 +921,53 @@ class IndexToolsSource(ToolsSource):
             data["source_url"] = registered
             results.append(data)
 
-        facet_results = response.get("facet_results", [])
-
         return {
             "results": results,
             "total_hits": response.get("total_hits", 0),
             "page": page,
-            "facet_results": facet_results,
+            "facet_results": self.__requested_facets(response, facets or []),
         }
+
+    def __requested_facets(
+        self, response: Dict[str, Any], field_paths: List[str]
+    ) -> List[Dict[str, Any]]:
+        # Without requested facets the search API still returns its default ones,
+        # each cut to its top few values; they cannot count anything, so they are
+        # left out rather than spent on every result.
+        returned = {
+            facet.get("field_path"): facet
+            for facet in response.get("facet_results", [])
+        }
+        summaries = []
+        for field_path in field_paths:
+            facet = returned.get(field_path, {})
+            values = self.__facet_values(facet)
+            summaries.append(
+                {
+                    "field_path": field_path,
+                    "distinct": len(values),
+                    "values": values,
+                    "truncated": len(facet.get("field_value_counts", []))
+                    >= self.__config.max_facet_terms,
+                }
+            )
+        return summaries
+
+    def __facet_values(self, facet: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            {"value": fvc["field_value"], "count": fvc.get("count", 0)}
+            for fvc in facet.get("field_value_counts", [])
+            if fvc.get("field_value") is not None
+        ]
 
     @streamable(
         running_text=(
-            "Browsing documents" "{{ ' about ' + query if query else '' }}..."
+            "Browsing documents" "{{ ' about ' ~ query if query else '' }}..."
         ),
         completed_text=(
             "Found {{ results|length }}"
             " document{{ 's' if results|length != 1 else '' }}"
-            "{{ ' about ' + query if query else '' }}."
+            "{{ ' about ' ~ query if query else '' }}."
         ),
         params_transform=hide,
         response_transform=hide,

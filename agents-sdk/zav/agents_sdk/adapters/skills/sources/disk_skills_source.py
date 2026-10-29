@@ -27,6 +27,8 @@ class DiskSkillsSource(SkillsSource):
     """Default implementation: discovers skills from filesystem directories."""
 
     source_name = "disk"
+    source_description = "Skills loaded from folders on disk."
+    source_gate = "local_files"
 
     def __init__(self, directories: List[str], enabled: bool):
         self.enabled = enabled

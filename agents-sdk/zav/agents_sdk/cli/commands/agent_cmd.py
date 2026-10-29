@@ -8,6 +8,7 @@ from typing_extensions import Annotated
 
 from zav.agents_sdk.cli.commands.model_cmd import (
     prompt_model_configuration,
+    prompt_vendor_config,
 )
 from zav.agents_sdk.cli.project_config import ProjectConfig
 from zav.agents_sdk.cli.require import (
@@ -44,24 +45,6 @@ def __openai_key_prompt_callback(default_obscured: str) -> str:
     return typer.prompt("Enter your OpenAI API key", default=default_obscured)
 
 
-def __build_vendor_config(vendor: str, api_key: str) -> dict:
-    # Returns the vendor's inner credential dict; set_llm_configuration keys it by
-    # vendor (matching __prompt_vendor_config used by `model configure`).
-    if not api_key:
-        return {}
-    if vendor == "openai":
-        return {"openai_api_key": api_key, "openai_org": ""}
-    if vendor == "anthropic":
-        return {"anthropic_api_key": api_key}
-    if vendor == "azure_openai":
-        return {
-            "azure_openai_api_key": api_key,
-            "azure_openai_endpoint": "",
-            "azure_openai_api_version": "2024-02-15-preview",
-        }
-    return {"api_key": api_key}
-
-
 def resolve_llm_configuration(config: ProjectConfig) -> str:
     """Pick one of the project's named LLM configurations, or prompt for a new
     one and store it, reusing an existing entry when vendor+model already match
@@ -89,27 +72,17 @@ def resolve_llm_configuration(config: ProjectConfig) -> str:
         "Model name", default=_DEFAULT_MODELS.get(vendor, "gpt-5.4-mini")
     )
     model_configuration = prompt_model_configuration(model)
-    api_key = typer.prompt(
-        "API key (stored in env/, never committed)",
-        hide_input=True,
-        show_default=False,
-        default="",
-    )
     match = config.find_llm_configuration(vendor, model)
     if match:
         console.print(f"  [dim]Reusing LLM configuration '{match}'.[/]")
         return match
+    vendor_config = prompt_vendor_config(vendor, {})
     name = (
         "default"
         if config.get_llm_configuration("default") is None
         else to_snake_case(model)
     )
-    config.set_llm_configuration(
-        name,
-        vendor,
-        model_configuration,
-        __build_vendor_config(vendor, api_key),
-    )
+    config.set_llm_configuration(name, vendor, model_configuration, vendor_config)
     return name
 
 
@@ -145,6 +118,8 @@ def prompt_agent_setup(
         enable_delegation = True
         enable_processing = True
         enable_dispatch = False
+        enable_interjections = False
+        enable_repl = False
         enable_mcp = True
     else:
         console.print()
@@ -181,17 +156,32 @@ def prompt_agent_setup(
             "  Enable dispatch?",
             default=__cap_default("dispatch_provider_configuration", False),
         )
+        enable_interjections = typer.confirm(
+            "  Enable interjections?",
+            default=__cap_default("interjections_provider_configuration", False),
+        )
+        enable_repl = typer.confirm(
+            "  Enable the Python REPL? (needs agents-sdk[repl])",
+            default=__cap_default("repl_provider_configuration", False),
+        )
         enable_mcp = typer.confirm(
             "  Enable MCP servers?",
             default=__cap_default("mcp_tools_provider_configuration", True),
         )
 
+    platform = config.get_platform_config() or {}
+    if existing_config and existing_config.get("tenant"):
+        login = config.platform_logins().get(existing_config["tenant"])
+        if login is not None:
+            platform = {**login, "tenant": existing_config["tenant"]}
+    legacy_x_auth = (
+        (existing_secret or {}).get("agent_configuration", {}).get("x_auth", "")
+    )
     agent_has_tenant = (
         True
-        if existing_secret is None
+        if existing_config is None
         else bool(
-            existing_secret
-            and existing_secret.get("agent_configuration", {}).get("x_auth")
+            existing_config.get("tenant") and (platform.get("api_key") or legacy_x_auth)
         )
     )
 
@@ -201,10 +191,9 @@ def prompt_agent_setup(
         tenant = existing_config.get("tenant", "")
         if base_url or tenant:
             existing_tenant_cfg = {"base_url": base_url, "tenant": tenant}
-    if existing_secret:
-        x_auth = existing_secret.get("agent_configuration", {}).get("x_auth", "")
-        if x_auth:
-            existing_tenant_cfg["x_auth"] = x_auth
+    existing_tenant_cfg.setdefault("base_url", platform.get("base_url", ""))
+    existing_tenant_cfg.setdefault("tenant", platform.get("tenant", ""))
+    existing_tenant_cfg["x_auth"] = platform.get("api_key") or legacy_x_auth
 
     tenant_config: dict = {}
     connect_tenant = typer.confirm(
@@ -233,6 +222,9 @@ def prompt_agent_setup(
             "x_auth": tenant_api_key,
             "tenant": tenant_name,
         }
+        config.set_platform_config(
+            base_url=base_url, api_key=tenant_api_key, tenant=tenant_name
+        )
 
     agent_configuration: dict = {
         "context_window_configuration": {"enabled": True, "preview_tokens": 3000},
@@ -247,9 +239,14 @@ def prompt_agent_setup(
         "agent_delegation_provider_configuration": {"enabled": enable_delegation},
         "message_processing_provider_configuration": {"enabled": enable_processing},
         "dispatch_provider_configuration": {"enabled": enable_dispatch},
+        "interjections_provider_configuration": {"enabled": enable_interjections},
+        "repl_provider_configuration": {"enabled": enable_repl},
         "mcp_tools_provider_configuration": {"enabled": enable_mcp},
         "datetime_instruction_source_configuration": {"timezone": local_tz},
     }
+
+    if enable_repl:
+        agent_configuration["monty_repl_sandbox_configuration"] = {"enabled": True}
 
     if enable_memory:
         agent_configuration["file_memory_store_configuration"] = {
@@ -284,13 +281,7 @@ def prompt_agent_setup(
         agent_configuration["base_url"] = ""
         agent_configuration["tenant"] = ""
 
-    secret_setup: dict = {"agent_identifier": identifier}
-    if tenant_config:
-        secret_setup["agent_configuration"] = {"x_auth": tenant_config["x_auth"]}
-    else:
-        secret_setup["agent_configuration"] = {"x_auth": ""}
-
-    return public_setup, secret_setup
+    return public_setup, {"agent_identifier": identifier}
 
 
 @agent_app.command("add")
@@ -350,7 +341,9 @@ def agent_add(
     public_setup, secret_setup = prompt_agent_setup(
         name, config, llm_configuration_name=llm
     )
-    config.add_agent(public_setup, secret_setup)
+    config.add_agent(
+        public_setup, secret_setup if secret_setup.get("agent_configuration") else None
+    )
 
     resolved_llm = config.resolve_agent_llm(name)
     model = resolved_llm.get("model_configuration", {}).get("name", "?")
@@ -523,7 +516,9 @@ def agent_configure(
     name = public_setup.pop("llm_configuration_name", None)
     public_setup.pop("agent_identifier", None)
     config.update_agent(identifier, public_setup)
-    config.update_secret(identifier, secret_setup)
+    # x_auth is injected at launch from env/zav_config.json; a legacy secret setup
+    # that still carries one would override it, so the key goes.
+    config.remove_secret_agent_configuration_key(identifier, "x_auth")
     if name:
         config.set_agent_llm_configuration(identifier, name)
 

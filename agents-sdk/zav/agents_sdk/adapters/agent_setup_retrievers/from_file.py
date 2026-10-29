@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Optional
+import os
+from typing import Any, Callable, Dict, Optional
 
 from zav.llm_domain import LLMClientConfiguration
 from zav.logging import logger
@@ -13,6 +14,7 @@ from zav.agents_sdk.domain.llm_configuration_store import (
     LLMConfigurationStore,
     LLMConfigurationStoreFromFile,
 )
+from zav.agents_sdk.domain.secret_store import SecretStore
 
 
 def _inline_llm_configuration_name(agent_identifier: str) -> str:
@@ -27,13 +29,25 @@ class AgentSetupRetrieverFromFile(LocalAgentSetupRetriever):
         llm_configurations_path: Optional[str] = None,
         secret_llm_configurations_path: Optional[str] = None,
         llm_configuration_store: Optional[LLMConfigurationStore] = None,
+        agent_configuration_defaults: Optional[
+            Callable[[Optional[str]], Dict[str, Any]]
+        ] = None,
+        secret_store: Optional[SecretStore] = None,
     ):
         raw_setups: Dict[str, Dict[str, Any]] = {}
         if file_path:
             with open(file_path, "r") as file:
                 for raw_setup in json.load(file):
                     raw_setups[raw_setup["agent_identifier"]] = raw_setup
-        if secret_file_path:
+        if agent_configuration_defaults is not None:
+            # Keys a local agent gets unless its own setup sets them, e.g. the
+            # platform login the CLI keeps in env/zav_config.json for its tenant.
+            for raw_setup in raw_setups.values():
+                own = raw_setup.get("agent_configuration") or {}
+                configuration = dict(agent_configuration_defaults(own.get("tenant")))
+                merge_dicts(configuration, own)
+                raw_setup["agent_configuration"] = configuration
+        if secret_file_path and os.path.isfile(secret_file_path):
             with open(secret_file_path, "r") as file:
                 for secret_setup in json.load(file):
                     agent_identifier = secret_setup["agent_identifier"]
@@ -49,7 +63,7 @@ class AgentSetupRetrieverFromFile(LocalAgentSetupRetriever):
                 secret_llm_configurations_path=secret_llm_configurations_path,
             )
         )
-        store = LayeredLLMConfigurationStore(base=base_store)
+        store = LayeredLLMConfigurationStore(base=base_store, secret_store=secret_store)
 
         agent_setups = []
         for agent_identifier, raw_setup in raw_setups.items():

@@ -25,6 +25,7 @@ class TagContextSource(ContextSource):
     """Resolves tag context by fetching tag metadata and document listings."""
 
     source_name = "tags"
+    source_description = "The tag the user is looking at and its documents."
 
     def __init__(
         self,

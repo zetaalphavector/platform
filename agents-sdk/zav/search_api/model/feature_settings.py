@@ -30,12 +30,22 @@ from zav.search_api.exceptions import ApiAttributeError
 
 
 def lazy_import():
+    from zav.search_api.model.confidentiality_settings import ConfidentialitySettings
+    from zav.search_api.model.dictation_settings import DictationSettings
     from zav.search_api.model.document_upload_settings import DocumentUploadSettings
+    from zav.search_api.model.incognito_chat_settings import IncognitoChatSettings
+    from zav.search_api.model.llm_selection_settings import LLMSelectionSettings
     from zav.search_api.model.people_settings import PeopleSettings
     from zav.search_api.model.recommendation_settings import RecommendationSettings
+    from zav.search_api.model.source_selection_settings import SourceSelectionSettings
+    globals()['ConfidentialitySettings'] = ConfidentialitySettings
+    globals()['DictationSettings'] = DictationSettings
     globals()['DocumentUploadSettings'] = DocumentUploadSettings
+    globals()['IncognitoChatSettings'] = IncognitoChatSettings
+    globals()['LLMSelectionSettings'] = LLMSelectionSettings
     globals()['PeopleSettings'] = PeopleSettings
     globals()['RecommendationSettings'] = RecommendationSettings
+    globals()['SourceSelectionSettings'] = SourceSelectionSettings
 
 
 class FeatureSettings(ModelNormal):
@@ -94,6 +104,11 @@ class FeatureSettings(ModelNormal):
             'recommendations': (RecommendationSettings,),  # noqa: E501
             'document_uploads': (DocumentUploadSettings,),  # noqa: E501
             'people': (PeopleSettings,),  # noqa: E501
+            'dictation': (DictationSettings,),  # noqa: E501
+            'incognito_chat': (IncognitoChatSettings,),  # noqa: E501
+            'confidentiality': (ConfidentialitySettings,),  # noqa: E501
+            'llm_selection': (LLMSelectionSettings,),  # noqa: E501
+            'source_selection': (SourceSelectionSettings,),  # noqa: E501
         }
 
     @cached_property
@@ -105,6 +120,11 @@ class FeatureSettings(ModelNormal):
         'recommendations': 'recommendations',  # noqa: E501
         'document_uploads': 'document_uploads',  # noqa: E501
         'people': 'people',  # noqa: E501
+        'dictation': 'dictation',  # noqa: E501
+        'incognito_chat': 'incognito_chat',  # noqa: E501
+        'confidentiality': 'confidentiality',  # noqa: E501
+        'llm_selection': 'llm_selection',  # noqa: E501
+        'source_selection': 'source_selection',  # noqa: E501
     }
 
     read_only_vars = {
@@ -151,6 +171,11 @@ class FeatureSettings(ModelNormal):
             recommendations (RecommendationSettings): [optional]  # noqa: E501
             document_uploads (DocumentUploadSettings): [optional]  # noqa: E501
             people (PeopleSettings): [optional]  # noqa: E501
+            dictation (DictationSettings): [optional]  # noqa: E501
+            incognito_chat (IncognitoChatSettings): [optional]  # noqa: E501
+            confidentiality (ConfidentialitySettings): [optional]  # noqa: E501
+            llm_selection (LLMSelectionSettings): [optional]  # noqa: E501
+            source_selection (SourceSelectionSettings): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -235,6 +260,11 @@ class FeatureSettings(ModelNormal):
             recommendations (RecommendationSettings): [optional]  # noqa: E501
             document_uploads (DocumentUploadSettings): [optional]  # noqa: E501
             people (PeopleSettings): [optional]  # noqa: E501
+            dictation (DictationSettings): [optional]  # noqa: E501
+            incognito_chat (IncognitoChatSettings): [optional]  # noqa: E501
+            confidentiality (ConfidentialitySettings): [optional]  # noqa: E501
+            llm_selection (LLMSelectionSettings): [optional]  # noqa: E501
+            source_selection (SourceSelectionSettings): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

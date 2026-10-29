@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from contextlib import asynccontextmanager
 from typing import (
     TYPE_CHECKING,
@@ -21,6 +22,7 @@ from zav.message_bus import (
     CommandHandlerRegistry,
     EventHandlerRegistry,
 )
+from zav.prompt_completion import ChatClientFactory
 
 from zav.agents_sdk.adapters.event_publishers.event_publisher import (
     AbstractEventPublisher,
@@ -38,6 +40,7 @@ from zav.agents_sdk.controllers import routers as default_routers
 from zav.agents_sdk.dependencies import (
     get_chat_stream_recording_store,
     get_chat_stream_supervision_store,
+    get_message_inbox_store,
     get_stream_buffer_registry,
 )
 from zav.agents_sdk.domain.agent_registries_factory import AgentRegistriesFactory
@@ -46,6 +49,11 @@ from zav.agents_sdk.domain.chat_conversation_store import ChatConversationStore
 from zav.agents_sdk.domain.chat_stream_recording_store import ChatStreamRecordingStore
 from zav.agents_sdk.domain.chat_stream_supervision_store import (
     ChatStreamSupervisionStore,
+)
+from zav.agents_sdk.domain.llm_configuration_store import LLMConfigurationStoreFactory
+from zav.agents_sdk.domain.message_inbox import MessageInboxStore
+from zav.agents_sdk.domain.realtime_transcription import (
+    RealtimeTranscriptionSetupRetriever,
 )
 from zav.agents_sdk.exception_handlers import add_exception_handlers
 
@@ -64,9 +72,14 @@ def setup_app(
     chat_stream_recording_store: Optional[ChatStreamRecordingStore] = None,
     chat_stream_supervision_store: Optional[ChatStreamSupervisionStore] = None,
     chat_conversation_store: Optional[ChatConversationStore] = None,
+    message_inbox_store: Optional[MessageInboxStore] = None,
     mcp_oauth_store: Optional[MCPOAuthIntegrationStore] = None,
     mcp_oauth_token_client: Optional[MCPOAuthTokenClient] = None,
     mcp_server_setup_retriever: Optional[MCPServerSetupRetriever] = None,
+    llm_configuration_store_factory: Optional[LLMConfigurationStoreFactory] = None,
+    realtime_transcription_setup_retriever: Optional[
+        RealtimeTranscriptionSetupRetriever
+    ] = None,
 ) -> FastAPI:
     if stream_buffer_registry is None:
         stream_buffer_registry = StreamBufferRegistry()
@@ -77,9 +90,23 @@ def setup_app(
     ) -> AsyncIterator[Dict[str, object]]:
         yield {
             **get_stream_buffer_registry.bind(stream_buffer_registry),
+            **get_message_inbox_store.bind(message_inbox_store),
             **get_chat_stream_recording_store.bind(chat_stream_recording_store),
             **get_chat_stream_supervision_store.bind(chat_stream_supervision_store),
         }
+
+    @asynccontextmanager
+    async def warm_up_lifespan(
+        app: FastAPI,
+    ) -> AsyncIterator[Dict[str, object]]:
+        # Before readiness, so a freshly scaled pod's first turn does not pay it.
+        ChatClientFactory.warm_up()
+        # The ~900k objects alive after startup never die; out of the collector's
+        # reach, the full collection after each turn (`cleanup_memory`) takes
+        # ~5 ms instead of ~390 ms of blocked event loop.
+        gc.collect()
+        gc.freeze()
+        yield {}
 
     bootstrap = setup_bootstrap(
         agent_registries_factory=agent_registries_factory,
@@ -91,15 +118,18 @@ def setup_app(
         event_handler_registry=event_handler_registry,
         agent_state_store=agent_state_store,
         chat_conversation_store=chat_conversation_store,
+        message_inbox_store=message_inbox_store,
         mcp_oauth_store=mcp_oauth_store,
         mcp_oauth_token_client=mcp_oauth_token_client,
         mcp_server_setup_retriever=mcp_server_setup_retriever,
+        llm_configuration_store_factory=llm_configuration_store_factory,
+        realtime_transcription_setup_retriever=realtime_transcription_setup_retriever,
     )
 
     app = setup_api(
         bootstrap=bootstrap,
         routers=list(routers or default_routers),
-        lifespans=[stream_buffer_registry_lifespan],
+        lifespans=[stream_buffer_registry_lifespan, warm_up_lifespan],
     )
     add_exception_handlers(app)
 

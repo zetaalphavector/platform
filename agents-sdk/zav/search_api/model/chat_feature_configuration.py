@@ -55,6 +55,15 @@ class ChatFeatureConfiguration(ModelNormal):
     """
 
     allowed_values = {
+        ('search_tool_view',): {
+            'TEXT': "text",
+            'RESULTS': "results",
+            'PANEL': "panel",
+        },
+        ('tool_steps_layout',): {
+            'LIST': "list",
+            'TIMELINE': "timeline",
+        },
     }
 
     validations = {
@@ -84,6 +93,13 @@ class ChatFeatureConfiguration(ModelNormal):
             'default_bot_identifier': (str,),  # noqa: E501
             'extra_bot_identifiers': ([str],),  # noqa: E501
             'show_sender_avatar': (bool,),  # noqa: E501
+            'show_model_name': (bool,),  # noqa: E501
+            'show_actions_on_hover': (bool,),  # noqa: E501
+            'allow_regenerate': (bool,),  # noqa: E501
+            'allow_edit_messages': (bool,),  # noqa: E501
+            'open_documents_in_side_panel': (bool,),  # noqa: E501
+            'search_tool_view': (str,),  # noqa: E501
+            'tool_steps_layout': (str,),  # noqa: E501
         }
 
     @cached_property
@@ -95,6 +111,13 @@ class ChatFeatureConfiguration(ModelNormal):
         'default_bot_identifier': 'default_bot_identifier',  # noqa: E501
         'extra_bot_identifiers': 'extra_bot_identifiers',  # noqa: E501
         'show_sender_avatar': 'show_sender_avatar',  # noqa: E501
+        'show_model_name': 'show_model_name',  # noqa: E501
+        'show_actions_on_hover': 'show_actions_on_hover',  # noqa: E501
+        'allow_regenerate': 'allow_regenerate',  # noqa: E501
+        'allow_edit_messages': 'allow_edit_messages',  # noqa: E501
+        'open_documents_in_side_panel': 'open_documents_in_side_panel',  # noqa: E501
+        'search_tool_view': 'search_tool_view',  # noqa: E501
+        'tool_steps_layout': 'tool_steps_layout',  # noqa: E501
     }
 
     read_only_vars = {
@@ -143,6 +166,13 @@ class ChatFeatureConfiguration(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             extra_bot_identifiers ([str]): [optional]  # noqa: E501
             show_sender_avatar (bool): [optional]  # noqa: E501
+            show_model_name (bool): Show the model that wrote each answer.. [optional]  # noqa: E501
+            show_actions_on_hover (bool): Show the actions under a message only on hover.. [optional]  # noqa: E501
+            allow_regenerate (bool): [optional]  # noqa: E501
+            allow_edit_messages (bool): [optional]  # noqa: E501
+            open_documents_in_side_panel (bool): Open cited documents in a side panel instead of a new tab.. [optional]  # noqa: E501
+            search_tool_view (str): How search steps render, as a text line, as the query and its results, or as the query with its results in the side panel.. [optional]  # noqa: E501
+            tool_steps_layout (str): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)
@@ -230,6 +260,13 @@ class ChatFeatureConfiguration(ModelNormal):
                                 _visited_composed_classes = (Animal,)
             extra_bot_identifiers ([str]): [optional]  # noqa: E501
             show_sender_avatar (bool): [optional]  # noqa: E501
+            show_model_name (bool): Show the model that wrote each answer.. [optional]  # noqa: E501
+            show_actions_on_hover (bool): Show the actions under a message only on hover.. [optional]  # noqa: E501
+            allow_regenerate (bool): [optional]  # noqa: E501
+            allow_edit_messages (bool): [optional]  # noqa: E501
+            open_documents_in_side_panel (bool): Open cited documents in a side panel instead of a new tab.. [optional]  # noqa: E501
+            search_tool_view (str): How search steps render, as a text line, as the query and its results, or as the query with its results in the side panel.. [optional]  # noqa: E501
+            tool_steps_layout (str): [optional]  # noqa: E501
         """
 
         _check_type = kwargs.pop('_check_type', True)

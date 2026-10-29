@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple, Union, overload
 
 import boto3
+from botocore.exceptions import ClientError
 from typing_extensions import AsyncIterator, Literal
 from zav.llm_domain import (
     BedrockConfiguration,
@@ -13,6 +14,7 @@ from zav.llm_domain import (
 )
 from zav.llm_tracing import Span
 
+from zav.prompt_completion.adapters.errors import generate_rate_limit_error
 from zav.prompt_completion.adapters.tracing import create_span, end_span
 from zav.prompt_completion.client import (
     BotConversation,
@@ -45,6 +47,9 @@ _SENDER_TO_ROLE = {
     ChatMessageSender.DEVELOPER: "user",
     ChatMessageSender.SYSTEM: "user",
 }
+
+
+_THROTTLING_ERROR_CODES = {"ThrottlingException", "TooManyRequestsException"}
 
 
 def _parse_image(image_uri: str) -> Optional[Dict[str, Any]]:
@@ -245,6 +250,17 @@ class BedrockChatClient(ChatCompletionClient):
             if generation_span:
                 generation_span.end(
                     attributes={"level": "ERROR", "status_message": str(error)}
+                )
+            if (
+                isinstance(error, ClientError)
+                and error.response["Error"]["Code"] in _THROTTLING_ERROR_CODES
+            ):
+                return ChatResponse(
+                    error=generate_rate_limit_error(
+                        error.response["Error"]["Message"],
+                        error.response.get("ResponseMetadata", {}).get("HTTPHeaders"),
+                    ),
+                    chat_message=None,
                 )
             return ChatResponse(error=error, chat_message=None)
 

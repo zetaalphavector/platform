@@ -1,7 +1,8 @@
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Dict, Generic, List, Mapping, TypeVar
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
+from fastapi.requests import HTTPConnection
 
 T = TypeVar("T")
 ApiLifespan = Callable[[FastAPI], AbstractAsyncContextManager[Mapping[str, Any]]]
@@ -24,7 +25,7 @@ class AppResource(Generic[T]):
 
         return {self.__state_key: value}
 
-    async def __call__(self, request: Request) -> T:
+    async def __call__(self, request: HTTPConnection) -> T:
 
         if hasattr(request.app.state, self.__state_key):
             return getattr(request.app.state, self.__state_key)

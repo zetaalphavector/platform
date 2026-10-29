@@ -4,6 +4,8 @@ from urllib.parse import parse_qs, urlparse
 
 from zav.pydantic_compat import PYDANTIC_V2, BaseModel, ConfigDict, root_validator
 
+from zav.agents_sdk.domain.tools import ToolDisplay
+
 
 class ChatMessageSender(str, enum.Enum):
     USER = "user"
@@ -106,25 +108,6 @@ class ConversationContext(BaseModel):
     filter_context: Optional[FilterContext] = None
     user_document_context: Optional[UserDocumentContext] = None
 
-    @root_validator()
-    @classmethod
-    def validate_context_combination(cls, values):
-        # tag_context can be combined with document_context OR custom_context
-        # BUT document_context and custom_context remain mutually exclusive
-        if PYDANTIC_V2:
-            doc = values.document_context
-            custom = values.custom_context
-        else:
-            doc = values.get("document_context")
-            custom = values.get("custom_context")
-
-        # Enforce mutual exclusivity between document and custom
-        if doc is not None and custom is not None:
-            raise ValueError(
-                "document_context and custom_context are mutually exclusive"
-            )
-        return values
-
     def is_empty(self):
         return (
             (not self.document_context or not self.document_context.document_ids)
@@ -142,6 +125,7 @@ class ContentPartTool(BaseModel):
     response: Optional[Dict] = None
     display_text: Optional[str] = None
     status: Optional[Literal["running", "completed", "error"]] = None
+    display: Optional[ToolDisplay] = None
 
 
 class ContentPartTable(BaseModel):
@@ -174,12 +158,21 @@ class ContentPartTable(BaseModel):
         return v
 
 
+class ContentPartImage(BaseModel):
+    # A data URI (`data:<mime>;base64,<data>`), as `ChatMessage.image_uri`.
+    image_uri: str
+
+
 class ContentPart(BaseModel):
-    type: Literal["context", "text", "tool", "table"]
+    # "user_message": a message the user sent while the turn ran, in `text`,
+    # where the agent read it; `message_id` is the id it was sent with.
+    type: Literal["context", "text", "tool", "table", "image", "user_message"]
     context: Optional[ConversationContext] = None
     tool: Optional[ContentPartTool] = None
     text: Optional[str] = None
     table: Optional[ContentPartTable] = None
+    image: Optional[ContentPartImage] = None
+    message_id: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
@@ -194,6 +187,8 @@ class ChatMessage(BaseModel):
     evidences: Optional[List[ChatMessageEvidence]] = None
     function_specs: Optional[FunctionSpec] = None
     reasoning_summary: Optional[str] = None
+    # The LLM configuration a bot turn ran on, stamped by the chat handlers.
+    llm_configuration_name: Optional[str] = None
 
     if PYDANTIC_V2:
         model_config = ConfigDict(from_attributes=True)
@@ -209,3 +204,12 @@ class ChatMessage(BaseModel):
     @classmethod
     def as_bot(cls, content: str) -> "ChatMessage":
         return cls(sender=ChatMessageSender.BOT, content=content)
+
+    def all_image_uris(self) -> List[str]:
+        """Every image on the message: the single `image_uri`, then image parts."""
+        part_images = [
+            part.image.image_uri
+            for part in self.content_parts or []
+            if part.type == "image" and part.image
+        ]
+        return ([self.image_uri] if self.image_uri else []) + part_images

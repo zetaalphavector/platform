@@ -11,9 +11,12 @@ class LocalAgentSetupRetriever(AgentSetupRetriever):
         }
 
     def update_agent_setup(self, agent_identifier: str, agent_setup_patch: Dict):
-        self.__agent_setup_map[agent_identifier] = self.__agent_setup_map[
-            agent_identifier
-        ].patch(agent_setup_patch)
+        existing = self.__agent_setup_map.get(agent_identifier)
+        self.__agent_setup_map[agent_identifier] = (
+            existing.patch(agent_setup_patch)
+            if existing
+            else AgentSetup.parse_obj(agent_setup_patch)
+        )
 
     async def get(self, agent_identifier: str) -> Optional[AgentSetup]:
         return self.__agent_setup_map.get(agent_identifier, None)

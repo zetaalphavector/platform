@@ -22,6 +22,7 @@ class InMemoryInstructionSourceConfiguration(BaseModel):
 class InMemoryInstructionSource(InstructionSource):
 
     source_name = "in_memory_instructions"
+    source_description = "Instructions written in this configuration."
 
     def __init__(
         self,

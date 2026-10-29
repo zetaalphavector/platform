@@ -1,4 +1,39 @@
-from typing import Optional, Set
+from typing import ClassVar, List, Optional, Protocol, Sequence, Set, TypeVar
+
+
+class _Named(Protocol):
+    source_name: ClassVar[str]
+    enabled: bool
+
+
+TNamed = TypeVar("TNamed", bound=_Named)
+
+
+def active_sources(
+    sources: Sequence[TNamed],
+    enabled: bool,
+    include: Optional[Set[str]],
+    exclude: Optional[Set[str]],
+) -> List[TNamed]:
+    """The sources a provider works with: none when the provider is off, else
+    every source that passes ``is_source_active``."""
+    if not enabled:
+        return []
+    return [
+        source
+        for source in sources
+        if is_source_active(source.source_name, source.enabled, include, exclude)
+    ]
+
+
+def pick_writable(
+    candidates: Sequence[TNamed], name: Optional[str]
+) -> Optional[TNamed]:
+    """The one source writes go to: the named one if it is among the candidates,
+    else the first candidate. None when nothing qualifies."""
+    if name is not None:
+        return next((c for c in candidates if c.source_name == name), None)
+    return candidates[0] if candidates else None
 
 
 def is_source_active(

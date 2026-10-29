@@ -5,9 +5,14 @@ from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.adapters._filtering import is_source_active, passes_name_filter
+from zav.agents_sdk.adapters.tool_policy import load_on_demand
 from zav.agents_sdk.adapters.tools.tools_source import ToolsSource, ToolsSourceGroup
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.tools import Tool
+from zav.agents_sdk.domain.tools import (
+    Tool,
+    ToolNamespace,
+    ToolOrigin,
+)
 
 _PROMPT_SEPARATOR = "\n\n"
 
@@ -29,6 +34,38 @@ class ToolsProviderConfiguration(BaseModel):
     exclude_tools: Optional[List[str]] = Field(
         None, description="Denylist of tool names to exclude."
     )
+    sandbox_only_sources: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Sources whose tools the model may call only from the Python REPL, "
+            "never as direct tool calls."
+        ),
+    )
+    sandbox_only_tools: Optional[List[str]] = Field(
+        None, description="Tool names the model may call only from the Python REPL."
+    )
+    direct_only_sources: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Sources whose tools the model may call only as direct tool calls, "
+            "never from the Python REPL."
+        ),
+    )
+    direct_only_tools: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Tool names the model may call only as direct tool calls, never from "
+            "the Python REPL, e.g. `commit_attempt`."
+        ),
+    )
+    defer_tools: bool = Field(
+        False,
+        description=(
+            "Load the sources' tools on demand through tool search: the model "
+            "sees each source by name and description. A source's own "
+            "defer_tools overrides this; the agent's tool search methods say how."
+        ),
+    )
 
 
 class ToolsProvider:
@@ -41,7 +78,22 @@ class ToolsProvider:
         exclude_sources: Optional[Set[str]] = None,
         include_tools: Optional[Set[str]] = None,
         exclude_tools: Optional[Set[str]] = None,
+        sandbox_only_sources: Optional[Set[str]] = None,
+        sandbox_only_tools: Optional[Set[str]] = None,
+        direct_only_sources: Optional[Set[str]] = None,
+        direct_only_tools: Optional[Set[str]] = None,
+        defer_tools: bool = False,
     ):
+        self.__defer_tools = defer_tools
+        self.__sandbox_only_sources = sandbox_only_sources or set()
+        self.__sandbox_only_tools = sandbox_only_tools or set()
+        self.__direct_only_sources = direct_only_sources or set()
+        self.__direct_only_tools = direct_only_tools or set()
+        conflicts = (self.__sandbox_only_sources & self.__direct_only_sources) | (
+            self.__sandbox_only_tools & self.__direct_only_tools
+        )
+        if conflicts:
+            raise ValueError(f"Both sandbox-only and direct-only: {sorted(conflicts)}")
         self.__sources = sources
         self.__enabled = enabled
         self.__include_sources = include_sources
@@ -58,6 +110,11 @@ class ToolsProvider:
         resolved = await self.__resolve_source_tools()
         return [t for tools in resolved.values() for t in tools]
 
+    def source(self, name: str) -> Optional[ToolsSource]:
+        """One active source by name, for callers that need more than its tools
+        (a harness reading the attempts gate, a test)."""
+        return next((s for s in self.__active_sources() if s.source_name == name), None)
+
     async def __resolve_source_tools(
         self,
     ) -> Dict[str, List[Tool]]:
@@ -66,20 +123,55 @@ class ToolsProvider:
         self.__resolved = {}
         for source in self.__active_sources():
             try:
-                source_tools = await source.get_tools()
                 self.__resolved[source.source_name] = [
-                    t
-                    for t in source_tools
+                    self.__with_settings(source, self.__with_origin(source, t))
+                    for t in await source.get_tools()
                     if passes_name_filter(
-                        t.name,
-                        self.__include_tools,
-                        self.__exclude_tools,
+                        t.name, self.__include_tools, self.__exclude_tools
                     )
                 ]
             except Exception as e:
                 logger.error(f"Failed to get tools from {source.source_name}: {e}")
                 self.__resolved[source.source_name] = []
         return self.__resolved
+
+    def __with_settings(self, source: ToolsSource, tool: Tool) -> Tool:
+        """Who may call the tool and whether it loads on demand, as this
+        provider's and the source's configuration say."""
+        update: Dict[str, Any] = {}
+        if (
+            source.source_name in self.__sandbox_only_sources
+            or tool.name in self.__sandbox_only_tools
+        ):
+            update["allowed_callers"] = ["sandbox"]
+        elif (
+            source.source_name in self.__direct_only_sources
+            or tool.name in self.__direct_only_tools
+        ):
+            update["allowed_callers"] = ["direct"]
+        on_demand = (
+            self.__defer_tools if source.defer_tools is None else source.defer_tools
+        )
+        if on_demand != tool.options.on_demand:
+            update["options"] = load_on_demand(tool.options, on_demand)
+        return tool.copy(update=update) if update else tool
+
+    @staticmethod
+    def __with_origin(source: ToolsSource, tool: Tool) -> Tool:
+        # The source is also the group its tools load on demand with.
+        return tool.copy(
+            update={
+                "origin": ToolOrigin(
+                    provider="tools", source=source.source_name, name=tool.name
+                ),
+                "namespace": tool.namespace
+                or ToolNamespace(
+                    name=source.source_name,
+                    description=source.source_description
+                    or f"The {source.source_name} tools.",
+                ),
+            }
+        )
 
     async def to_prompt(self) -> str:
         if not self.__enabled:
@@ -171,4 +263,15 @@ class ToolsProviderFactory(AgentDependencyFactory):
                 if tools_provider_configuration.exclude_tools
                 else None
             ),
+            sandbox_only_sources=set(
+                tools_provider_configuration.sandbox_only_sources or []
+            ),
+            sandbox_only_tools=set(
+                tools_provider_configuration.sandbox_only_tools or []
+            ),
+            direct_only_sources=set(
+                tools_provider_configuration.direct_only_sources or []
+            ),
+            direct_only_tools=set(tools_provider_configuration.direct_only_tools or []),
+            defer_tools=tools_provider_configuration.defer_tools,
         )

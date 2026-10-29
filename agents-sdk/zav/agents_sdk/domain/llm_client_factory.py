@@ -1,9 +1,14 @@
 from typing import Callable, Optional, Sequence, TypeVar
 
-from zav.llm_domain import LLMClientConfiguration
+from zav.llm_domain import LLMClientConfiguration, LLMModelType
 from zav.llm_tracing import Span
 from zav.logging import logger
-from zav.prompt_completion import ChatClientFactory, ChatCompletionClient
+from zav.prompt_completion import (
+    ChatClientFactory,
+    ChatCompletionClient,
+    ImageClientFactory,
+    ImageGenerationClient,
+)
 
 from zav.agents_sdk.domain.llm_configuration_store import LLMConfigurationStore
 
@@ -93,3 +98,26 @@ class LLMClientFactory:
             lambda configuration: ChatClientFactory.create(configuration, span=span),
             requested=requested,
         )
+
+    def create_image_generation_client(
+        self,
+        name: Optional[str] = None,
+        span: Optional[Span] = None,
+    ) -> ImageGenerationClient:
+        # The image model is an admin setting, not a runtime selection: it is
+        # looked up by name outside the chat allow-list, and the chat default
+        # is never a fallback for it.
+        if not name:
+            raise LLMNotConfigured("No image LLM configuration is named.")
+        if self.__llm_configuration_store is None:
+            raise LLMNotConfigured("No LLM configuration store in scope.")
+        configuration = self.__client_configuration(name)
+        if configuration is None:
+            raise LLMNotConfigured(f"No LLM configuration named {name!r}.")
+        if configuration.model_configuration.type != LLMModelType.IMAGE:
+            raise LLMNotConfigured(
+                f"LLM configuration {name!r} is a "
+                f"{configuration.model_configuration.type.value} model, not an "
+                "image model."
+            )
+        return ImageClientFactory.create(configuration, span=span)

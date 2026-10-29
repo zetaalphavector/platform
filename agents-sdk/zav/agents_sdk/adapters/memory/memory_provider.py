@@ -1,11 +1,14 @@
 from typing import Any, Dict, List, Optional, Set
 
-from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
-from zav.agents_sdk.adapters._filtering import is_source_active
+from zav.agents_sdk.adapters._filtering import active_sources, pick_writable
+from zav.agents_sdk.adapters.memory.memory_context import (
+    MemoryContextStrategy,
+    MemoryContextStrategyGroup,
+    pick_context_strategy,
+)
 from zav.agents_sdk.adapters.memory.memory_store import (
-    MemoryEntry,
     MemoryStore,
     MemoryStoreGroup,
 )
@@ -50,6 +53,10 @@ class MemoryProviderConfiguration(BaseModel):
             "Load and inject relevant memories into the system prompt each turn."
         ),
     )
+    memory_context_strategy: str = Field(
+        "full",
+        description="source_name of the memory context strategy to load.",
+    )
     provide_tools: bool = Field(
         True,
         description="Expose memory write tools to the Agent.",
@@ -92,28 +99,41 @@ class MemoryProvider:
         provide_tools: bool,
         read_instructions: Optional[str],
         write_instructions: Optional[str],
+        context_strategies: List[MemoryContextStrategy],
+        memory_context_strategy: str = "full",
         writable_source: Optional[str] = None,
         include_sources: Optional[Set[str]] = None,
         exclude_sources: Optional[Set[str]] = None,
     ):
-        self.__stores = stores
         self.__enabled = enabled
         self.__inject_context = inject_context
         self.__provide_tools = provide_tools
         self.__read_instructions = read_instructions
         self.__write_instructions = write_instructions
-        self.__include_sources = include_sources
-        self.__exclude_sources = exclude_sources
-        self.__writable_source_name = writable_source
-        self.__writable_store: Optional[MemoryStore] = None
-        self.__cached_active: Optional[List[MemoryStore]] = None
+        self.__active = active_sources(
+            stores, enabled, include_sources, exclude_sources
+        )
+        self.__writable = pick_writable(self.__active, writable_source)
+        self.__context_strategy = pick_context_strategy(
+            context_strategies, memory_context_strategy
+        )
+
+    @property
+    def active_stores(self) -> List[MemoryStore]:
+        return self.__active
+
+    @property
+    def writable_store(self) -> Optional[MemoryStore]:
+        """Where memories are written, for the agent's tools and for anything
+        else in the build that persists memories on its behalf. None when
+        memory is off or no store qualifies."""
+        return self.__writable
 
     def describe_loaded(self) -> Dict[str, Any]:
-        writable = self.__get_writable_store()
         return {
             "enabled": self.__enabled,
-            "sources": [s.source_name for s in self.__active_stores()],
-            "writable": writable.source_name if writable else None,
+            "sources": [s.source_name for s in self.__active],
+            "writable": self.__writable.source_name if self.__writable else None,
         }
 
     async def to_prompt(self) -> str:
@@ -127,92 +147,44 @@ class MemoryProvider:
             instructions = f"{instructions}\n\n{self.__write_instructions}"
         sections.append(instructions)
 
-        if self.__inject_context:
-            entries = await self.__load_all_entries()
-            if entries:
-                sections.append(self.__format_entries(entries))
+        if self.__inject_context and self.__context_strategy is not None:
+            context = await self.__context_strategy.to_prompt(self.__active)
+            if context:
+                sections.append(context)
 
         return "\n\n".join(sections)
 
     async def get_tools(self) -> List[Tool]:
-        if not self.__enabled or not self.__provide_tools:
+        if not self.__enabled or not self.__provide_tools or not self.__writable:
             return []
-        writable = self.__get_writable_store()
-        if not writable:
-            return []
-        return writable.get_tools()
-
-    async def __load_all_entries(self) -> List[MemoryEntry]:
-        entries: List[MemoryEntry] = []
-        for store in self.__active_stores():
-            try:
-                entries.extend(await store.load_context())
-            except Exception as e:
-                logger.error(
-                    f"Failed to load memory context from '{store.source_name}': {e}"
-                )
-        return entries
-
-    def __format_entries(self, entries: List[MemoryEntry]) -> str:
-        lines = ["## Recalled memories", ""]
-        for entry in entries:
-            parts = []
-            if entry.id:
-                parts.append(f"id:{entry.id}")
-            if entry.created_at:
-                parts.append(entry.created_at[:10])
-            prefix = f"[{', '.join(parts)}] " if parts else ""
-            lines.append(f"- {prefix}{entry.content}")
-        return "\n".join(lines)
-
-    def __active_stores(self) -> List[MemoryStore]:
-        if self.__cached_active is not None:
-            return self.__cached_active
-        self.__cached_active = [
-            store
-            for store in self.__stores
-            if is_source_active(
-                store.source_name,
-                store.enabled,
-                self.__include_sources,
-                self.__exclude_sources,
-            )
-        ]
-        return self.__cached_active
-
-    def __get_writable_store(self) -> Optional[MemoryStore]:
-        if self.__writable_store is not None:
-            return self.__writable_store
-        active = self.__active_stores()
-        if not active:
-            return None
-        if self.__writable_source_name:
-            for store in active:
-                if store.source_name == self.__writable_source_name:
-                    self.__writable_store = store
-                    return store
-            return None
-        self.__writable_store = active[0]
-        return self.__writable_store
+        return self.__writable.get_tools()
 
 
 class MemoryProviderFactory(AgentDependencyFactory):
+    __singleton__ = True
 
     @classmethod
     def create(
         cls,
         memory_store_group: MemoryStoreGroup = MemoryStoreGroup(items=[]),
+        memory_context_strategy_group: MemoryContextStrategyGroup = (
+            MemoryContextStrategyGroup(items=[])
+        ),
         memory_provider_configuration: MemoryProviderConfiguration = (
             MemoryProviderConfiguration()
         ),
     ) -> MemoryProvider:
         return MemoryProvider(
             stores=memory_store_group.items,
+            context_strategies=memory_context_strategy_group.items,
             enabled=memory_provider_configuration.enabled,
             inject_context=memory_provider_configuration.inject_context,
             provide_tools=memory_provider_configuration.provide_tools,
             read_instructions=memory_provider_configuration.read_instructions,
             write_instructions=memory_provider_configuration.write_instructions,
+            memory_context_strategy=(
+                memory_provider_configuration.memory_context_strategy
+            ),
             writable_source=memory_provider_configuration.writable_source,
             include_sources=(
                 set(memory_provider_configuration.include_sources)

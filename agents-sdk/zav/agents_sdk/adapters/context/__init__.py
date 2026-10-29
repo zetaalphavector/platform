@@ -29,6 +29,11 @@ from zav.agents_sdk.adapters.context.sources.image_context_source import (
     ImageContextSourceConfiguration,
     ImageContextSourceFactory,
 )
+from zav.agents_sdk.adapters.context.sources.rubric_context_source import (
+    RubricContextSource,
+    RubricContextSourceConfiguration,
+    RubricContextSourceFactory,
+)
 from zav.agents_sdk.adapters.context.sources.scheduled_task_context_source import (
     ScheduledTaskContextSource,
     ScheduledTaskContextSourceConfiguration,
@@ -58,6 +63,7 @@ AgentDependencyRegistry.register(CustomContextSourceFactory)
 AgentDependencyRegistry.register(FilterContextSourceFactory)
 AgentDependencyRegistry.register(ScheduledTaskContextSourceFactory)
 AgentDependencyRegistry.register(ImageContextSourceFactory)
+AgentDependencyRegistry.register(RubricContextSourceFactory)
 AgentDependencyRegistry.register(UserDocumentContextSourceFactory)
 AgentDependencyRegistry.register(UserWorkspaceContextSourceFactory)
 
@@ -68,6 +74,9 @@ __all__ = [
     "ContextProviderFactory",
     "ContextSource",
     "ContextSourceGroup",
+    "RubricContextSource",
+    "RubricContextSourceConfiguration",
+    "RubricContextSourceFactory",
     "CustomContextSource",
     "CustomContextSourceConfiguration",
     "CustomContextSourceFactory",

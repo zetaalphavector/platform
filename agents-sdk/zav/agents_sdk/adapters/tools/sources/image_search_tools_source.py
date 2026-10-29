@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional
 import pymupdf
 from jinja2 import Template
 from zav.logging import logger
-from zav.pydantic_compat import BaseModel
 
 from zav.agents_sdk.adapters.agent_state.conversation_image_store import (
     ConversationImageStore,
@@ -13,7 +12,10 @@ from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
     ZAVChatCompletionClient,
 )
 from zav.agents_sdk.adapters.retrievers.zav_retriever import ZAVRetriever
-from zav.agents_sdk.adapters.tools.tools_source import ToolsSource
+from zav.agents_sdk.adapters.tools.tools_source import (
+    ToolsSource,
+    ToolsSourceConfiguration,
+)
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.chat_message import ChatMessage, ChatMessageSender
 from zav.agents_sdk.domain.tools import Tool, hide, streamable
@@ -55,7 +57,7 @@ def _render_pdf_page_to_base64(
         return None
 
 
-class ImageToolsSourceConfiguration(BaseModel):
+class ImageToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = False
     validation_prompt: str = _DEFAULT_VALIDATION_PROMPT
     render_dpi: int = 96
@@ -72,6 +74,7 @@ class ImageToolsSource(ToolsSource):
     """
 
     source_name = "image_tools"
+    source_description = "Compare the user's images against images in the index."
 
     def __init__(
         self,
@@ -86,6 +89,7 @@ class ImageToolsSource(ToolsSource):
         self.__validation_template = Template(
             image_tools_source_configuration.validation_prompt
         )
+        self.defer_tools = image_tools_source_configuration.defer_tools
         self.enabled = image_tools_source_configuration.enabled
         self.__render_dpi = image_tools_source_configuration.render_dpi
 

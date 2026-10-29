@@ -34,6 +34,7 @@ class InMemorySkillsSource(SkillsSource):
     """
 
     source_name = "in_memory_skills"
+    source_description = "Skills written in this configuration."
 
     def __init__(
         self,
