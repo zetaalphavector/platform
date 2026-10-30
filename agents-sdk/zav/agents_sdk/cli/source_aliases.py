@@ -152,6 +152,48 @@ _PROVIDERS: Tuple[ProviderInfo, ...] = (
         ),
     ),
     ProviderInfo(
+        name="system_prompt",
+        config_key="system_prompt_provider_configuration",
+        display_name="System Prompt",
+        cli_name="system-prompt-sources",
+        source_base=(
+            "zav.agents_sdk.adapters.system_prompt.system_prompt_source",
+            "SystemPromptSource",
+        ),
+        config_model=(
+            "zav.agents_sdk.adapters.system_prompt.system_prompt_provider",
+            "SystemPromptProviderConfiguration",
+        ),
+    ),
+    ProviderInfo(
+        name="tool_policy",
+        config_key="tool_policy_configuration",
+        display_name="Tool Rules",
+        cli_name="tool-rules",
+        source_base=(
+            "zav.agents_sdk.adapters.tool_policy.tool_policy_source",
+            "ToolPolicySource",
+        ),
+        config_model=(
+            "zav.agents_sdk.adapters.tool_policy.tool_policy_source",
+            "ToolPolicyConfiguration",
+        ),
+    ),
+    ProviderInfo(
+        name="tool_search",
+        config_key="tool_search_provider_configuration",
+        display_name="Tool Search",
+        cli_name="tool-search-methods",
+        source_base=(
+            "zav.agents_sdk.adapters.tool_search.tool_search_source",
+            "ToolSearchSource",
+        ),
+        config_model=(
+            "zav.agents_sdk.adapters.tool_search.tool_search_provider",
+            "ToolSearchProviderConfiguration",
+        ),
+    ),
+    ProviderInfo(
         name="mcp",
         config_key="mcp_tools_provider_configuration",
         display_name="MCP Tools",
@@ -226,6 +268,9 @@ class SourceRegistry:
             "zav.agents_sdk.adapters.interjections",
             "zav.agents_sdk.adapters.tools.sources.self_improvement",
             "zav.agents_sdk.adapters.repl",
+            "zav.agents_sdk.adapters.system_prompt",
+            "zav.agents_sdk.adapters.tool_policy",
+            "zav.agents_sdk.adapters.tool_search",
         ]
         from importlib import import_module
 

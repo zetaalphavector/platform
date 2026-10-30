@@ -13,6 +13,7 @@ from zav.agents_sdk.adapters.queued_messages import *
 from zav.agents_sdk.adapters.repl import *
 from zav.agents_sdk.adapters.retrievers import *
 from zav.agents_sdk.adapters.skills import *
+from zav.agents_sdk.adapters.system_prompt import *
 from zav.agents_sdk.adapters.tags import *
 from zav.agents_sdk.adapters.tool_confirmation import *
 from zav.agents_sdk.adapters.tool_policy import *

@@ -157,6 +157,34 @@ def _get_pydantic_model_schema(model: BaseModel):
     return _inline_refs(schema)
 
 
+# Constraint attributes of pydantic v1 ``FieldInfo`` and of ``annotated_types``
+# (pydantic v2 keeps the latter in ``FieldInfo.metadata``), per JSON Schema type.
+_CONSTRAINT_KEYWORDS = {
+    "string": {"min_length": "minLength", "max_length": "maxLength"},
+    "array": {
+        "min_length": "minItems",
+        "max_length": "maxItems",
+        "min_items": "minItems",
+        "max_items": "maxItems",
+    },
+    "integer": {
+        "ge": "minimum",
+        "le": "maximum",
+        "gt": "exclusiveMinimum",
+        "lt": "exclusiveMaximum",
+    },
+}
+_CONSTRAINT_KEYWORDS["number"] = _CONSTRAINT_KEYWORDS["integer"]
+
+
+def _add_constraints(schema: Dict[str, Any], constraint: Any) -> None:
+    keywords = _CONSTRAINT_KEYWORDS.get(schema.get("type", ""), {})
+    for attribute, keyword in keywords.items():
+        value = getattr(constraint, attribute, None)
+        if value is not None:
+            schema[keyword] = value
+
+
 def _get_json_type(typ):
     """Translate Python types to JSON Schema types"""
     origin = get_origin(typ)
@@ -179,7 +207,16 @@ def _get_json_type(typ):
                     schema["description"] = meta.description
                     break
 
+            for meta in metadata:
+                _add_constraints(schema, meta)
+                for constraint in getattr(meta, "metadata", None) or []:
+                    _add_constraints(schema, constraint)
+
             return schema
+
+    if origin is Literal:
+        values = list(get_args(typ))
+        return {**_get_json_type(type(values[0])), "enum": values}
 
     # Handle Pydantic models (any class with __fields__ and schema())
     if isinstance(typ, type) and hasattr(typ, "__fields__") and hasattr(typ, "schema"):
@@ -217,6 +254,8 @@ def _get_json_type(typ):
         return {"type": "integer"}
     elif typ == bool:
         return {"type": "boolean"}
+    elif typ == float:
+        return {"type": "number"}
     else:
         return {"type": "string"}  # Default type
 
@@ -267,6 +306,48 @@ class ToolOptions(BaseModel):
     # The rule source that set the confirmation; None while auto.
     confirmation_source: Optional[str] = None
     on_demand: bool = False
+
+
+class ToolCallRefused(PermissionError):
+    """A tool rule refused a call made outside a turn, or its result."""
+
+
+class CallDecision(BaseModel):
+    """A tool rule's say on one call the model made, before it runs:
+    ``decline`` it, ``message`` being the tool result the model gets instead
+    and ``reason`` what the user is told, or ``ask`` the user first."""
+
+    action: Literal["decline", "ask"]
+    message: str = ""
+    reason: str = ""
+
+    @classmethod
+    def decline(cls, message: str, reason: str = "") -> "CallDecision":
+        return cls(action="decline", message=message, reason=reason)
+
+    @classmethod
+    def ask(cls) -> "CallDecision":
+        return cls(action="ask")
+
+
+class ResultDecision(BaseModel):
+    """A tool rule's say on a call's result, before the model, the user or
+    Python code see it: ``replace`` it with ``value``, for example redacted,
+    in the shape the tool returns; or ``block`` it, ``message`` being what
+    the model gets instead. ``reason`` is what the user is told."""
+
+    action: Literal["replace", "block"]
+    value: Any = None
+    message: str = ""
+    reason: str = ""
+
+    @classmethod
+    def replace(cls, value: Any, reason: str = "") -> "ResultDecision":
+        return cls(action="replace", value=value, reason=reason)
+
+    @classmethod
+    def block(cls, message: str, reason: str = "") -> "ResultDecision":
+        return cls(action="block", message=message, reason=reason)
 
 
 class Tool(BaseModel):

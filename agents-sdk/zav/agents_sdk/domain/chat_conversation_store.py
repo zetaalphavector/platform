@@ -26,10 +26,8 @@ class ConversationNotOwnedError(HandlerException):
         self.session_id = session_id
         self.owner = owner
         self.requester = requester
-        super().__init__(
-            f"Conversation {session_id!r} is owned by {owner!r}; "
-            f"{requester!r} cannot write to it (sharing is read-only)."
-        )
+        # The message is the 403 body: it must not name the owner.
+        super().__init__(f"Only its owner can write to conversation {session_id!r}.")
 
 
 class ChatConversationStore(ABC):
@@ -76,6 +74,19 @@ class ChatConversationStore(ABC):
         Raises ``ConversationNotOwnedError`` if ``requester_uuid`` is not the
         conversation's owner (writes are owner-only; sharing is read-only).
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def require_owner(
+        self,
+        tenant: str,
+        requester_uuid: Optional[str],
+        session_id: str,
+    ) -> None:
+        """Raise ``ConversationNotOwnedError`` if the conversation exists and
+        ``requester_uuid`` is not its owner. A missing conversation passes: the
+        turn creates it. Checked before a turn stores anything of its own, so a
+        refused turn leaves nothing behind."""
         raise NotImplementedError
 
     @abstractmethod

@@ -334,6 +334,79 @@ SOURCE_TEMPLATES = {
             yield response, message
 """,  # noqa: E501
     },
+    "system_prompt": {
+        "base_import": "from zav.agents_sdk.adapters.system_prompt.system_prompt_source import SystemPromptSource",  # noqa: E501
+        "extra_imports": "",
+        "base_class": "SystemPromptSource",
+        # security.py strips this block suffix from bot_params.
+        "config_infix": "_system_prompt_source",
+        "body": """
+    source_name = "{source_name}"
+
+    def __init__(self, {config_snake}_configuration: {class_name}Configuration):
+        self.enabled = {config_snake}_configuration.enabled
+
+    async def to_prompt(self) -> str:
+        # TODO: return your system prompt text
+        return "You are a helpful assistant."
+""",  # noqa: E501
+    },
+    "tool_policy": {
+        "base_import": "from zav.agents_sdk.adapters.tool_policy.tool_policy_source import ToolPolicySource",  # noqa: E501
+        "extra_imports": (
+            "from typing import Any, List, Optional\n"
+            "from zav.agents_sdk.adapters.llm_models.chat_completion_types import ChatCompletion, ToolCallRequest\n"  # noqa: E501
+            "from zav.agents_sdk.domain.tools import CallDecision, ResultDecision, Tool"
+        ),
+        "base_class": "ToolPolicySource",
+        # security.py strips this block suffix from bot_params.
+        "config_infix": "_rule_source",
+        "body": """
+    source_name = "{source_name}"
+
+    def __init__(self, {config_snake}_configuration: {class_name}Configuration):
+        self.enabled = {config_snake}_configuration.enabled
+
+    async def apply(
+        self, tools: List[Tool], transcript: Optional[List[ChatCompletion]]
+    ) -> List[Tool]:
+        # TODO: drop a tool to hide it, or change its options
+        return tools
+
+    async def check_call(
+        self, call: ToolCallRequest, transcript: Optional[List[ChatCompletion]]
+    ) -> Optional[CallDecision]:
+        # TODO: CallDecision.decline(message, reason) or CallDecision.ask(); None
+        # runs it. message goes to the model, reason to the user.
+        # transcript is None outside a turn (Python in the REPL, an MCP client).
+        return None
+
+    async def check_result(
+        self,
+        call: ToolCallRequest,
+        result: Any,
+        transcript: Optional[List[ChatCompletion]],
+    ) -> Optional[ResultDecision]:
+        # TODO: ResultDecision.replace(value, reason), in the shape the tool
+        # returns, or ResultDecision.block(message, reason); None keeps it
+        return None
+""",  # noqa: E501
+    },
+    "tool_search": {
+        "base_import": "from zav.agents_sdk.adapters.tool_search.tool_search_source import ToolSearchSource",  # noqa: E501
+        "extra_imports": "from zav.llm_domain import ToolSearchMethodSettings, ToolSearchMode",  # noqa: E501
+        "base_class": "ToolSearchSource",
+        "body": """
+    source_name = "{source_name}"
+
+    def __init__(self, {config_snake}_configuration: {class_name}Configuration):
+        self.enabled = {config_snake}_configuration.enabled
+
+    def settings(self) -> ToolSearchMethodSettings:
+        # TODO: pick the search method and its options
+        return ToolSearchMethodSettings(method=ToolSearchMode.EMULATED)
+""",  # noqa: E501
+    },
 }
 
 
@@ -363,6 +436,9 @@ def create_source_files(
         f.write(f"\nfrom .dependencies.{source_name_snake} import *\n")
 
     template = SOURCE_TEMPLATES.get(provider_name)
+    config_snake = source_name_snake + (
+        template.get("config_infix", "") if template else ""
+    )
     if template is None:
         from zav.agents_sdk.cli.source_aliases import get_provider_source_bases
 
@@ -387,10 +463,9 @@ def create_source_files(
         body = template["body"].format(
             source_name=source_name_snake,
             class_name=class_name,
-            config_snake=source_name_snake,
+            config_snake=config_snake,
         )
 
-    config_snake = source_name_snake
     factory_extra_params = template.get("factory_extra_params", "") if template else ""
     factory_extra_args = template.get("factory_extra_args", "") if template else ""
 

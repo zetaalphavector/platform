@@ -52,6 +52,11 @@ _ASK_FIRST_MESSAGE = (
     "Call {name} directly as a tool so the user can approve it."
 )
 
+_RULE_ASKS_MESSAGE = (
+    "A rule asks the user before this {name} call, which cannot be asked from "
+    "Python. Call {name} directly as a tool so the user can approve it."
+)
+
 _TOOL_STUBS_HEADER = (
     "Tools callable from Python (all are `async`, call them with `await`):"
 )
@@ -284,15 +289,22 @@ class ReplProvider:
             )
         }
 
-    @staticmethod
     def __host_function(
-        tools_registry: ToolsRegistry, tool: Tool, asks_first: bool
+        self, tools_registry: ToolsRegistry, tool: Tool, asks_first: bool
     ) -> Callable:
+        tool_policy = self.__tool_policy
+
         async def call(*args: Any, **kwargs: Any) -> Any:
             if asks_first:
                 raise PermissionError(_ASK_FIRST_MESSAGE.format(name=tool.name))
-            params = positional_to_keyword(tool, args, kwargs)
-            return json_safe(await tools_registry.execute(tool.name, params))
+            return json_safe(
+                await tool_policy.execute_outside_turn(
+                    tools_registry,
+                    tool.name,
+                    positional_to_keyword(tool, args, kwargs),
+                    _RULE_ASKS_MESSAGE.format(name=tool.name),
+                )
+            )
 
         call.__name__ = tool.name
         return call

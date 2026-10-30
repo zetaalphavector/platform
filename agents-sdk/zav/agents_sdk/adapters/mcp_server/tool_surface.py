@@ -1,5 +1,5 @@
 import asyncio
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from zav.agents_sdk.adapters.memory.memory_provider import MemoryProvider
 from zav.agents_sdk.adapters.skills.skills_provider import SkillsProvider
@@ -9,7 +9,11 @@ from zav.agents_sdk.domain.agent_dependency import (
     AgentDependencyFactory,
     AgentDependencyRegistry,
 )
-from zav.agents_sdk.domain.tools import Tool
+from zav.agents_sdk.domain.tools import Tool, ToolsRegistry
+
+_RULE_ASKS_MESSAGE = (
+    "A rule asks the user before this {name} call, which an MCP call cannot do."
+)
 
 
 class ToolSurface:
@@ -18,8 +22,9 @@ class ToolSurface:
     exactly this; the agent merges it with its loop-only providers (delegation,
     consume-side MCP, context). A capability joins by becoming a
     ToolSurfaceFactory.create parameter — deliberately, never implicitly.
-    The tool rules apply as in the agent loop; a tool
-    that asks first is left out, since an MCP call cannot pause for the user."""
+    The tool rules apply as in the agent loop, on each call and its result
+    too; a tool that asks first is left out, since an MCP call cannot pause
+    for the user."""
 
     def __init__(
         self,
@@ -48,6 +53,13 @@ class ToolSurface:
             for tool in offered.tools
             if tool.options.confirmation not in ("ask", "require")
         ]
+
+    async def call(self, name: str, params: Optional[Dict[str, Any]]) -> Any:
+        tools_registry = ToolsRegistry()
+        tools_registry.extend(await self.get_tools())
+        return await self.__tool_policy.execute_outside_turn(
+            tools_registry, name, params, _RULE_ASKS_MESSAGE.format(name=name)
+        )
 
 
 class ToolSurfaceFactory(AgentDependencyFactory):

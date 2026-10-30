@@ -21,6 +21,7 @@ from zav.agents_sdk.adapters.message_processing.message_processing_provider impo
 )
 from zav.agents_sdk.adapters.repl import ReplProvider
 from zav.agents_sdk.adapters.skills.skills_provider import SkillsProvider
+from zav.agents_sdk.adapters.system_prompt import SystemPromptProvider
 from zav.agents_sdk.adapters.tools.tools_provider import ToolsProvider
 from zav.agents_sdk.domain.chat_agent import StreamableChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import ChatAgentClassRegistry
@@ -107,6 +108,7 @@ class Agent(StreamableChatAgent):
         instructions_provider: InstructionsProvider,
         interjections_provider: InterjectionsProvider,
         repl_provider: ReplProvider,
+        system_prompt_provider: SystemPromptProvider,
         conversation_context: Optional[ConversationContext] = None,
         system_prompt: str = _MAIN_SYSTEM_PROMPT,
     ):
@@ -122,6 +124,7 @@ class Agent(StreamableChatAgent):
         self.__instructions_provider = instructions_provider
         self.__interjections_provider = interjections_provider
         self.__repl_provider = repl_provider
+        self.__system_prompt_provider = system_prompt_provider
         self.__conversation_context = conversation_context
         self.__system_prompt = system_prompt
         # The turn reads these providers' cached listings before each model
@@ -165,6 +168,7 @@ class Agent(StreamableChatAgent):
         )
 
         (
+            system_prompt_sources_prompt,
             skills_prompt,
             delegate_prompt,
             tools_prompt,
@@ -174,6 +178,7 @@ class Agent(StreamableChatAgent):
             interjections_prompt,
             repl_prompt,
         ) = await asyncio.gather(
+            self.__system_prompt_provider.to_prompt(),
             self.__skills_provider.to_prompt(),
             self.__agent_delegation_provider.to_prompt(),
             self.__tools_provider.to_prompt(),
@@ -187,18 +192,22 @@ class Agent(StreamableChatAgent):
                 await self.tools_registry.current_tools(), completions
             ),
         )
-        for prompt_section in (
-            skills_prompt,
-            delegate_prompt,
-            tools_prompt,
-            instructions_prompt,
-            memory_prompt,
-            context_prompt,
-            interjections_prompt,
-            repl_prompt,
-        ):
-            if prompt_section:
-                self.__system_prompt = f"{self.__system_prompt}\n\n{prompt_section}"
+        self.__system_prompt = "\n\n".join(
+            part
+            for part in (
+                self.__system_prompt,
+                system_prompt_sources_prompt,
+                skills_prompt,
+                delegate_prompt,
+                tools_prompt,
+                instructions_prompt,
+                memory_prompt,
+                context_prompt,
+                interjections_prompt,
+                repl_prompt,
+            )
+            if part
+        )
 
         self.debug(
             {
@@ -218,6 +227,7 @@ class Agent(StreamableChatAgent):
                     ),
                     "interjections": self.__interjections_provider.describe_loaded(),
                     "repl": self.__repl_provider.describe_loaded(),
+                    "system_prompt": self.__system_prompt_provider.describe_loaded(),
                 }
             }
         )

@@ -17,13 +17,20 @@ from zav.agents_sdk.adapters.tool_policy.tool_policy_source import (
     waive_asking,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyRegistry
-from zav.agents_sdk.domain.tools import Confirmation, ToolOptions
+from zav.agents_sdk.domain.tools import (
+    CallDecision,
+    Confirmation,
+    ResultDecision,
+    ToolOptions,
+)
 
 AgentDependencyRegistry.register(ToolPolicyProviderFactory)
 AgentDependencyRegistry.register(SkillToolsRuleSourceFactory)
 
 __all__ = [
+    "CallDecision",
     "Confirmation",
+    "ResultDecision",
     "SkillToolsRuleSource",
     "SkillToolsRuleSourceFactory",
     "ToolOptions",

@@ -126,6 +126,7 @@ def _replace_tool_response(
     new_responses[resp_idx] = PcToolCallResponse(
         id=tool_call_id,
         tool_response=_make_preview(full_text, preview_tokens, hint),
+        is_error=tcr.is_error,
     )
 
     return PcChatMessage(

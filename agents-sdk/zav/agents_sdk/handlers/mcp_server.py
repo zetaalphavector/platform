@@ -11,7 +11,7 @@ from zav.agents_sdk.domain.mcp_server_setup import (
     MCPServerSetupNotFound,
     MCPServerSetupRetriever,
 )
-from zav.agents_sdk.domain.tools import Tool, ToolsRegistry
+from zav.agents_sdk.domain.tools import Tool
 from zav.agents_sdk.handlers import commands
 
 
@@ -122,6 +122,4 @@ async def handle_call_mcp_tool(
         tracing_backend_factory,
         mcp_server_setup_retriever,
     )
-    tools_registry = ToolsRegistry()
-    tools_registry.extend(await tool_surface.get_tools())
-    return await tools_registry.execute(name=cmd.tool_name, params=cmd.arguments)
+    return await tool_surface.call(cmd.tool_name, cmd.arguments)

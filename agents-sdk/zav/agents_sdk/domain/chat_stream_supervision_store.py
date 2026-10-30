@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+# A running turn whose heartbeat is older than this is dead: its pod stopped.
+DEFAULT_DEAD_AFTER_SECONDS = 3.0
+
 
 class ChatStreamStatus(str, Enum):
     RUNNING = "running"
@@ -25,6 +28,15 @@ class ChatStreamSupervision:
     # producer's pod died, or to resume the same turn) by swapping in a higher
     # epoch, which fences the old producer out.
     epoch: int = 0
+
+    def is_producing(
+        self, now: float, dead_after_seconds: float = DEFAULT_DEAD_AFTER_SECONDS
+    ) -> bool:
+        """Whether a pod is still producing the occupant turn."""
+        return (
+            self.status is ChatStreamStatus.RUNNING
+            and now - self.heartbeat_at <= dead_after_seconds
+        )
 
 
 class ChatStreamSupervisionStore(ABC):

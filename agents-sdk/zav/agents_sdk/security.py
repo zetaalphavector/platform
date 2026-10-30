@@ -25,6 +25,7 @@ _SETUP_ONLY_PARAMS: Set[str] = {
     "tool_policy_configuration",
     "my_documents_argument_resolver_configuration",
     "system_prompt",
+    "system_prompt_provider_configuration",
     "max_nesting_level",
     "chat_service_url",
     "zav_notes_api_host",
@@ -37,17 +38,31 @@ _SETUP_ONLY_PARAMS: Set[str] = {
 }
 # Each tool rule source's own block (``<name>_rule_source_configuration``) is
 # tool policy too: a request filling in ``enabled: false`` would switch the rule
-# off for its turn.
-_SETUP_ONLY_SUFFIX = "_rule_source_configuration"
+# off for its turn. A system prompt source's block is the agent's prompt.
+_SETUP_ONLY_SUFFIXES = (
+    "_rule_source_configuration",
+    "_system_prompt_source_configuration",
+)
 
 # Fields of a configuration block only the agent setup sets. Which MCP servers
 # an agent uses, mounted or defined inline, is the admin's choice; a request may
 # only narrow it (``selected_servers``), and leaves its confirmation default
-# as the setup set it.
+# as the setup set it. So are the paths a source reads or writes and the URLs
+# the server fetches.
 _SETUP_ONLY_FIELDS: Dict[str, Set[str]] = {
     "mcp_tools_provider_configuration": {"mounts", "servers", "confirmation_default"},
     "agent_delegation_provider_configuration": {"sub_agent_approvals"},
     "sub_agent_tool_source_configuration": {"sub_agent_approvals"},
+    "disk_instruction_source_configuration": {"instructions_directories"},
+    "disk_skills_source_configuration": {"skills_directories"},
+    "disk_rubric_source_configuration": {"rubrics_directories"},
+    "file_attempt_store_configuration": {"directory"},
+    "file_memory_store_configuration": {"file_path"},
+    "file_notification_channel_configuration": {"directory"},
+    "local_file_mcp_oauth_integration_store_configuration": {"file_path"},
+    "monty_repl_sandbox_configuration": {"workspace_directory"},
+    "platform_docs_tools_source_configuration": {"docs_base_url"},
+    "refiner_configuration": {"ledger_path"},
 }
 
 __all__ = [
@@ -82,6 +97,6 @@ def sanitize_bot_params(bot_params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         for k, v in bot_params.items()
         if k not in _PROTECTED_HANDLER_PARAMS
         and k not in _SETUP_ONLY_PARAMS
-        and not k.endswith(_SETUP_ONLY_SUFFIX)
+        and not k.endswith(_SETUP_ONLY_SUFFIXES)
         and (k not in _SETUP_ONLY_FIELDS or isinstance(v, dict))
     }
