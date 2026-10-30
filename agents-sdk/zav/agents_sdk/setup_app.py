@@ -16,6 +16,7 @@ from typing import (
 
 from fastapi import APIRouter, FastAPI
 from zav.api import setup_api
+from zav.api.app_resources import ApiLifespan
 from zav.llm_tracing import TracingBackendFactory
 from zav.message_bus import (
     BootstrapDependency,
@@ -38,6 +39,7 @@ from zav.agents_sdk.adapters.stream_buffer import StreamBufferRegistry
 from zav.agents_sdk.bootstrap import setup_bootstrap
 from zav.agents_sdk.controllers import routers as default_routers
 from zav.agents_sdk.dependencies import (
+    get_chat_conversation_store,
     get_chat_stream_recording_store,
     get_chat_stream_supervision_store,
     get_message_inbox_store,
@@ -80,6 +82,7 @@ def setup_app(
     realtime_transcription_setup_retriever: Optional[
         RealtimeTranscriptionSetupRetriever
     ] = None,
+    lifespans: Optional[List[ApiLifespan]] = None,
 ) -> FastAPI:
     if stream_buffer_registry is None:
         stream_buffer_registry = StreamBufferRegistry()
@@ -93,6 +96,7 @@ def setup_app(
             **get_message_inbox_store.bind(message_inbox_store),
             **get_chat_stream_recording_store.bind(chat_stream_recording_store),
             **get_chat_stream_supervision_store.bind(chat_stream_supervision_store),
+            **get_chat_conversation_store.bind(chat_conversation_store),
         }
 
     @asynccontextmanager
@@ -129,7 +133,11 @@ def setup_app(
     app = setup_api(
         bootstrap=bootstrap,
         routers=list(routers or default_routers),
-        lifespans=[stream_buffer_registry_lifespan, warm_up_lifespan],
+        lifespans=[
+            stream_buffer_registry_lifespan,
+            warm_up_lifespan,
+            *(lifespans or []),
+        ],
     )
     add_exception_handlers(app)
 

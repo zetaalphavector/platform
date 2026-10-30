@@ -5,12 +5,14 @@ from dataclasses import dataclass
 from typing import (
     Any,
     AsyncIterator,
+    Awaitable,
     Callable,
     ContextManager,
     Dict,
     List,
     Literal,
     Optional,
+    Set,
     Tuple,
     Union,
 )
@@ -29,8 +31,14 @@ from zav.agents_sdk.adapters.tool_confirmation.session_approvals import (
     SessionApprovals,
 )
 from zav.agents_sdk.domain.agent_creator import SubAgentToolResult
-from zav.agents_sdk.domain.chat_message import ContentPart, ContentPartTool
+from zav.agents_sdk.domain.chat_message import (
+    ContentPart,
+    ContentPartTool,
+    FunctionCallRequest,
+)
 from zav.agents_sdk.domain.tools import (
+    CallDecision,
+    ResultDecision,
     Tool,
     ToolsRegistry,
     apply_transform,
@@ -39,6 +47,7 @@ from zav.agents_sdk.domain.tools import (
 from zav.agents_sdk.domain.turn_inbox import ApprovalOutcome
 
 CONFIRMATION_REQUIRED_DISPLAY_TEXT = "Waiting for your confirmation"
+RESULT_BLOCKED_DISPLAY_TEXT = "Blocked"
 TOOL_DECLINED_MESSAGE = (
     "The user declined this action. Do not retry it unless the user asks."
 )
@@ -56,6 +65,11 @@ TOOL_CONFIRMATION_UNAVAILABLE_MESSAGE = (
     "in the main chat."
 )
 
+CallCheck = Callable[
+    [ToolCallRequest, List[ToolCallRequest]], Awaitable[Optional[CallDecision]]
+]
+ResultCheck = Callable[[ToolCallRequest, Any], Awaitable[Optional[ResultDecision]]]
+
 
 @dataclass(frozen=True)
 class ToolCallVerdict:
@@ -68,6 +82,8 @@ class ToolCallVerdict:
     # Tool response for a declined call, and the status the UI shows for it.
     message: Optional[str] = None
     status: Optional[str] = None
+    # Why a rule declined the call, for the user; the model gets ``message``.
+    rule_reason: Optional[str] = None
 
 
 CONFIRMATION_DECLINED_DISPLAY_TEXT = "Declined"
@@ -93,6 +109,12 @@ def _parse_result_dict(exec_response: Any) -> Optional[dict]:
     return None
 
 
+def _tool_text(exec_response: Any) -> str:
+    if isinstance(exec_response, (dict, list)):
+        return json.dumps(exec_response, ensure_ascii=False, default=str)
+    return str(exec_response)
+
+
 class ToolCallRunner:
     """Executes model-requested tools and optional streaming tool events."""
 
@@ -105,6 +127,8 @@ class ToolCallRunner:
         concurrent_tool_execution: bool = False,
         session_approvals: Optional[SessionApprovals] = None,
         approvals: Optional[ToolApprovals] = None,
+        check_call: Optional[CallCheck] = None,
+        check_result: Optional[ResultCheck] = None,
     ) -> None:
         # Runs tools through the round's whole registry, so a tool that calls
         # others (the REPL) gets them all; the model may call only the ones
@@ -121,6 +145,10 @@ class ToolCallRunner:
         self.__span = span
         self.__concurrent_tool_execution = concurrent_tool_execution
         self.__session_approvals = session_approvals
+        self.__check_call = check_call
+        self.__check_result = check_result
+        # A rule's ask holds per call, so its card offers no "allow for this chat".
+        self.__rule_asks: Set[str] = set()
 
     async def execute(
         self, tool_call_requests: Optional[List[ToolCallRequest]] = None
@@ -174,8 +202,8 @@ class ToolCallRunner:
             self.__log_fn({"Tool Call Requests": tool_call_requests})
 
         verdicts = [
-            await self.__verdict(tool_call_request)
-            for tool_call_request in tool_call_requests
+            await self.__verdict(tool_call_request, tool_call_requests[:index])
+            for index, tool_call_request in enumerate(tool_call_requests)
         ]
         asked = {
             tool_call_request.id
@@ -258,7 +286,13 @@ class ToolCallRunner:
                     should_return_to_user=True,
                 )
                 return
-            tool_outputs.append({"id": result["id"], "response": result["response"]})
+            tool_outputs.append(
+                {
+                    "id": result["id"],
+                    "response": result["response"],
+                    "is_error": result["error"] is not None,
+                }
+            )
 
         yield ToolCallResult(
             chat_completion=ChatCompletion(
@@ -268,15 +302,30 @@ class ToolCallRunner:
                     ToolCallResponse(
                         id=tool_output["id"],
                         response=tool_output["response"],
+                        is_error=tool_output["is_error"],
                     )
                     for tool_output in tool_outputs
                 ],
             ),
         )
 
-    async def __verdict(self, tool_call_request: ToolCallRequest) -> ToolCallVerdict:
+    async def __verdict(
+        self, tool_call_request: ToolCallRequest, earlier: List[ToolCallRequest]
+    ) -> ToolCallVerdict:
         func = tool_call_request.function_call_request
         tool = self.__callable.get(func.name)
+        if tool is not None and self.__check_call is not None:
+            decision = await self.__check_call(tool_call_request, earlier)
+            if decision is not None and decision.action == "decline":
+                return ToolCallVerdict(
+                    action="decline",
+                    message=decision.message,
+                    status="declined_by_rule",
+                    rule_reason=decision.reason or None,
+                )
+            if decision is not None:
+                self.__rule_asks.add(tool_call_request.id)
+                return ToolCallVerdict(action="ask", params=func.params)
         # A tool the client runs reaches it only as a card, asked or not.
         asks = self.__asks_user(tool, func.name) or (
             tool is not None and tool.runs_on_client
@@ -338,7 +387,11 @@ class ToolCallRunner:
             [tool_call_requests[index].id for index in asked]
         )
         for index in asked:
-            verdicts[index] = self.__decided(tool_call_requests[index], outcome)
+            verdicts[index] = await self.__rechecked(
+                tool_call_requests[index],
+                tool_call_requests[:index],
+                self.__decided(tool_call_requests[index], outcome),
+            )
         if not approvals.root:
             inbox.publish(
                 [
@@ -370,6 +423,7 @@ class ToolCallRunner:
             )
         if (
             decision.decision == "allow_session"
+            and tool_call_request.id not in self.__rule_asks
             and self.__session_approvals is not None
             and self.__allows_session(self.__callable.get(func.name))
         ):
@@ -388,6 +442,38 @@ class ToolCallRunner:
             ),
         )
 
+    async def __rechecked(
+        self,
+        tool_call_request: ToolCallRequest,
+        earlier: List[ToolCallRequest],
+        verdict: ToolCallVerdict,
+    ) -> ToolCallVerdict:
+        """The rules saw the model's inputs; inputs the user edited are a new
+        call they must see too. The user approved these inputs, so a rule's
+        ask is met and only its decline stands."""
+        func = tool_call_request.function_call_request
+        if (
+            verdict.action != "run"
+            or verdict.params == func.params
+            or self.__check_call is None
+        ):
+            return verdict
+        edited = ToolCallRequest(
+            id=tool_call_request.id,
+            function_call_request=FunctionCallRequest(
+                name=func.name, params=verdict.params
+            ),
+        )
+        decision = await self.__check_call(edited, earlier)
+        if decision is not None and decision.action == "decline":
+            return ToolCallVerdict(
+                action="decline",
+                message=decision.message,
+                status="declined_by_rule",
+                rule_reason=decision.reason or None,
+            )
+        return verdict
+
     def __resolution_event(
         self, tool_call_request: ToolCallRequest, verdict: ToolCallVerdict
     ) -> ContentPartTool:
@@ -404,6 +490,7 @@ class ToolCallRunner:
             display_text=CONFIRMATION_DECLINED_DISPLAY_TEXT if declined else None,
             status="completed" if declined else "running",
             display=tool.display if tool else None,
+            rule_reason=verdict.rule_reason,
         )
 
     def __confirmation_event(
@@ -422,8 +509,10 @@ class ToolCallRunner:
                 "icon_url": display.icon_url if display else None,
                 "title": display.title if display else None,
                 "parameters_spec": tool.get_parameters_spec() if tool else None,
-                "allow_session": self.__allows_session(tool),
-                "asks": self.__asks_user(tool, func.name),
+                "allow_session": tool_call_request.id not in self.__rule_asks
+                and self.__allows_session(tool),
+                "asks": tool_call_request.id in self.__rule_asks
+                or self.__asks_user(tool, func.name),
             },
             display_text=CONFIRMATION_REQUIRED_DISPLAY_TEXT,
             status="completed",
@@ -464,8 +553,21 @@ class ToolCallRunner:
             exec_response = await self.__tools_registry.execute(
                 name=tool_name, params=tool_params
             )
+            blocked_message: Optional[str] = None
+            replaced = False
+            rule_reason: Optional[str] = None
+            if self.__check_result is not None:
+                decision = await self.__check_result(tool_call_request, exec_response)
+                if decision is not None and decision.action == "block":
+                    exec_response, blocked_message = None, decision.message
+                elif decision is not None:
+                    exec_response, replaced = decision.value, True
+                if decision is not None and decision.reason:
+                    rule_reason = decision.reason
             sub_agent_parts: List[ContentPart] = []
-            if isinstance(exec_response, SubAgentToolResult):
+            if blocked_message is not None:
+                tool_response = blocked_message
+            elif isinstance(exec_response, SubAgentToolResult):
                 sub_agent_parts = exec_response.content_parts
                 tool_response = exec_response.text
                 exec_response = {"text": exec_response.text}
@@ -477,13 +579,13 @@ class ToolCallRunner:
                     else None
                 )
                 if llm_transform is not None:
-                    tool_response = str(
+                    tool_response = _tool_text(
                         apply_transform(
                             _parse_result_dict(exec_response), llm_transform
                         )
                     )
                 else:
-                    tool_response = str(exec_response)
+                    tool_response = _tool_text(exec_response)
             if verdict.note:
                 tool_response = f"{verdict.note}\n\n{tool_response}"
             if tool_span:
@@ -493,6 +595,9 @@ class ToolCallRunner:
                 "response": tool_response,
                 "exec_response": exec_response,
                 "sub_agent_parts": sub_agent_parts,
+                "blocked": blocked_message is not None,
+                "replaced": replaced,
+                "rule_reason": rule_reason,
                 "error": None,
             }
         except ValueError as value_error:
@@ -602,10 +707,25 @@ class ToolCallRunner:
                 display_text=CONFIRMATION_DECLINED_DISPLAY_TEXT,
                 status="completed",
                 display=meta["display"],
+                rule_reason=verdict.rule_reason,
             )
 
-        # A card the user answered shows the call's outcome in its place.
-        if streaming_config is None and meta["asked"]:
+        if result.get("blocked"):
+            return ContentPartTool(
+                tool_call_id=tool_call_request.id,
+                name=meta["tool_name"],
+                params=meta["visible_params"],
+                response={"status": "blocked_by_rule"},
+                display_text=RESULT_BLOCKED_DISPLAY_TEXT,
+                status="completed",
+                display=meta["display"],
+                rule_reason=result["rule_reason"],
+            )
+
+        replaced = bool(result.get("replaced"))
+        # A card the user answered shows the call's outcome in its place, and
+        # a result a rule replaced shows that a rule changed it.
+        if streaming_config is None and (meta["asked"] or replaced):
             return ContentPartTool(
                 tool_call_id=tool_call_request.id,
                 name=meta["tool_name"],
@@ -613,6 +733,8 @@ class ToolCallRunner:
                 response=_parse_result_dict(result["exec_response"]),
                 status="error" if result["error"] else "completed",
                 display=meta["display"],
+                replaced_by_rule=replaced,
+                rule_reason=result.get("rule_reason"),
             )
 
         if result["error"]:
@@ -650,4 +772,6 @@ class ToolCallRunner:
             ),
             status="completed",
             display=meta["display"],
+            replaced_by_rule=replaced,
+            rule_reason=result.get("rule_reason"),
         )

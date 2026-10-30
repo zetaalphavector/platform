@@ -14,6 +14,7 @@ from zav.pydantic_compat import pydantic_encoder
 
 from zav.agents_sdk.domain.mcp_server_setup import MCPServerSetupNotFound
 from zav.agents_sdk.domain.request_headers import RequestHeaders
+from zav.agents_sdk.domain.tools import ToolCallRefused
 from zav.agents_sdk.handlers import commands
 
 
@@ -108,6 +109,12 @@ async def _on_call_tool(
         raise MCPError(code=mcp_types.INVALID_PARAMS, message=str(exc))
     except MCPError:
         raise
+    except ToolCallRefused as refused:
+        logger.info(f"MCP call_tool {params.name} refused by a tool rule")
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text=str(refused))],
+            is_error=True,
+        )
     except Exception as e:
         logger.exception("MCP call_tool %s failed", params.name)
         return mcp_types.CallToolResult(

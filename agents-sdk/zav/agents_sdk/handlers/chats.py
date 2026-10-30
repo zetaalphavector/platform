@@ -219,6 +219,14 @@ async def take_turn_messages(
     return await turn_inbox.messages()
 
 
+@EventHandlerRegistry.register(events.ConversationUpdated)
+async def ignore_conversation_updated(
+    event: events.ConversationUpdated, queue: List[Message]
+) -> None:
+    """Default for hosts without a handler; the message bus raises on an event
+    with none."""
+
+
 async def record_bot_turn(
     cmd: commands.CreateChatResponse,
     chat_conversation_store: Optional[ChatConversationStore],

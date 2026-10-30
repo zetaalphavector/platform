@@ -37,6 +37,8 @@ class FunctionCallResponse(BaseModel):
 class ToolCallResponse(BaseModel):
     id: str
     response: Optional[str] = None
+    # The tool raised; ``response`` is the error text.
+    is_error: bool = False
 
 
 class ChatCompletionSender(str, enum.Enum):
@@ -187,6 +189,7 @@ def parse_chat_message(message: Union[ChatMessage, ChatCompletion]) -> PcChatMes
                 PcToolCallResponse(
                     id=tool_call_response.id,
                     tool_response=tool_call_response.response,
+                    is_error=tool_call_response.is_error,
                 )
                 for tool_call_response in message.tool_call_responses
             ]

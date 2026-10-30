@@ -54,12 +54,14 @@ from zav.agents_sdk.adapters.stream_buffer.stream_buffer import (
 )
 from zav.agents_sdk.domain import ChatMessage
 from zav.agents_sdk.domain.agent_async_worker import AgentAsyncWorker
+from zav.agents_sdk.domain.chat_conversation_store import ChatConversationStore
 from zav.agents_sdk.domain.chat_message import ContentPart
 from zav.agents_sdk.domain.chat_stream_recording_store import (
     ChatStreamRecordingStore,
     RecordedStreamEvent,
 )
 from zav.agents_sdk.domain.chat_stream_supervision_store import (
+    DEFAULT_DEAD_AFTER_SECONDS,
     ChatStreamStatus,
     ChatStreamSupervision,
     ChatStreamSupervisionStore,
@@ -70,7 +72,6 @@ from zav.agents_sdk.handlers.commands import CreateChatStream, SendChatMessage
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 1.0
-DEFAULT_DEAD_AFTER_SECONDS = 3.0
 DEFAULT_FOLLOW_POLL_INTERVAL_SECONDS = 0.3
 # How often the producer persists. Each streamed message is a full cumulative
 # snapshot, so persisting coarsely just drops superseded intermediates; the
@@ -175,7 +176,7 @@ def classify_supervision(
         return "done"
     if supervision.status is ChatStreamStatus.ERRORED:
         return "errored"
-    if now - supervision.heartbeat_at > dead_after_seconds:
+    if not supervision.is_producing(now, dead_after_seconds):
         return "dead"
     return None
 
@@ -772,9 +773,11 @@ class ResumableChatStreams:
         replay_max_gap_seconds: float = DEFAULT_REPLAY_MAX_GAP_SECONDS,
         max_run_seconds: Optional[float] = None,
         inbox_store: Optional[MessageInboxStore] = None,
+        conversation_store: Optional[ChatConversationStore] = None,
     ):
         self.__stream_buffer_registry = stream_buffer_registry
         self.__inbox_store = inbox_store
+        self.__conversation_store = conversation_store
         self.__message_bus = message_bus
         self.__recording_store = recording_store
         self.__supervision_store = supervision_store
@@ -789,6 +792,15 @@ class ResumableChatStreams:
     async def create(self, command: CreateChatStream) -> RegisteredStream:
         registry = self.__stream_buffer_registry
         registry.ensure_capacity(tenant=command.tenant)
+        # Before the claim: the slot, the recording and the inbox are keyed by
+        # requester, so a non-owner's refused turn would leave its rows in a
+        # slot no later turn or conversation delete ever reaches.
+        if command.stateful and self.__conversation_store is not None:
+            await self.__conversation_store.require_owner(
+                tenant=command.tenant,
+                requester_uuid=command.request_headers.requester_uuid,
+                session_id=command.session_id,
+            )
         epoch = await self.__claim(command)
         source = LiveStreamSource(
             message_bus=self.__message_bus,

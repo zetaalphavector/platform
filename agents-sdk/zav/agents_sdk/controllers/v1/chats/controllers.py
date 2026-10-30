@@ -38,6 +38,7 @@ from zav.agents_sdk.controllers.v1.chats.types import (
 )
 from zav.agents_sdk.controllers.v1.common import get_headers
 from zav.agents_sdk.dependencies import (
+    get_chat_conversation_store,
     get_chat_stream_recording_store,
     get_chat_stream_supervision_store,
     get_message_inbox_store,
@@ -47,6 +48,7 @@ from zav.agents_sdk.domain import ChatRequest, RequestHeaders
 from zav.agents_sdk.domain.chat_agent_state_store import (
     AgentsStorageNotConfiguredError,
 )
+from zav.agents_sdk.domain.chat_conversation_store import ChatConversationStore
 from zav.agents_sdk.domain.chat_stream_recording_store import ChatStreamRecordingStore
 from zav.agents_sdk.domain.chat_stream_supervision_store import (
     ChatStreamSupervisionStore,
@@ -68,6 +70,9 @@ def get_resumable_chat_streams(
         get_chat_stream_supervision_store
     ),
     message_inbox_store: Optional[MessageInboxStore] = Depends(get_message_inbox_store),
+    chat_conversation_store: Optional[ChatConversationStore] = Depends(
+        get_chat_conversation_store
+    ),
 ) -> ResumableChatStreams:
     return ResumableChatStreams(
         stream_buffer_registry=stream_buffer_registry,
@@ -75,6 +80,7 @@ def get_resumable_chat_streams(
         recording_store=chat_stream_recording_store,
         supervision_store=chat_stream_supervision_store,
         inbox_store=message_inbox_store,
+        conversation_store=chat_conversation_store,
     )
 
 

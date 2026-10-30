@@ -115,10 +115,10 @@ def setup_bootstrap(
         )
     if extra_bootstrap_deps is not None:
         bootstrap_deps.extend(extra_bootstrap_deps)
-        if command_handler_registry is not None:
-            CommandHandlerRegistry.merge(command_handler_registry.registry)
-        if event_handler_registry is not None:
-            EventHandlerRegistry.merge(event_handler_registry.registry)
+    if command_handler_registry is not None:
+        CommandHandlerRegistry.merge(command_handler_registry.registry)
+    if event_handler_registry is not None:
+        EventHandlerRegistry.merge(event_handler_registry.registry)
     return Bootstrap(
         dependencies=bootstrap_deps,
         command_handler_registry=CommandHandlerRegistry,

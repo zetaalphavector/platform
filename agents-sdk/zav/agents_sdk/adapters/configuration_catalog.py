@@ -40,6 +40,12 @@ from zav.agents_sdk.adapters.repl.repl_provider import ReplProvider
 from zav.agents_sdk.adapters.repl.repl_sandbox import ReplSandbox
 from zav.agents_sdk.adapters.skills.skills_provider import SkillsProvider
 from zav.agents_sdk.adapters.skills.skills_source import SkillsSource
+from zav.agents_sdk.adapters.system_prompt.system_prompt_provider import (
+    SystemPromptProvider,
+)
+from zav.agents_sdk.adapters.system_prompt.system_prompt_source import (
+    SystemPromptSource,
+)
 from zav.agents_sdk.adapters.tool_policy import ToolPolicyProvider, ToolPolicySource
 from zav.agents_sdk.adapters.tool_search.tool_search_provider import (
     ToolSearchProvider,
@@ -76,6 +82,7 @@ _PROVIDERS: List[Tuple[type, str]] = [
     (AgentDelegationProvider, "delegation"),
     (MemoryProvider, "memory"),
     (ContextProvider, "context"),
+    (SystemPromptProvider, "system_prompt"),
     (InstructionsProvider, "instructions"),
     (InterjectionsProvider, "interjections"),
     (ReplProvider, "repl"),
@@ -91,6 +98,7 @@ _SOURCES: List[Tuple[type, str]] = [
     (DelegableAgentsSource, "delegation"),
     (MemoryStore, "memory"),
     (ContextSource, "context"),
+    (SystemPromptSource, "system_prompt"),
     (InstructionSource, "instructions"),
     (InterjectionSource, "interjections"),
     (ReplSandbox, "repl"),

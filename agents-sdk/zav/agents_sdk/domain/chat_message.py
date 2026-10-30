@@ -126,6 +126,12 @@ class ContentPartTool(BaseModel):
     display_text: Optional[str] = None
     status: Optional[Literal["running", "completed", "error"]] = None
     display: Optional[ToolDisplay] = None
+    # A tool rule replaced the result (e.g. redacted it); ``response`` is the
+    # replacement, in the tool's shape.
+    replaced_by_rule: bool = False
+    # Why a tool rule declined the call, withheld its result or replaced it, for
+    # the user. The model never sees it.
+    rule_reason: Optional[str] = None
 
 
 class ContentPartTable(BaseModel):

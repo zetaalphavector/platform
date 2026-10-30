@@ -1,4 +1,4 @@
-from typing import AsyncIterator, List, Optional, Set, Union
+from typing import Any, AsyncIterator, List, Optional, Set, Union
 
 from zav.llm_tracing import Span
 from zav.prompt_completion import ChatCompletionClient
@@ -10,6 +10,7 @@ from zav.agents_sdk.adapters.llm_models.chat_completion_types import (
     ChatCompletion,
     ChatCompletionSender,
     ChatResponse,
+    ToolCallRequest,
     convert_chat_response,
     parse_chat_message,
 )
@@ -23,6 +24,8 @@ from zav.agents_sdk.adapters.llm_models.streaming_response_assembler import (
     StreamingResponseAssembler,
 )
 from zav.agents_sdk.adapters.llm_models.tool_call_runner import (
+    CallCheck,
+    ResultCheck,
     ToolCallResult,
     ToolCallRunner,
 )
@@ -38,7 +41,7 @@ from zav.agents_sdk.domain.chat_message import (
     ContentPart,
     ContentPartTool,
 )
-from zav.agents_sdk.domain.tools import ToolsRegistry
+from zav.agents_sdk.domain.tools import CallDecision, ResultDecision, ToolsRegistry
 
 MAX_NESTING_FINAL_TURN_INSTRUCTION = (
     "You have reached the maximum number of tool-calling steps allowed for this "
@@ -265,10 +268,10 @@ class ChatTurnRunner:
                 calls = self.__tool_calls(request, answer)
                 for shown in out.model_chunk(answer, runs_tools=bool(calls)):
                     yield shown
-                if not calls:
+                if not calls or answer.chat_completion is None:
                     continue
                 async for event in self.__run_calls(
-                    request, state, tools, calls, streaming
+                    request, state, tools, answer.chat_completion, streaming
                 ):
                     if isinstance(event, ContentPartTool):
                         yield out.tool_event(answer, event)
@@ -513,7 +516,7 @@ class ChatTurnRunner:
         request: ChatTurnRequest,
         state: ChatTurnState,
         tools: Optional[ToolsRegistry],
-        calls,
+        reply: ChatCompletion,
         streaming: bool,
     ) -> AsyncIterator[Union[ContentPartTool, ToolCallResult]]:
         """Runs the calls through this round's registry: a tool not in it gets
@@ -522,7 +525,15 @@ class ChatTurnRunner:
         if tools is None:
             yield ToolCallResult()
             return
-        runner = self.__tool_runner(tools, request, state.tool_choice)
+        calls = reply.tool_call_requests or []
+        transcript = state.chat_completions
+        runner = self.__tool_runner(
+            tools,
+            request,
+            state.tool_choice,
+            self.__call_check(transcript, reply),
+            self.__result_check(transcript, reply),
+        )
         if streaming and request.should_stream_tool_progress:
             async for event in runner.execute_streaming(calls):
                 yield event
@@ -553,6 +564,8 @@ class ChatTurnRunner:
         tools_registry: ToolsRegistry,
         request: ChatTurnRequest,
         tool_choice: Optional[str],
+        check_call: Optional[CallCheck] = None,
+        check_result: Optional[ResultCheck] = None,
     ) -> ToolCallRunner:
         return ToolCallRunner(
             tools_registry=tools_registry,
@@ -562,7 +575,35 @@ class ChatTurnRunner:
             concurrent_tool_execution=request.concurrent_tool_execution,
             session_approvals=self.__session_approvals,
             approvals=self.__approvals,
+            check_call=check_call,
+            check_result=check_result,
         )
+
+    def __call_check(
+        self, transcript: List[ChatCompletion], reply: ChatCompletion
+    ) -> CallCheck:
+        async def check(
+            call: ToolCallRequest, earlier: List[ToolCallRequest]
+        ) -> Optional[CallDecision]:
+            update = {"tool_call_requests": earlier}
+            so_far = (
+                reply.model_copy(update=update)
+                if PYDANTIC_V2
+                else reply.copy(update=update)
+            )
+            return await self.__tool_policy.check_call(call, [*transcript, so_far])
+
+        return check
+
+    def __result_check(
+        self, transcript: List[ChatCompletion], reply: ChatCompletion
+    ) -> ResultCheck:
+        async def check(call: ToolCallRequest, result: Any) -> Optional[ResultDecision]:
+            return await self.__tool_policy.check_result(
+                call, result, [*transcript, reply]
+            )
+
+        return check
 
 
 class _TurnOutput:

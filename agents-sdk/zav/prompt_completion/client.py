@@ -69,6 +69,7 @@ class ToolCallRequest(BaseModel):
 class ToolCallResponse(BaseModel):
     id: str
     tool_response: Optional[str] = None
+    is_error: bool = False
 
 
 class DocumentContentPart(BaseModel):

@@ -1,13 +1,21 @@
 from abc import ABC
 from fnmatch import fnmatchcase
-from typing import ClassVar, Iterable, List, Optional, Sequence
+from typing import Any, ClassVar, Iterable, List, Optional, Sequence
 
 from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.adapters._filtering import is_source_active
-from zav.agents_sdk.adapters.llm_models.chat_completion_types import ChatCompletion
+from zav.agents_sdk.adapters.llm_models.chat_completion_types import (
+    ChatCompletion,
+    ToolCallRequest,
+)
 from zav.agents_sdk.domain.agent_dependency import DependencyGroup
-from zav.agents_sdk.domain.tools import Tool, ToolOptions
+from zav.agents_sdk.domain.tools import (
+    CallDecision,
+    ResultDecision,
+    Tool,
+    ToolOptions,
+)
 
 
 def matches_any(name: str, patterns: Iterable[str]) -> bool:
@@ -36,6 +44,24 @@ class ToolPolicySource(ABC):
         conversation (an MCP client listing the tools), so rules that only
         shape what a model sees step aside."""
         return tools
+
+    async def check_call(
+        self, call: ToolCallRequest, transcript: Optional[List[ChatCompletion]]
+    ) -> Optional[CallDecision]:
+        """None runs the call. ``transcript`` ends with the calls before it in
+        the same model reply; it is None for a call made outside a turn (Python
+        in the REPL, an MCP client)."""
+        return None
+
+    async def check_result(
+        self,
+        call: ToolCallRequest,
+        result: Any,
+        transcript: Optional[List[ChatCompletion]],
+    ) -> Optional[ResultDecision]:
+        """None keeps ``result``, the tool's return value. A replacement must
+        keep its shape: the UI and Python code read it."""
+        return None
 
 
 class ToolPolicySourceGroup(DependencyGroup[ToolPolicySource]):

@@ -8,13 +8,10 @@ from zav.agents_sdk.adapters.interjections.interjection_source import (
 from zav.agents_sdk.adapters.llm_models.chat_completion_types import (
     ChatCompletion,
     ChatCompletionSender,
+    ToolCallResponse,
 )
 from zav.agents_sdk.adapters.llm_models.chat_turn_request import InnerLoopContext
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-
-# ToolsRegistry.execute wraps every tool exception in this prefix; ToolCallRunner
-# then returns the exception text as the tool response.
-_TOOL_ERROR_PREFIX = "Error in executing tool "
 
 _DEFAULT_MESSAGE = (
     "The tool `{tool_name}` has failed {count} times in a row with:\n"
@@ -89,12 +86,11 @@ def trailing_failure_streak(
     last_error = ""
     count = 0
     for tool_name, response in calls:
-        failed = response.startswith(_TOOL_ERROR_PREFIX)
-        if not failed:
+        if not response.is_error:
             break
         if streak_tool is None:
             streak_tool = tool_name
-            last_error = response
+            last_error = response.response or ""
         if tool_name != streak_tool:
             break
         count += 1
@@ -105,21 +101,16 @@ def trailing_failure_streak(
 
 def tool_calls_newest_first(
     transcript: List[ChatCompletion],
-) -> List[Tuple[str, str]]:
+) -> List[Tuple[str, ToolCallResponse]]:
     names_by_call_id: Dict[str, str] = {}
-    calls: List[Tuple[str, str]] = []
+    calls: List[Tuple[str, ToolCallResponse]] = []
     for completion in transcript:
         for request in completion.tool_call_requests or []:
             names_by_call_id[request.id] = request.function_call_request.name
         if completion.sender != ChatCompletionSender.TOOL:
             continue
         for response in completion.tool_call_responses or []:
-            calls.append(
-                (
-                    names_by_call_id.get(response.id, response.id),
-                    response.response or "",
-                )
-            )
+            calls.append((names_by_call_id.get(response.id, response.id), response))
     calls.reverse()
     return calls
 

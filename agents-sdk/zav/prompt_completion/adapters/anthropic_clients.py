@@ -291,23 +291,24 @@ class AnthropicChatClient(ChatCompletionClient):
             if message.tool_call_responses:
                 tool_results = []
                 for tool_call_response in message.tool_call_responses:
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_call_response.id,
-                            "content": (
-                                [
-                                    {"type": "tool_reference", "tool_name": name}
-                                    for name in found_tool_names(
-                                        tool_call_response.tool_response
-                                    )
-                                ]
-                                or tool_call_response.tool_response
-                                if tool_call_response.id in searches
-                                else tool_call_response.tool_response or ""
-                            ),
-                        }
-                    )
+                    tool_result: Dict[str, Any] = {
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_response.id,
+                        "content": (
+                            [
+                                {"type": "tool_reference", "tool_name": name}
+                                for name in found_tool_names(
+                                    tool_call_response.tool_response
+                                )
+                            ]
+                            or tool_call_response.tool_response
+                            if tool_call_response.id in searches
+                            else tool_call_response.tool_response or ""
+                        ),
+                    }
+                    if tool_call_response.is_error:
+                        tool_result["is_error"] = True
+                    tool_results.append(tool_result)
                 content.extend(tool_results)
             elif message.tool_call_requests:
                 tool_requests = []
