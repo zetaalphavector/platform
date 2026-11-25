@@ -70,6 +70,11 @@ def _called_tool_names(conversation: BotConversation) -> Set[str]:
     return names
 
 
+def _after(carried: str, content: str) -> str:
+    """A round's text after an earlier round's, as its own paragraph."""
+    return f"{carried}\n\n{content}" if carried and content else carried + content
+
+
 def search_call_ids(conversation: BotConversation) -> Set[str]:
     return {
         request.id
@@ -385,12 +390,14 @@ class ToolSearchChatClient(ChatCompletionClient):
             )
             if not self.__search_calls(response):
                 break
-            carried += cast(ChatMessage, response.chat_message).content
+            carried = _after(carried, cast(ChatMessage, response.chat_message).content)
             conversation = self.__answer_searches(
                 request, conversation, settings, response, found
             )
         if carried and response.chat_message is not None:
-            response.chat_message.content = carried + response.chat_message.content
+            response.chat_message.content = _after(
+                carried, response.chat_message.content
+            )
         return response
 
     async def __search_streaming(
@@ -403,7 +410,7 @@ class ToolSearchChatClient(ChatCompletionClient):
         carried = ""
         for search_round in range(MAX_SEARCH_ROUNDS + 1):
             last: Optional[ChatResponse] = None
-            previous = carried
+            written = ""
             stream = cast(
                 AsyncIterator[ChatResponse],
                 await self.__client.complete(
@@ -418,8 +425,9 @@ class ToolSearchChatClient(ChatCompletionClient):
                 ),
             )
             async for chunk in stream:
-                if carried and chunk.chat_message is not None:
-                    chunk.chat_message.content = carried + chunk.chat_message.content
+                if chunk.chat_message is not None:
+                    written = chunk.chat_message.content
+                    chunk.chat_message.content = _after(carried, written)
                 last = chunk
                 # Calls arrive on the stream's final chunk; it is held back until
                 # it is known not to be a search.
@@ -433,7 +441,7 @@ class ToolSearchChatClient(ChatCompletionClient):
                 return
             carried = cast(ChatMessage, last.chat_message).content
             searching = cast(ChatMessage, last.chat_message).copy(
-                update={"content": carried[len(previous) :]}
+                update={"content": written}
             )
             conversation = self.__answer_searches(
                 request,

@@ -33,11 +33,12 @@ from mcp.shared.auth import (
     OAuthClientMetadata,
     OAuthToken,
 )
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, ReadResourceResult
 from mcp.types import Tool as MCPTool
 from mcp.types import ToolListChangedNotification
 from zav.logging import logger
 
+from zav.agents_sdk.adapters.mcp.app_views import app_views_capability
 from zav.agents_sdk.adapters.mcp.oauth_repository import (
     MCPOAuthPendingAuthorization,
     MCPToolListing,
@@ -56,6 +57,9 @@ from zav.agents_sdk.adapters.mcp.server_config import (
     StreamableHttpTransportConfig,
     server_fingerprint,
 )
+
+# Builds the transport of one HTTP client: a client closes its transport.
+HttpTransportFactory = Callable[[], httpx2.AsyncBaseTransport]
 
 
 class InMemoryTokenStorage(TokenStorage):
@@ -128,6 +132,7 @@ class DeferredOAuthClientProvider(OAuthClientProvider):
         pending_auth_urls: Dict[str, str],
         persist_client_info_on_auth: bool = False,
         authorization_server_url: Optional[str] = None,
+        http_transport_factory: Optional[HttpTransportFactory] = None,
     ):
         super().__init__(
             server_url=server_url,
@@ -148,6 +153,7 @@ class DeferredOAuthClientProvider(OAuthClientProvider):
         self.__user_uuid = user_uuid
         self.__pending_auth_urls = pending_auth_urls
         self.__persist_client_info_on_auth = persist_client_info_on_auth
+        self.__http_transport_factory = http_transport_factory
 
     async def __redirect_handler(self, url: str) -> None:
         logger.info(f"OAuth: authorization required for server '{self.__server_name}'")
@@ -194,7 +200,13 @@ class DeferredOAuthClientProvider(OAuthClientProvider):
             await self._perform_authorization_code_grant()
 
     async def __discover_oauth_metadata(self) -> None:
-        async with httpx2.AsyncClient() as client:
+        async with httpx2.AsyncClient(
+            transport=(
+                self.__http_transport_factory()
+                if self.__http_transport_factory
+                else None
+            )
+        ) as client:
             prm_urls = build_protected_resource_metadata_discovery_urls(
                 None, self.context.server_url
             )
@@ -511,6 +523,10 @@ class MCPServerUnavailableError(Exception):
     pass
 
 
+class MCPServerRefusedError(Exception):
+    pass
+
+
 MCPConnectionStatus = Literal[
     "not_connected", "needs_authorization", "connected", "failed", "disabled"
 ]
@@ -543,6 +559,9 @@ class MCPServerConnection:
 
 SessionOpener = Callable[[MCPServerConfig, AsyncExitStack], Awaitable[ClientSession]]
 
+# Raises MCPServerRefusedError for a server that must not be dialled.
+ServerCheck = Callable[[BaseTransportConfig], None]
+
 
 # A server and its new tools, after its open session reported a change.
 ListingListener = Callable[[MCPServerConfig, List[MCPTool]], Awaitable[None]]
@@ -555,7 +574,14 @@ class MCPConnectionService:
     With a connection store, a server is dialled on connect and on its first
     tool call, and its listing is served from the store in between. Without
     one (a bare CLI run, a test) every server is dialled when asked for its
-    status."""
+    status.
+
+    `check_server` sees a server's transport configuration before the server
+    is dialled, and a server it refuses shows as failed with its reason.
+    `http_transport_factory` builds the transport of every HTTP client the
+    service opens, so each request to a server, each redirect hop and OAuth
+    discovery go through it. Without them every server is dialled as
+    configured."""
 
     def __init__(
         self,
@@ -565,8 +591,14 @@ class MCPConnectionService:
         client_session_timeout_seconds: float = 2,
         tool_call_timeout_seconds: float = 30,
         session_opener: Optional[SessionOpener] = None,
+        app_views: bool = False,
+        check_server: Optional[ServerCheck] = None,
+        http_transport_factory: Optional[HttpTransportFactory] = None,
     ):
         self.__tenant = tenant
+        self.__check_server = check_server
+        self.__http_transport_factory = http_transport_factory
+        self.__app_views = app_views
         self.__user_uuid = user_uuid
         self.__store = connection_store if user_uuid else None
         self.__client_session_timeout_seconds = client_session_timeout_seconds
@@ -636,16 +668,31 @@ class MCPConnectionService:
         """Calls one of the server's tools, dialling the server on its first
         call. Raises MCPServerUnavailableError when the server cannot be
         reached or needs the user's authorization."""
+        return await self.__request(
+            server_cfg,
+            lambda s: s.call_tool(
+                tool_name,
+                arguments,
+                read_timeout_seconds=self.__tool_call_timeout_seconds,
+            ),
+        )
+
+    async def read_resource(
+        self, server_cfg: MCPServerConfig, uri: str
+    ) -> ReadResourceResult:
+        """Reads one of the server's resources, such as a tool's view. Raises
+        MCPServerUnavailableError as ``call`` does."""
+        return await self.__request(server_cfg, lambda s: s.read_resource(uri))
+
+    async def __request(
+        self,
+        server_cfg: MCPServerConfig,
+        fn: Callable[[ClientSession], Awaitable[Any]],
+    ) -> Any:
         server_name = server_cfg.get_transport_config().name
         worker = await self.__worker_for(server_cfg)
         try:
-            return await worker.request(
-                lambda s: s.call_tool(
-                    tool_name,
-                    arguments,
-                    read_timeout_seconds=self.__tool_call_timeout_seconds,
-                )
-            )
+            return await worker.request(fn)
         except OAuthFlowError as e:
             await self.__stop_worker(server_name)
             raise MCPServerUnavailableError(str(e)) from e
@@ -894,6 +941,10 @@ class MCPConnectionService:
                 f"Failed to authorize MCP server '{transport_cfg.name}': {e}."
             )
             self.__failure_reasons[transport_cfg.name] = str(e)
+        except MCPServerRefusedError as e:
+            await worker.stop()
+            logger.warning(str(e))
+            self.__failure_reasons[transport_cfg.name] = str(e)
         except asyncio.CancelledError:
             await worker.stop()
             if transport_cfg.name not in self.__pending_auth_urls:
@@ -993,6 +1044,26 @@ class MCPConnectionService:
             pending_auth_urls=self.__pending_auth_urls,
             persist_client_info_on_auth=pre_registered_client_info is not None,
             authorization_server_url=oauth_cfg.authorization_server_url,
+            http_transport_factory=self.__http_transport_factory,
+        )
+
+    def __http_client(
+        self,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[httpx2.Timeout] = None,
+        auth: Optional[httpx2.Auth] = None,
+        follow_redirects: bool = False,
+    ) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(
+            headers=headers,
+            timeout=timeout,
+            auth=auth,
+            follow_redirects=follow_redirects,
+            transport=(
+                self.__http_transport_factory()
+                if self.__http_transport_factory
+                else None
+            ),
         )
 
     def __make_open_session(
@@ -1006,6 +1077,8 @@ class MCPConnectionService:
             return lambda stack: session_opener(server_cfg, stack)
 
         async def open_session(stack: AsyncExitStack) -> ClientSession:
+            if self.__check_server is not None:
+                self.__check_server(transport_cfg)
             oauth_auth = self.__oauth_provider(transport_cfg, state)
             if isinstance(transport_cfg, StdIoTransportConfig):
                 transport = await stack.enter_async_context(
@@ -1029,6 +1102,7 @@ class MCPConnectionService:
                         headers=transport_cfg.headers,
                         timeout=transport_cfg.timeout,
                         sse_read_timeout=transport_cfg.sse_read_timeout,
+                        httpx_client_factory=self.__http_client,
                         auth=oauth_auth,
                     )
                 )
@@ -1037,7 +1111,7 @@ class MCPConnectionService:
                 # they are carried by a caller-owned httpx2 client. Enter it on
                 # the stack before the transport so it outlives the transport.
                 http_client = await stack.enter_async_context(
-                    httpx2.AsyncClient(
+                    self.__http_client(
                         headers=transport_cfg.headers,
                         timeout=httpx2.Timeout(
                             transport_cfg.timeout.total_seconds(),
@@ -1062,6 +1136,7 @@ class MCPConnectionService:
                     read,
                     write,
                     message_handler=self.__listing_watcher(server_cfg),
+                    extensions=app_views_capability() if self.__app_views else None,
                     read_timeout_seconds=(
                         self.__client_session_timeout_seconds
                         if self.__client_session_timeout_seconds

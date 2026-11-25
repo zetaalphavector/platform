@@ -1,3 +1,4 @@
+from zav.agents_sdk.handlers.app_views import *
 from zav.agents_sdk.handlers.chats import *
 from zav.agents_sdk.handlers.mcp_server import *
 

@@ -274,6 +274,8 @@ class LocalFileMCPOAuthRepository(MCPOAuthRepository):
 
 
 class LocalFileMCPOAuthIntegrationStoreFactory(AgentDependencyFactory):
+    local_only = True
+
     @classmethod
     def create(
         cls,

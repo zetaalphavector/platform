@@ -1,8 +1,8 @@
 import base64
-from typing import Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import quote
 
-import httpx
+import httpx2
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from zav.agents_sdk.adapters.mcp.oauth_repository import (
@@ -15,6 +15,17 @@ class MCPOAuthTokenExchangeError(Exception):
 
 
 class MCPOAuthTokenClient:
+    """`http_transport_factory` builds the transport the token endpoint, which
+    the server's metadata named, is reached through."""
+
+    def __init__(
+        self,
+        http_transport_factory: Optional[
+            Callable[[], httpx2.AsyncBaseTransport]
+        ] = None,
+    ):
+        self.__http_transport_factory = http_transport_factory
+
     async def exchange_authorization_code(
         self,
         pending: MCPOAuthPendingAuthorization,
@@ -46,13 +57,19 @@ class MCPOAuthTokenClient:
         )
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx2.AsyncClient(
+                transport=(
+                    self.__http_transport_factory()
+                    if self.__http_transport_factory
+                    else None
+                )
+            ) as client:
                 response = await client.post(
                     pending.token_endpoint,
                     data=token_data,
                     headers=headers,
                 )
-        except httpx.HTTPError as exception:
+        except httpx2.HTTPError as exception:
             raise MCPOAuthTokenExchangeError(
                 "Token exchange request failed"
             ) from exception
@@ -94,5 +111,7 @@ class MCPOAuthTokenClient:
         return token_data, headers
 
 
-def get_mcp_oauth_token_client() -> MCPOAuthTokenClient:
-    return MCPOAuthTokenClient()
+def get_mcp_oauth_token_client(
+    http_transport_factory: Optional[Callable[[], httpx2.AsyncBaseTransport]] = None,
+) -> MCPOAuthTokenClient:
+    return MCPOAuthTokenClient(http_transport_factory)

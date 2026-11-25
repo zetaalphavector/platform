@@ -135,6 +135,7 @@ class FileAttemptStore(AttemptStore):
 
 class FileAttemptStoreFactory(AgentDependencyFactory):
     __singleton__ = True
+    local_only = True
 
     @classmethod
     def create(

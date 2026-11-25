@@ -6,15 +6,28 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 import boto3
+from botocore.client import BaseClient
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from zav.object_storage_repo.domain.object_storage_item import ObjectStorageItem
+from zav.object_storage_repo.domain.object_storage_item import (
+    ObjectStorageItem,
+    ObjectStorageRange,
+)
 from zav.object_storage_repo.repository import (
+    ObjectModifiedException,
     ObjectRepository,
     ObjectRepositoryException,
     ObjectStorageAttributes,
+    total_size_from_content_range,
+    validate_byte_range,
 )
 from zav.object_storage_repo.repository_factory import ObjectRepositoryFactory
+
+# A zeta object reads, writes and deletes all its representations at once on the one
+# client its storage settings share: at botocore's default of 10, a drain deleting
+# documents of 15 representations discarded about 6 connections per document.
+S3_MAX_POOL_CONNECTIONS = 50
 
 
 def force_async(fn):
@@ -28,26 +41,71 @@ def force_async(fn):
     return wrapper
 
 
+def create_s3_client(
+    aws_access_key_id: Optional[str] = None,
+    aws_secret_access_key: Optional[str] = None,
+    aws_region: Optional[str] = None,
+    aws_endpoint_url: Optional[str] = None,
+    aws_max_pool_connections: int = S3_MAX_POOL_CONNECTIONS,
+) -> BaseClient:
+    client_kwargs = {}
+    if aws_access_key_id and aws_secret_access_key:
+        client_kwargs["aws_access_key_id"] = aws_access_key_id
+        client_kwargs["aws_secret_access_key"] = aws_secret_access_key
+    if aws_region:
+        client_kwargs["region_name"] = aws_region
+    if aws_endpoint_url:
+        client_kwargs["endpoint_url"] = aws_endpoint_url
+    return boto3.client(
+        "s3",
+        config=Config(max_pool_connections=aws_max_pool_connections),
+        **client_kwargs,
+    )
+
+
 @ObjectRepositoryFactory.register("s3")
 class S3ObjectRepository(ObjectRepository):
-    def __init__(
-        self,
+    def __init__(self, s3_client: BaseClient):
+        self.__s3_client = s3_client
+
+    @classmethod
+    def from_configuration(  # type: ignore[override]
+        cls,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region: Optional[str] = None,
         aws_endpoint_url: Optional[str] = None,
+        aws_max_pool_connections: int = S3_MAX_POOL_CONNECTIONS,
         **kwargs,
-    ):
-        client_kwargs = {}
-        if aws_access_key_id and aws_secret_access_key:
-            client_kwargs["aws_access_key_id"] = aws_access_key_id
-            client_kwargs["aws_secret_access_key"] = aws_secret_access_key
-        if aws_region:
-            client_kwargs["region_name"] = aws_region
-        if aws_endpoint_url:
-            client_kwargs["endpoint_url"] = aws_endpoint_url
+    ) -> "S3ObjectRepository":
+        return cls(
+            create_s3_client(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_region=aws_region,
+                aws_endpoint_url=aws_endpoint_url,
+                aws_max_pool_connections=aws_max_pool_connections,
+            )
+        )
 
-        self.__s3_client = boto3.client("s3", **client_kwargs)
+    def __list_objects(
+        self, bucket_name: str, key_prefix: str, recursive: bool
+    ) -> List[ObjectStorageAttributes]:
+        # One ListObjectsV2 page holds 1000 keys, so read every page.
+        pages = self.__s3_client.get_paginator("list_objects_v2").paginate(
+            Bucket=bucket_name,
+            Prefix=key_prefix,
+            **({} if recursive else {"Delimiter": "/"}),
+        )
+        return [
+            ObjectStorageAttributes(
+                url=f"s3://{bucket_name}/{content['Key'].lstrip('/')}",
+                last_modified=content["LastModified"],
+                content_length=content["Size"],
+            )
+            for page in pages
+            for content in page.get("Contents", [])
+        ]
 
     @classmethod
     def _parse_url(cls, url) -> Tuple[str, str]:
@@ -59,11 +117,8 @@ class S3ObjectRepository(ObjectRepository):
     async def add(self, item: ObjectStorageItem) -> Optional[ObjectStorageItem]:
         try:
             bucket_name, key = self._parse_url(item.url)
-            memfile = io.BytesIO()
-            memfile.write(item.payload)
-            memfile.seek(0)
             await force_async(self.__s3_client.upload_fileobj)(
-                memfile, bucket_name, key
+                io.BytesIO(item.payload), bucket_name, key
             )
             return item
         except Exception as e:
@@ -85,7 +140,38 @@ class S3ObjectRepository(ObjectRepository):
             content = memfile.read()
             return ObjectStorageItem(url=url, payload=content)
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "404":
+            # The managed download HEADs first (404), then GETs: a key deleted in
+            # between fails the GET with NoSuchKey.
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
+                return None
+            raise ObjectRepositoryException(e)
+        except Exception as e:
+            raise ObjectRepositoryException(e)
+
+    async def get_by_range(
+        self, url: str, offset: int, size: int, etag: Optional[str] = None
+    ) -> Optional[ObjectStorageRange]:
+        validate_byte_range(offset, size)
+        try:
+            bucket_name, key = self._parse_url(url)
+            response = await force_async(self.__s3_client.get_object)(
+                Bucket=bucket_name,
+                Key=key,
+                Range=f"bytes={offset}-{offset + size - 1}",
+                **({"IfMatch": etag} if etag is not None else {}),
+            )
+            return ObjectStorageRange(
+                content=await force_async(response["Body"].read)(),
+                total_size=total_size_from_content_range(response["ContentRange"]),
+                etag=response["ETag"],
+            )
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code")
+            if code == "PreconditionFailed" or (
+                code == "NoSuchKey" and etag is not None
+            ):
+                raise ObjectModifiedException(f"{url} no longer matches etag {etag}")
+            if code == "NoSuchKey":
                 return None
             raise ObjectRepositoryException(e)
         except Exception as e:
@@ -178,24 +264,13 @@ class S3ObjectRepository(ObjectRepository):
             raise ObjectRepositoryException(e)
 
     async def filter_objects_attributes(
-        self, url_prefix: str
+        self, url_prefix: str, recursive: bool = True
     ) -> List[ObjectStorageAttributes]:
-        """Note: This method only returns the first 1000 objects."""
         try:
             bucket_name, key_prefix = self._parse_url(url_prefix)
-            response = await force_async(self.__s3_client.list_objects_v2)(
-                Bucket=bucket_name, Prefix=key_prefix
+            return await force_async(self.__list_objects)(
+                bucket_name, key_prefix, recursive
             )
-            if response and (contents := response.get("Contents")):
-                return [
-                    ObjectStorageAttributes(
-                        url=f"s3://{bucket_name}/{content['Key'].lstrip('/')}",
-                        last_modified=content["LastModified"],
-                        content_length=content["Size"],
-                    )
-                    for content in contents
-                ]
-            return []
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") == "404":
                 return []

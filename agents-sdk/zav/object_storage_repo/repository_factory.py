@@ -12,6 +12,7 @@ class ObjectRepositoryConfig(TypedDict, total=False):
     aws_secret_access_key: Optional[str]
     aws_region: Optional[str]
     aws_endpoint_url: Optional[str]
+    aws_max_pool_connections: int
 
 
 class ObjectRepositoryFactory:
@@ -35,4 +36,4 @@ class ObjectRepositoryFactory:
         if backend not in cls.registry:
             raise ValueError(f"Unknown class name: {backend}")
 
-        return cls.registry[backend](**config)
+        return cls.registry[backend].from_configuration(**config)

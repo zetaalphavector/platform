@@ -24,7 +24,8 @@ class ToolSurface:
     ToolSurfaceFactory.create parameter — deliberately, never implicitly.
     The tool rules apply as in the agent loop, on each call and its result
     too; a tool that asks first is left out, since an MCP call cannot pause
-    for the user."""
+    for the user. A tool that only a view can call is left out too, since the
+    exposure serves no views."""
 
     def __init__(
         self,
@@ -52,12 +53,13 @@ class ToolSurface:
             tool
             for tool in offered.tools
             if tool.options.confirmation not in ("ask", "require")
+            and any(caller != "app" for caller in tool.allowed_callers)
         ]
 
     async def call(self, name: str, params: Optional[Dict[str, Any]]) -> Any:
         tools_registry = ToolsRegistry()
         tools_registry.extend(await self.get_tools())
-        return await self.__tool_policy.execute_outside_turn(
+        return await self.__tool_policy.for_caller("direct").execute_outside_turn(
             tools_registry, name, params, _RULE_ASKS_MESSAGE.format(name=name)
         )
 

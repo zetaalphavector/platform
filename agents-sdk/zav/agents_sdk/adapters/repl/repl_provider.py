@@ -1,8 +1,10 @@
+import asyncio
 import inspect
 import json
+import keyword
 import re
 import textwrap
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
@@ -21,18 +23,16 @@ from zav.agents_sdk.adapters.tool_policy import (
     ToolPolicyProvider,
 )
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
-from zav.agents_sdk.domain.tools import (
-    Tool,
-    ToolsRegistry,
-    ToolStreamingConfig,
-)
+from zav.agents_sdk.domain.tool_calls import llm_tool_result
+from zav.agents_sdk.domain.tools import Tool, ToolsRegistry, ToolStreamingConfig
 
 RUN_PYTHON_TOOL_NAME = "run_python"
 
 _RUN_PYTHON_DESCRIPTION = """\
 Run Python in a persistent sandboxed REPL. Variables, functions and imports \
 survive between calls. The other tools are available as async functions with \
-the same names and parameters; `await` them and work on their results as \
+the same names, a character a Python name cannot hold written as `_`, and the \
+same parameters; `await` them and work on their results as \
 Python objects. The value of the last expression and anything printed are \
 returned.\
 """
@@ -58,7 +58,8 @@ _RULE_ASKS_MESSAGE = (
 )
 
 _TOOL_STUBS_HEADER = (
-    "Tools callable from Python (all are `async`, call them with `await`):"
+    "Tools callable from Python (all are `async`, call them with `await`). A "
+    "failing call returns `{'error': message}` instead of raising:"
 )
 
 _JSON_TO_PYTHON_TYPE = {
@@ -118,6 +119,15 @@ def docstring_sections(description: str) -> Dict[str, str]:
     }
 
 
+def python_name(tool_name: str) -> str:
+    """The name Python calls a tool by. Tool names may hold characters Python
+    names cannot, like the hyphens of MCP tools (`files__list-folders`)."""
+    name = re.sub(r"\W", "_", tool_name)
+    if name[:1].isdigit():
+        name = f"_{name}"
+    return f"{name}_" if keyword.iskeyword(name) else name
+
+
 def render_tool_stub(tool: Tool) -> str:
     """A Python signature plus the docstring parts the code author needs: the
     summary and what the call returns. Parameter descriptions are included only
@@ -134,7 +144,7 @@ def render_tool_stub(tool: Tool) -> str:
             params.append(f"{name}: {python_type}")
         else:
             params.append(f"{name}: {python_type} = {defaults.get(name)!r}")
-    signature = f"async def {tool.name}({', '.join(params)}) -> Any:"
+    signature = f"async def {python_name(tool.name)}({', '.join(params)}) -> Any:"
     sections = docstring_sections(tool.description or "")
     body = [sections.get("", "")]
     if "direct" not in tool.allowed_callers and sections.get("arg"):
@@ -254,7 +264,18 @@ class ReplProvider:
         sandbox = self.__sandbox()
         if sandbox is None:
             return "Error: no Python sandbox is configured."
-        output = await sandbox.run(code, self.__host_functions(tools_registry))
+        in_flight: Set["asyncio.Task[Any]"] = set()
+        try:
+            output = await sandbox.run(
+                code, self.__host_functions(tools_registry, in_flight)
+            )
+        finally:
+            # Monty drops the calls a cell leaves pending, so they would finish
+            # unobserved and stay "running" in the stream.
+            abandoned = list(in_flight)
+            for execution in abandoned:
+                execution.cancel()
+        await asyncio.gather(*abandoned, return_exceptions=True)
         return self.__truncate(output)
 
     async def cleanup(self) -> None:
@@ -268,6 +289,25 @@ class ReplProvider:
         """The tools Python may call, each with whether it asks first."""
         if not self.__expose_tools:
             return []
+        callable_tools = [
+            tool
+            for tool in tools
+            if "sandbox" in tool.allowed_callers and tool.name != RUN_PYTHON_TOOL_NAME
+        ]
+        # A tool whose name is already a Python name keeps it over one that only
+        # maps to it; the other stays out of Python.
+        owners = {
+            tool.name: tool.name
+            for tool in callable_tools
+            if python_name(tool.name) == tool.name
+        }
+        for tool in callable_tools:
+            name = python_name(tool.name)
+            if owners.setdefault(name, tool.name) != tool.name:
+                logger.warning(
+                    f"Tool {tool.name} is left out of Python: {owners[name]} "
+                    f"already has the name {name} there."
+                )
         return [
             (
                 tool,
@@ -277,36 +317,53 @@ class ReplProvider:
                     and not self.__session_approvals.allows(tool.name)
                 ),
             )
-            for tool in tools
-            if "sandbox" in tool.allowed_callers and tool.name != RUN_PYTHON_TOOL_NAME
+            for tool in callable_tools
+            if owners[python_name(tool.name)] == tool.name
         ]
 
-    def __host_functions(self, tools_registry: ToolsRegistry) -> HostFunctions:
+    def __host_functions(
+        self, tools_registry: ToolsRegistry, in_flight: Set["asyncio.Task[Any]"]
+    ) -> HostFunctions:
         return {
-            tool.name: self.__host_function(tools_registry, tool, asks_first)
+            python_name(tool.name): self.__host_function(
+                tools_registry, tool, asks_first, in_flight
+            )
             for tool, asks_first in self.__exposed_tools(
                 list(tools_registry.tools_index.values())
             )
         }
 
     def __host_function(
-        self, tools_registry: ToolsRegistry, tool: Tool, asks_first: bool
+        self,
+        tools_registry: ToolsRegistry,
+        tool: Tool,
+        asks_first: bool,
+        in_flight: Set["asyncio.Task[Any]"],
     ) -> Callable:
-        tool_policy = self.__tool_policy
+        tool_policy = self.__tool_policy.for_caller("sandbox")
 
         async def call(*args: Any, **kwargs: Any) -> Any:
             if asks_first:
-                raise PermissionError(_ASK_FIRST_MESSAGE.format(name=tool.name))
-            return json_safe(
-                await tool_policy.execute_outside_turn(
+                return {"error": _ASK_FIRST_MESSAGE.format(name=tool.name)}
+            execution = asyncio.ensure_future(
+                tool_policy.execute_outside_turn(
                     tools_registry,
                     tool.name,
                     positional_to_keyword(tool, args, kwargs),
                     _RULE_ASKS_MESSAGE.format(name=tool.name),
                 )
             )
+            in_flight.add(execution)
+            execution.add_done_callback(in_flight.discard)
+            # Returned, not raised: Monty's gather() takes no return_exceptions,
+            # so one raising call would lose the results of the calls beside it.
+            try:
+                result = await execution
+            except Exception as e:
+                return {"error": str(e)}
+            return json_safe(llm_tool_result(tool, result))
 
-        call.__name__ = tool.name
+        call.__name__ = python_name(tool.name)
         return call
 
     def __truncate(self, text: str) -> str:

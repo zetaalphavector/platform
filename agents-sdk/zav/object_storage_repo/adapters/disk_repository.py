@@ -1,3 +1,4 @@
+import os
 from os import DirEntry
 from typing import AsyncGenerator, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -8,18 +9,30 @@ from aiofiles.os import makedirs, remove, scandir, stat
 from zav.object_storage_repo.domain.object_storage_item import (
     ObjectStorageAttributes,
     ObjectStorageItem,
+    ObjectStorageRange,
 )
-from zav.object_storage_repo.repository import ObjectRepository
+from zav.object_storage_repo.repository import (
+    ObjectModifiedException,
+    ObjectRepository,
+    ObjectRepositoryException,
+    validate_byte_range,
+)
 from zav.object_storage_repo.repository_factory import ObjectRepositoryFactory
 
 
-async def scantree(path: str) -> AsyncGenerator[DirEntry, None]:
-    """Recursively yield DirEntry objects for given directory."""
+def _etag(stats: os.stat_result) -> str:
+    return f'"{stats.st_mtime_ns}-{stats.st_size}"'
+
+
+async def scantree(path: str, recursive: bool = True) -> AsyncGenerator[DirEntry, None]:
+    """Yield the file entries of a directory, and of its subdirectories if
+    recursive."""
     dir_iterator = await scandir(path)
     for entry in sorted(dir_iterator, key=lambda en: en.path):
         if entry.is_dir(follow_symlinks=False):
-            async for nested_entry in scantree(entry.path):
-                yield nested_entry
+            if recursive:
+                async for nested_entry in scantree(entry.path):
+                    yield nested_entry
         else:
             yield entry
 
@@ -65,6 +78,34 @@ class DiskObjectRepository(ObjectRepository):
         except Exception:
             return None
 
+    async def get_by_range(
+        self, url: str, offset: int, size: int, etag: Optional[str] = None
+    ) -> Optional[ObjectStorageRange]:
+        validate_byte_range(offset, size)
+        try:
+            _, path = self._parse_url(url)
+            async with aiofiles.open(path, mode="rb") as f:
+                stats = os.fstat(f.fileno())
+                await f.seek(offset)
+                content = await f.read(size)
+                stats_after_read = os.fstat(f.fileno())
+        except FileNotFoundError:
+            if etag is not None:
+                raise ObjectModifiedException(f"{url} no longer matches etag {etag}")
+            return None
+        except Exception as e:
+            raise ObjectRepositoryException(e)
+        current_etag = _etag(stats)
+        if _etag(stats_after_read) != current_etag:
+            raise ObjectModifiedException(f"{url} changed while it was read")
+        if etag is not None and etag != current_etag:
+            raise ObjectModifiedException(f"{url} no longer matches etag {etag}")
+        if not content:
+            raise ObjectRepositoryException(f"Offset {offset} is past the end of {url}")
+        return ObjectStorageRange(
+            content=content, total_size=stats.st_size, etag=current_etag
+        )
+
     async def delete(self, item: ObjectStorageItem) -> Optional[ObjectStorageItem]:
         try:
             _, path = self._parse_url(item.url)
@@ -107,12 +148,12 @@ class DiskObjectRepository(ObjectRepository):
             return None
 
     async def filter_objects_attributes(
-        self, url_prefix: str
+        self, url_prefix: str, recursive: bool = True
     ) -> List[ObjectStorageAttributes]:
         try:
             host, path = self._parse_url(url_prefix)
             objects: List[ObjectStorageAttributes] = []
-            async for entry in scantree(path):
+            async for entry in scantree(path, recursive):
                 stats = entry.stat()
                 if stats.st_mtime and stats.st_size and entry.path:
                     objects.append(

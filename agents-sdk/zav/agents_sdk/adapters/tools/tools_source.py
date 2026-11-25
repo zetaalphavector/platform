@@ -4,7 +4,7 @@ from typing import ClassVar, List, Optional
 from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.domain.agent_dependency import DependencyGroup
-from zav.agents_sdk.domain.tools import Tool
+from zav.agents_sdk.domain.tools import AppView, Tool
 
 
 class ToolsSourceConfiguration(BaseModel):
@@ -40,6 +40,11 @@ class ToolsSource(ABC):
 
     async def to_prompt(self) -> str:
         return ""
+
+    async def app_view(self, tool_name: str) -> Optional[AppView]:
+        """The view that the tool ``tool_name`` names in ``display.view``.
+        None when the view ships with the client."""
+        return None
 
 
 class ToolsSourceGroup(DependencyGroup[ToolsSource]):

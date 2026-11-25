@@ -1,6 +1,16 @@
 from abc import ABC
 from fnmatch import fnmatchcase
-from typing import Any, ClassVar, Iterable, List, Optional, Sequence
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    get_args,
+)
 
 from zav.pydantic_compat import BaseModel, Field
 
@@ -14,6 +24,7 @@ from zav.agents_sdk.domain.tools import (
     CallDecision,
     ResultDecision,
     Tool,
+    ToolCaller,
     ToolOptions,
 )
 
@@ -26,7 +37,7 @@ def matches_any(name: str, patterns: Iterable[str]) -> bool:
 class ToolPolicySource(ABC):
     """A pluggable tool rule, switched on and off per tenant and agent with the
     tool policy's include_sources/exclude_sources like any source. Who the
-    caller is reaches a rule through its factory."""
+    user is reaches a rule through its factory."""
 
     source_name: ClassVar[str]
     # One line for admins switching rule sources on or off.
@@ -34,6 +45,8 @@ class ToolPolicySource(ABC):
     # Run order, from general to specific (agent < tenant and agent policies <
     # user): each source works on what the ones before it left.
     specificity: ClassVar[int] = 0
+    # The callers whose calls this rule checks. Every tool listing runs `apply`.
+    callers: ClassVar[Tuple[ToolCaller, ...]] = get_args(ToolCaller)
     enabled: bool
 
     async def apply(
@@ -53,14 +66,26 @@ class ToolPolicySource(ABC):
         in the REPL, an MCP client)."""
         return None
 
+    async def prepare_call(
+        self, call: ToolCallRequest, tool: Tool
+    ) -> Optional[Dict[str, Any]]:
+        """The params the tool runs with; None keeps the call's own. Runs right
+        before the tool does, after any approval: the model, the user and the
+        traces see the call's own params, never what this returns. ``tool`` is
+        the tool called; its ``origin`` names its source or MCP server."""
+        return None
+
     async def check_result(
         self,
         call: ToolCallRequest,
+        tool: Tool,
         result: Any,
         transcript: Optional[List[ChatCompletion]],
     ) -> Optional[ResultDecision]:
         """None keeps ``result``, the tool's return value. A replacement must
-        keep its shape: the UI and Python code read it."""
+        keep its shape: the UI and Python code read it. ``call`` carries the
+        params the call ran with, which the user may have edited when
+        approving it, before any ``prepare_call`` changes."""
         return None
 
 
@@ -72,8 +97,9 @@ class ToolPolicyConfiguration(BaseModel):
     include_sources: Optional[List[str]] = Field(
         None,
         description=(
-            "Allowlist of tool rule sources. A rule only removes tools or adds "
-            "confirmation, so switching one on never widens the agent."
+            "Allowlist of tool rule sources. A rule removes tools, adds "
+            "confirmation or adjusts a call or its result; switching one on "
+            "never adds a tool."
         ),
     )
     exclude_sources: Optional[List[str]] = Field(

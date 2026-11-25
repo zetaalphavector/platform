@@ -1,6 +1,8 @@
 import asyncio
 import copy
 import inspect
+import itertools
+from dataclasses import dataclass
 from typing import (
     Annotated,
     Any,
@@ -260,9 +262,10 @@ def _get_json_type(typ):
         return {"type": "string"}  # Default type
 
 
-# Who may invoke a tool: the model, as a tool call ("direct"), or code running in
-# the agent's Python REPL ("sandbox").
-ToolCaller = Literal["direct", "sandbox"]
+# Who may invoke a tool: the model, as a tool call ("direct"), code running in
+# the agent's Python REPL ("sandbox"), or an interactive view the chat renders
+# for a tool call ("app"). A tool is never callable by a view unless it says so.
+ToolCaller = Literal["direct", "sandbox", "app"]
 ALL_CALLERS: List[ToolCaller] = ["direct", "sandbox"]
 
 
@@ -273,6 +276,17 @@ class ToolDisplay(BaseModel):
     app: Optional[str] = None
     icon_url: Optional[str] = None
     title: Optional[str] = None
+    # The interactive view (a `ui://` address) the chat renders a call's
+    # result with. An MCP server's view is read from that server.
+    view: Optional[str] = None
+
+
+class AppView(BaseModel):
+    """A tool's interactive view: its HTML, and the extension's settings for
+    rendering it (``csp``, ``permissions``, ``domain``, ``prefersBorder``)."""
+
+    html: str
+    ui_meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolNamespace(BaseModel):
@@ -333,10 +347,13 @@ class CallDecision(BaseModel):
 class ResultDecision(BaseModel):
     """A tool rule's say on a call's result, before the model, the user or
     Python code see it: ``replace`` it with ``value``, for example redacted,
-    in the shape the tool returns; or ``block`` it, ``message`` being what
-    the model gets instead. ``reason`` is what the user is told."""
+    in the shape the tool returns, and the user sees it marked as edited by a
+    rule; ``transform`` it into ``value``, the same content in another form
+    (a file saved and given by reference), not marked; or ``block`` it,
+    ``message`` being what the model gets instead. ``reason`` is what the user
+    is told."""
 
-    action: Literal["replace", "block"]
+    action: Literal["replace", "transform", "block"]
     value: Any = None
     message: str = ""
     reason: str = ""
@@ -344,6 +361,10 @@ class ResultDecision(BaseModel):
     @classmethod
     def replace(cls, value: Any, reason: str = "") -> "ResultDecision":
         return cls(action="replace", value=value, reason=reason)
+
+    @classmethod
+    def transform(cls, value: Any, reason: str = "") -> "ResultDecision":
+        return cls(action="transform", value=value, reason=reason)
 
     @classmethod
     def block(cls, message: str, reason: str = "") -> "ResultDecision":
@@ -512,6 +533,14 @@ def _parse_params(signature: inspect.Signature, params: Optional[Dict[str, Any]]
     return exec_params
 
 
+@dataclass(frozen=True)
+class ToolCallFrame:
+    tool_call_id: str
+    stream: Callable[
+        [str, Optional[Tool], Optional[Dict[str, Any]], Awaitable[Any]], Awaitable[Any]
+    ]
+
+
 def _is_registry(param: inspect.Parameter) -> bool:
     # A tool that calls other tools (the REPL's `run_python`) declares a
     # parameter of this type; the registry running it passes itself in.
@@ -529,6 +558,8 @@ class ToolsRegistry:
     def __init__(self, tools: Optional[List[Tool]] = None):
         self.tools_index: Dict[str, Tool] = {}
         self.__providers: List[ToolListing] = []
+        self.__frame: Optional[ToolCallFrame] = None
+        self.__call_ids = itertools.count(1)
         self.extend(tools or [])
 
     def extend(self, tools: List[Tool]):
@@ -557,7 +588,7 @@ class ToolsRegistry:
 
     def for_caller(self, caller: ToolCaller) -> "ToolsRegistry":
         """The tools this caller may invoke; the model gets ``direct``, the
-        REPL ``sandbox``."""
+        REPL ``sandbox``, a view ``app``."""
         registry = ToolsRegistry()
         registry.extend(
             [t for t in self.tools_index.values() if caller in t.allowed_callers]
@@ -581,7 +612,31 @@ class ToolsRegistry:
         )
         self.tools_index[tool.name] = tool
 
-    async def execute(self, name: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    def child_frame(self) -> Optional[ToolCallFrame]:
+        """The frame of a call made through this registry while it runs a
+        tool, which shows the call as a card of its own; None outside a tool."""
+        parent = self.__frame
+        if parent is None:
+            return None
+        return ToolCallFrame(
+            f"{parent.tool_call_id}:call{next(self.__call_ids)}", parent.stream
+        )
+
+    async def execute(
+        self,
+        name: str,
+        params: Optional[Dict[str, Any]] = None,
+        frame: Optional[ToolCallFrame] = None,
+    ) -> Any:
+        if frame is None:
+            frame = self.child_frame()
+            if frame is not None:
+                return await frame.stream(
+                    frame.tool_call_id,
+                    self.tools_index.get(name),
+                    params,
+                    self.execute(name, params, frame),
+                )
         if name not in self.tools_index:
             raise ValueError(
                 f"Tool {name} not found. Please provide a valid tool name."
@@ -593,9 +648,15 @@ class ToolsRegistry:
             exec_params = _parse_params(signature=signature, params=params)
             for param_name, param in signature.parameters.items():
                 if _is_registry(param):
-                    exec_params[param_name] = self
+                    exec_params[param_name] = self.__bound_to(frame) if frame else self
             if inspect.iscoroutinefunction(executable):
                 return await executable(**exec_params)  # type: ignore
             return executable(**exec_params)
         except Exception as e:
             raise Exception(f"Error in executing tool {name}: {e}")
+
+    def __bound_to(self, frame: ToolCallFrame) -> "ToolsRegistry":
+        registry = copy.copy(self)
+        registry.__frame = frame
+        registry.__call_ids = itertools.count(1)
+        return registry

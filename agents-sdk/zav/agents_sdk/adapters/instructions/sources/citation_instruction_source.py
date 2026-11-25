@@ -10,18 +10,18 @@ CitationStrategy = Literal["inline_url", "short_id", "deferred", "sup_numeric"]
 CitableResource = Literal["search_results", "context", "documents", "tags", "memories"]
 
 _MEDIA_CITATION_INSTRUCTION = (
-    'Video and audio results (content_type "video/..." or "audio/...") describe '
-    "moments by time, usually as a range at the start of a transcript line, e.g. "
-    '"[00:19-00:26] Speaker 1: The bird flies off the branch.", sometimes as a '
-    'single time, e.g. "At 00:17 the bird lands." A citation that carries a time '
-    "opens the video or audio player at that moment. So when you cite a video or "
-    "audio file, put the time of the supporting text in the citation link after "
-    "#t=: a range as start,end, a single time as start only. For example:\n"
+    'Video and audio results (content_type "video/..." or "audio/...") mark their '
+    'segments with times, usually a range such as "[00:19-00:26] Speaker 1: The '
+    'bird flies off the branch.", sometimes a single time such as "At 00:17 the '
+    'bird lands." The times can be in any field of the result, such as a '
+    "highlight or a transcript. When you cite a specific segment of a video or "
+    "audio file, ALWAYS put that segment's time in the citation link after #t=: "
+    "a range as start,end, a single time as start only. Only use times shown in "
+    "the result. A citation with a time opens the player at that moment. For "
+    "example:\n"
     "The bird leaves the branch {range_example}\n"
     "The bird lands {start_example}\n"
-    "Write the time only in the citation link, not in your sentence and not in "
-    "the quoted text. Only use times you actually saw. If the supporting text has "
-    "no time, cite the file without one."
+    "Only a claim about the file as a whole is cited without a time."
 )
 
 

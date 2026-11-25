@@ -62,6 +62,8 @@ class DiskRubricSource(RubricSource):
 
 
 class DiskRubricSourceFactory(AgentDependencyFactory):
+    local_only = True
+
     @classmethod
     def create(
         cls,

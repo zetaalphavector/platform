@@ -5,6 +5,7 @@ from typing import Type
 
 from zav.logging import logger
 
+from zav.agents_sdk.adapters import AgentDependencyRegistry
 from zav.agents_sdk.domain.chat_agent import ChatAgent
 from zav.agents_sdk.domain.chat_agent_registry import (
     ChatAgentClassRegistry,
@@ -38,6 +39,10 @@ def from_string(zav_project_dir: str) -> ChatAgentClassRegistryProtocol:
         if exc.name != module_str:
             raise exc from None
         raise Exception(f"Could not import module {module_str}.")
+    # Stand-ins for dependencies the project's production host registers per
+    # request, such as chat-service's tenant policy store.
+    for dependency in getattr(dynamic_module, "LOCAL_AGENT_DEPENDENCIES", []):
+        AgentDependencyRegistry.register(dependency)
     instance = dynamic_module
     chat_agent_class_registry = getattr(instance, "ChatAgentClassRegistry", None)
     if not attrs_str:

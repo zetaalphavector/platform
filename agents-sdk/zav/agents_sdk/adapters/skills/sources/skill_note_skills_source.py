@@ -23,6 +23,19 @@ class SkillNoteSkillsSourceConfiguration(BaseModel):
     allowed_skill_note_ids: Optional[List[str]] = None
 
 
+class SkillSelectionConfiguration(BaseModel):
+    """The user's skill picks for one chat, applied on top of the agent's setup.
+
+    Sent as a bot param from the chat's Sources and apps panel. A field left
+    unset keeps what the agent's setup says.
+    """
+
+    enabled: Optional[bool] = None
+    include_shared_skills: Optional[bool] = None
+    included_skill_note_ids: Optional[List[str]] = None
+    excluded_skill_note_ids: Optional[List[str]] = None
+
+
 class SkillNoteSkillsSource(SkillsSource):
     source_name = "skill_notes"
     source_description = "Skills users saved as skill notes."
@@ -33,11 +46,15 @@ class SkillNoteSkillsSource(SkillsSource):
         enabled: bool,
         include_scopes: Optional[List[SkillNoteScope]] = ["own"],
         allowed_skill_note_ids: Optional[List[str]] = None,
+        excluded_skill_note_ids: Optional[List[str]] = None,
+        include_shared_skills: bool = True,
     ):
         self.enabled = enabled
         self.__notes_service = notes_service
         self.__include_scopes = include_scopes or []
         self.__allowed_skill_note_ids = allowed_skill_note_ids or []
+        self.__excluded_skill_note_ids = set(excluded_skill_note_ids or [])
+        self.__include_shared_skills = include_shared_skills
         self.__skills: Dict[str, SkillProperties] = {}
         self.__skill_contents: Dict[str, str] = {}
         self.__discovered = False
@@ -48,14 +65,10 @@ class SkillNoteSkillsSource(SkillsSource):
         self.__discovered = True
 
         all_notes: List = []
+        own_notes: Optional[List] = None
 
         if "own" in self.__include_scopes:
-            own_notes = await self.__notes_service.retrieve_notes(
-                note_object_type="skill",
-                page=1,
-                page_size=100,
-                created_by_me=True,
-            )
+            own_notes = await self.__retrieve_own_notes()
             all_notes.extend(own_notes)
 
         if "shared_with_me" in self.__include_scopes:
@@ -70,10 +83,22 @@ class SkillNoteSkillsSource(SkillsSource):
         self.__ingest_notes(all_notes)
 
         loaded_note_ids = {str(n.get("id")) for n in all_notes if n.get("id")}
+        allowed_ids = [
+            note_id
+            for note_id in self.__allowed_skill_note_ids
+            if note_id not in loaded_note_ids
+            and note_id not in self.__excluded_skill_note_ids
+        ]
+        if allowed_ids and not self.__include_shared_skills:
+            # An agent's picked skills can be shared ones; with shared skills
+            # switched off only the user's own picks stay.
+            if own_notes is None:
+                own_notes = await self.__retrieve_own_notes()
+            own_ids = {str(n.get("id")) for n in own_notes if n.get("id")}
+            allowed_ids = [note_id for note_id in allowed_ids if note_id in own_ids]
+
         additional_notes: List = []
-        for note_id_str in self.__allowed_skill_note_ids:
-            if note_id_str in loaded_note_ids:
-                continue
+        for note_id_str in allowed_ids:
             try:
                 note = await self.__notes_service.retrieve_note(
                     note_id=int(note_id_str)
@@ -90,8 +115,18 @@ class SkillNoteSkillsSource(SkillsSource):
         if additional_notes:
             self.__ingest_notes(additional_notes)
 
+    async def __retrieve_own_notes(self) -> List:
+        return await self.__notes_service.retrieve_notes(
+            note_object_type="skill",
+            page=1,
+            page_size=100,
+            created_by_me=True,
+        )
+
     def __ingest_notes(self, notes: List) -> None:
         for note in notes:
+            if str(note.get("id")) in self.__excluded_skill_note_ids:
+                continue
             content = note.get("content", "")
             if not content:
                 continue
@@ -240,11 +275,32 @@ class SkillNoteSkillsSourceFactory(AgentDependencyFactory):
         skill_note_skills_source_configuration: SkillNoteSkillsSourceConfiguration = (
             SkillNoteSkillsSourceConfiguration()
         ),
+        skill_selection_configuration: SkillSelectionConfiguration = (
+            SkillSelectionConfiguration()
+        ),
     ) -> SkillNoteSkillsSource:
         config = skill_note_skills_source_configuration
+        selection = skill_selection_configuration
+        include_scopes = list(config.include_scopes or [])
+        if selection.include_shared_skills is False:
+            include_scopes = [s for s in include_scopes if s != "shared_with_me"]
+        elif (
+            selection.include_shared_skills
+            # Scopes set means "every skill"; an agent with picked skills has
+            # none, and shared skills then only means its picked shared ones.
+            and include_scopes
+            and "shared_with_me" not in include_scopes
+        ):
+            include_scopes.append("shared_with_me")
+        allowed_skill_note_ids = [
+            *(config.allowed_skill_note_ids or []),
+            *(selection.included_skill_note_ids or []),
+        ]
         return SkillNoteSkillsSource(
             notes_service=notes_service,
-            enabled=config.enabled,
-            include_scopes=config.include_scopes,
-            allowed_skill_note_ids=config.allowed_skill_note_ids,
+            enabled=config.enabled and selection.enabled is not False,
+            include_scopes=include_scopes,
+            allowed_skill_note_ids=allowed_skill_note_ids or None,
+            excluded_skill_note_ids=selection.excluded_skill_note_ids,
+            include_shared_skills=selection.include_shared_skills is not False,
         )

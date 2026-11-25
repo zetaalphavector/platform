@@ -9,6 +9,7 @@ from zav.agents_sdk.adapters.tool_policy import load_on_demand
 from zav.agents_sdk.adapters.tools.tools_source import ToolsSource, ToolsSourceGroup
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.tools import (
+    AppView,
     Tool,
     ToolNamespace,
     ToolOrigin,
@@ -115,6 +116,12 @@ class ToolsProvider:
         (a harness reading the attempts gate, a test)."""
         return next((s for s in self.__active_sources() if s.source_name == name), None)
 
+    async def app_view(self, source_name: str, tool_name: str) -> Optional[AppView]:
+        """The view of a tool, from its source. None when the view ships with
+        the client."""
+        source = self.source(source_name)
+        return await source.app_view(tool_name) if source else None
+
     async def __resolve_source_tools(
         self,
     ) -> Dict[str, List[Tool]]:
@@ -139,16 +146,19 @@ class ToolsProvider:
         """Who may call the tool and whether it loads on demand, as this
         provider's and the source's configuration say."""
         update: Dict[str, Any] = {}
+        # These settings choose between the model and the REPL; a view the
+        # tool already admits keeps its access.
+        view_callers = ["app"] if "app" in tool.allowed_callers else []
         if (
             source.source_name in self.__sandbox_only_sources
             or tool.name in self.__sandbox_only_tools
         ):
-            update["allowed_callers"] = ["sandbox"]
+            update["allowed_callers"] = ["sandbox", *view_callers]
         elif (
             source.source_name in self.__direct_only_sources
             or tool.name in self.__direct_only_tools
         ):
-            update["allowed_callers"] = ["direct"]
+            update["allowed_callers"] = ["direct", *view_callers]
         on_demand = (
             self.__defer_tools if source.defer_tools is None else source.defer_tools
         )

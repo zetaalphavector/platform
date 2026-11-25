@@ -35,6 +35,8 @@ class FileNotificationChannel(NotificationChannel):
 
 
 class FileNotificationChannelFactory(AgentDependencyFactory):
+    local_only = True
+
     @classmethod
     def create(
         cls,

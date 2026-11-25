@@ -9,11 +9,6 @@ try:
         LocalFileMCPOAuthRepository,
         get_local_file_mcp_oauth_integration_store,
     )
-    from zav.agents_sdk.adapters.mcp.my_documents_argument_resolver import (
-        MyDocumentsArgumentResolver,
-        MyDocumentsArgumentResolverConfiguration,
-        MyDocumentsArgumentResolverFactory,
-    )
     from zav.agents_sdk.adapters.mcp.oauth_repository import (
         MCPOAuthClientInfoRecord,
         MCPOAuthPendingAuthorization,
@@ -47,7 +42,6 @@ try:
     AgentDependencyRegistry.register(LocalFileMCPOAuthIntegrationStoreFactory)
     AgentDependencyRegistry.register(MCPConnectionServiceFactory)
     AgentDependencyRegistry.register(MCPToolsProviderFactory)
-    AgentDependencyRegistry.register(MyDocumentsArgumentResolverFactory)
     __all__ += [
         "LocalFileMCPOAuthIntegrationStoreConfiguration",
         "LocalFileMCPOAuthIntegrationStoreFactory",
@@ -68,9 +62,6 @@ try:
         "MCPOAuthPendingAuthorization",
         "MCPToolsProvider",
         "MCPToolsProviderFactory",
-        "MyDocumentsArgumentResolver",
-        "MyDocumentsArgumentResolverConfiguration",
-        "MyDocumentsArgumentResolverFactory",
         "PersistentTokenStorage",
         "MCPOAuthIntegrationStoreFactory",
         "StdIoTransportConfig",

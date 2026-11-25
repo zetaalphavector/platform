@@ -1,5 +1,7 @@
 import asyncio
+import functools
 import json
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import (
@@ -36,13 +38,20 @@ from zav.agents_sdk.domain.chat_message import (
     ContentPartTool,
     FunctionCallRequest,
 )
+from zav.agents_sdk.domain.tool_calls import (
+    llm_tool_result,
+    parse_result_dict,
+    stream_tool_call,
+    tool_completion_part,
+    tool_running_part,
+)
 from zav.agents_sdk.domain.tools import (
     CallDecision,
     ResultDecision,
     Tool,
+    ToolCallFrame,
     ToolsRegistry,
     apply_transform,
-    format_display_text,
 )
 from zav.agents_sdk.domain.turn_inbox import ApprovalOutcome
 
@@ -68,7 +77,12 @@ TOOL_CONFIRMATION_UNAVAILABLE_MESSAGE = (
 CallCheck = Callable[
     [ToolCallRequest, List[ToolCallRequest]], Awaitable[Optional[CallDecision]]
 ]
-ResultCheck = Callable[[ToolCallRequest, Any], Awaitable[Optional[ResultDecision]]]
+# Runs a call the rules let through: the tool's result and the rules'
+# decision on it.
+CallRun = Callable[
+    [ToolsRegistry, ToolCallRequest, Tool, ToolCallFrame],
+    Awaitable[Tuple[Any, Optional[ResultDecision]]],
+]
 
 
 @dataclass(frozen=True)
@@ -96,19 +110,6 @@ class ToolCallResult(BaseModel):
     should_return_to_user: bool = False
 
 
-def _parse_result_dict(exec_response: Any) -> Optional[dict]:
-    if isinstance(exec_response, dict):
-        return exec_response
-    if isinstance(exec_response, str):
-        try:
-            parsed = json.loads(exec_response)
-        except (json.JSONDecodeError, ValueError):
-            return None
-        # A JSON array or scalar result is text to the model, not a response object.
-        return parsed if isinstance(parsed, dict) else None
-    return None
-
-
 def _tool_text(exec_response: Any) -> str:
     if isinstance(exec_response, (dict, list)):
         return json.dumps(exec_response, ensure_ascii=False, default=str)
@@ -128,7 +129,7 @@ class ToolCallRunner:
         session_approvals: Optional[SessionApprovals] = None,
         approvals: Optional[ToolApprovals] = None,
         check_call: Optional[CallCheck] = None,
-        check_result: Optional[ResultCheck] = None,
+        run_call: Optional[CallRun] = None,
     ) -> None:
         # Runs tools through the round's whole registry, so a tool that calls
         # others (the REPL) gets them all; the model may call only the ones
@@ -146,7 +147,7 @@ class ToolCallRunner:
         self.__concurrent_tool_execution = concurrent_tool_execution
         self.__session_approvals = session_approvals
         self.__check_call = check_call
-        self.__check_result = check_result
+        self.__run_call = run_call
         # A rule's ask holds per call, so its card offers no "allow for this chat".
         self.__rule_asks: Set[str] = set()
 
@@ -229,7 +230,6 @@ class ToolCallRunner:
                 if streaming_config
                 else tool_params
             )
-            param_defaults = tool.get_parameter_defaults() if tool else None
 
             new_span = (
                 self.__span.new(
@@ -250,7 +250,7 @@ class ToolCallRunner:
                     "tool_params": tool_params,
                     "streaming_config": streaming_config,
                     "visible_params": visible_params,
-                    "param_defaults": param_defaults,
+                    "tool": tool,
                     "span": new_span,
                     "verdict": verdict,
                     "asked": tool_call_id in asked,
@@ -258,19 +258,10 @@ class ToolCallRunner:
                 }
             )
 
-            if streaming_config is not None and verdict.action == "run":
-                yield ContentPartTool(
-                    tool_call_id=tool_call_id,
-                    name=tool_name,
-                    params=visible_params,
-                    display_text=format_display_text(
-                        streaming_config.running_text,
-                        tool_params,
-                        defaults=param_defaults,
-                    ),
-                    status="running",
-                    display=tool.display if tool else None,
-                )
+            if verdict.action == "run":
+                running = tool_running_part(tool, tool_call_id, tool_params)
+                if running is not None:
+                    yield running
 
         results: Dict[int, Dict[str, Any]] = {}
 
@@ -519,7 +510,9 @@ class ToolCallRunner:
             display=display,
         )
 
-    async def __execute_one(self, meta: Dict[str, Any]) -> Dict[str, Any]:
+    async def __execute_one(
+        self, meta: Dict[str, Any], emit: Callable[[ContentPartTool], None]
+    ) -> Dict[str, Any]:
         tool_call_request = meta["tool_call_request"]
         tool_name = meta["tool_name"]
         tool_params = meta["tool_params"]
@@ -550,20 +543,38 @@ class ToolCallRunner:
                 raise ValueError(
                     f"Tool {tool_name} not found. Please provide a valid tool name."
                 )
-            exec_response = await self.__tools_registry.execute(
-                name=tool_name, params=tool_params
+            frame = ToolCallFrame(
+                tool_call_request.id, functools.partial(stream_tool_call, emit)
             )
+            started = time.monotonic()
+            decision: Optional[ResultDecision] = None
+            if self.__run_call is not None:
+                exec_response, decision = await self.__run_call(
+                    self.__tools_registry,
+                    ToolCallRequest(
+                        id=tool_call_request.id,
+                        function_call_request=FunctionCallRequest(
+                            name=tool_name, params=tool_params
+                        ),
+                    ),
+                    self.__callable[tool_name],
+                    frame,
+                )
+            else:
+                exec_response = await self.__tools_registry.execute(
+                    name=tool_name, params=tool_params, frame=frame
+                )
+            duration_seconds = time.monotonic() - started
             blocked_message: Optional[str] = None
             replaced = False
             rule_reason: Optional[str] = None
-            if self.__check_result is not None:
-                decision = await self.__check_result(tool_call_request, exec_response)
-                if decision is not None and decision.action == "block":
-                    exec_response, blocked_message = None, decision.message
-                elif decision is not None:
-                    exec_response, replaced = decision.value, True
-                if decision is not None and decision.reason:
-                    rule_reason = decision.reason
+            if decision is not None and decision.action == "block":
+                exec_response, blocked_message = None, decision.message
+            elif decision is not None:
+                exec_response = decision.value
+                replaced = decision.action == "replace"
+            if decision is not None and decision.reason:
+                rule_reason = decision.reason
             sub_agent_parts: List[ContentPart] = []
             if blocked_message is not None:
                 tool_response = blocked_message
@@ -572,20 +583,7 @@ class ToolCallRunner:
                 tool_response = exec_response.text
                 exec_response = {"text": exec_response.text}
             else:
-                streaming_config = meta["streaming_config"]
-                llm_transform = (
-                    streaming_config.llm_response_transform
-                    if streaming_config is not None
-                    else None
-                )
-                if llm_transform is not None:
-                    tool_response = _tool_text(
-                        apply_transform(
-                            _parse_result_dict(exec_response), llm_transform
-                        )
-                    )
-                else:
-                    tool_response = _tool_text(exec_response)
+                tool_response = _tool_text(llm_tool_result(meta["tool"], exec_response))
             if verdict.note:
                 tool_response = f"{verdict.note}\n\n{tool_response}"
             if tool_span:
@@ -595,6 +593,7 @@ class ToolCallRunner:
                 "response": tool_response,
                 "exec_response": exec_response,
                 "sub_agent_parts": sub_agent_parts,
+                "duration_seconds": duration_seconds,
                 "blocked": blocked_message is not None,
                 "replaced": replaced,
                 "rule_reason": rule_reason,
@@ -610,8 +609,14 @@ class ToolCallRunner:
                 "exec_response": None,
                 "error": "value_error",
             }
-        except Exception as exception:
-            error = str(exception)
+        # A tool can end in CancelledError while the runner itself runs on (a
+        # cancelled inner future); without a result the turn would wait forever.
+        except (Exception, asyncio.CancelledError) as exception:
+            error = (
+                "The tool call was cancelled."
+                if isinstance(exception, asyncio.CancelledError)
+                else str(exception)
+            )
             if self.__log_fn:
                 self.__log_fn({"Error": error})
             if tool_span:
@@ -634,7 +639,8 @@ class ToolCallRunner:
         )
 
         async def execute_and_enqueue(index: int) -> None:
-            await events.put((index, await self.__execute_one(tool_metas[index])))
+            result = await self.__execute_one(tool_metas[index], events.put_nowait)
+            await events.put((index, result))
 
         started = len(tool_metas) if self.__concurrent_tool_execution else 1
         tasks = [
@@ -730,48 +736,20 @@ class ToolCallRunner:
                 tool_call_id=tool_call_request.id,
                 name=meta["tool_name"],
                 params=meta["visible_params"],
-                response=_parse_result_dict(result["exec_response"]),
+                response=parse_result_dict(result["exec_response"]),
                 status="error" if result["error"] else "completed",
                 display=meta["display"],
                 replaced_by_rule=replaced,
                 rule_reason=result.get("rule_reason"),
             )
 
-        if result["error"]:
-            if streaming_config is None:
-                return None
-            return ContentPartTool(
-                tool_call_id=tool_call_request.id,
-                name=meta["tool_name"],
-                params=meta["visible_params"],
-                display_text=None,
-                status="error",
-                display=meta["display"],
-            )
-
-        if streaming_config is None:
-            return None
-
-        completed_text = (
-            streaming_config.completed_text or streaming_config.running_text
-        )
-        result_dict = _parse_result_dict(result["exec_response"])
-        visible_response = apply_transform(
-            result_dict, streaming_config.response_transform
-        )
-        return ContentPartTool(
-            tool_call_id=tool_call_request.id,
-            name=meta["tool_name"],
-            params=meta["visible_params"],
-            response=visible_response,
-            display_text=format_display_text(
-                completed_text,
-                meta["tool_params"],
-                result_dict,
-                defaults=meta["param_defaults"],
-            ),
-            status="completed",
-            display=meta["display"],
+        return tool_completion_part(
+            meta["tool"],
+            tool_call_request.id,
+            meta["tool_params"],
+            result["exec_response"],
+            failed=bool(result["error"]),
+            duration_seconds=result.get("duration_seconds"),
             replaced_by_rule=replaced,
             rule_reason=result.get("rule_reason"),
         )

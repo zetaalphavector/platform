@@ -45,7 +45,12 @@ from zav.agents_sdk.adapters.llm_models.zav_chat_completion_client import (
 from zav.agents_sdk.adapters.tool_policy import ToolPolicyProvider
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.chat_message import ChatMessage, FunctionCallRequest
-from zav.agents_sdk.domain.tools import Tool, ToolsRegistry, ToolStreamingConfig
+from zav.agents_sdk.domain.tools import (
+    Tool,
+    ToolCallFrame,
+    ToolsRegistry,
+    ToolStreamingConfig,
+)
 from zav.agents_sdk.domain.turn_inbox import TurnInbox
 
 REPLAY_EXHAUSTED_MESSAGE = (
@@ -772,14 +777,19 @@ class ReplayToolsRegistry(ToolsRegistry):
                 self.tools_index[name] = self.__stand_in_tool(name)
         self.__replay_names = set(self.tools_index)
 
-    async def execute(self, name: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    async def execute(
+        self,
+        name: str,
+        params: Optional[Dict[str, Any]] = None,
+        frame: Optional[ToolCallFrame] = None,
+    ) -> Any:
         key = _tool_call_key(name, params)
         queue = self.__responses.get(key)
         if queue:
             await self.__sleep(name, key)
             return queue.popleft()
         if name in self.tools_index and name not in self.__replay_names:
-            return await super().execute(name=name, params=params)
+            return await super().execute(name=name, params=params, frame=frame)
         raise ValueError(
             f"Replay recording has no response for tool '{name}' with params "
             f"{json.dumps(params or {}, sort_keys=True, default=str)}"

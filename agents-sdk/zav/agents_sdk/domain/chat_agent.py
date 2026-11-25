@@ -299,17 +299,23 @@ class StreamableChatAgent(ChatAgent):
         raise NotImplementedError
 
 
+class UnreadableDocumentError(Exception):
+    """A ProcessorAgent cannot open or read the document it was given.
+
+    The cause is the document's own content, so asking again gives the same
+    answer. The API answers 422 with the code `unreadable_document`: a caller
+    can go on without the agent's output instead of failing or retrying.
+    """
+
+
 class ProcessorAgent(ChatAgent):
     async def execute(self, conversation: List[ChatMessage]) -> Optional[ChatMessage]:
         agent_outputs: Dict[str, Any] = {}
         if conversation:
             reprs = json.loads(conversation[-1].content)
-            if "content" in reprs and isinstance(reprs["content"], str):
-                reprs["content"] = base64.b64decode(reprs["content"])
-            if "pdf" in reprs and isinstance(reprs["pdf"], str):
-                reprs["pdf"] = base64.b64decode(reprs["pdf"])
-            if "cad_pdf" in reprs and isinstance(reprs["cad_pdf"], str):
-                reprs["cad_pdf"] = base64.b64decode(reprs["cad_pdf"])
+            for name in ("content", "pdf", "cad_pdf", "video_compact", "audio_compact"):
+                if isinstance(reprs.get(name), str):
+                    reprs[name] = base64.b64decode(reprs[name])
             agent_outputs = await self.process_representations(reprs)
 
         return ChatMessage(

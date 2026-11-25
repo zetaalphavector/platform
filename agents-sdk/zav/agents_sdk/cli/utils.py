@@ -384,11 +384,13 @@ SOURCE_TEMPLATES = {
     async def check_result(
         self,
         call: ToolCallRequest,
+        tool: Tool,
         result: Any,
         transcript: Optional[List[ChatCompletion]],
     ) -> Optional[ResultDecision]:
-        # TODO: ResultDecision.replace(value, reason), in the shape the tool
-        # returns, or ResultDecision.block(message, reason); None keeps it
+        # TODO: ResultDecision.replace(value, reason) or .transform(value, reason),
+        # in the shape the tool returns, or ResultDecision.block(message,
+        # reason); None keeps it
         return None
 """,  # noqa: E501
     },

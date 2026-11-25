@@ -1,3 +1,4 @@
+import codecs
 import time
 from datetime import date, datetime
 from typing import Dict, List, Literal, Optional
@@ -10,6 +11,7 @@ from zav.search_api.apis import (
     SourcesApi,
     TenantSettingsApi,
 )
+from zav.search_api.exceptions import NotFoundException
 from zav.search_api.models import (
     DateRangeSchema,
     FacetConfiguration,
@@ -34,6 +36,8 @@ from zav.agents_sdk.adapters.async_wrapper import asyncify
 from zav.agents_sdk.adapters.error_handling import handle_api_errors
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.request_headers import RequestHeaders
+
+TEXT_READ_CHUNK_BYTES = 4_096
 
 
 class RetrievedHistoryItem(BaseModel):
@@ -135,6 +139,7 @@ class ZAVRetriever:
         similar_to: Optional[List[str]] = None,
         include_doc_in_similar_to: Optional[bool] = None,
         year: Optional[Dict] = None,
+        search_profile_name: Optional[str] = None,
     ) -> Dict:
         start_time = time.perf_counter_ns()
         date = _parse_dates_to_str(date) if date else None
@@ -228,10 +233,15 @@ class ZAVRetriever:
                 else {}
             ),
             **({"search_engine": search_engine} if search_engine else {}),
+            **(
+                {"search_profile_name": search_profile_name}
+                if search_profile_name
+                else {}
+            ),
             **({"query_string": QueryString(query_string)} if query_string else {}),
             **(
                 {"include_default_filters": include_default_filters}
-                if include_default_filters
+                if include_default_filters is not None
                 else {}
             ),
             **({"page": page} if page else {}),
@@ -411,21 +421,38 @@ class ZAVRetriever:
         return response_dict
 
     @handle_api_errors
-    async def get_full_text(self, document_id: Optional[str]) -> Optional[str]:
+    async def get_full_text(
+        self, document_id: Optional[str], max_chars: Optional[int] = None
+    ) -> Optional[str]:
         if not document_id:
             return None
         index_cluster = f"default:{self.__index_id}" if self.__index_id else None
-        document_assets_response = await asyncify(
-            self.__document_assets.retrieve_content
-        )(
-            document_id=document_id,
-            asset_type="text_url",
-            tenant=self.__tenant,
-            **({"index_cluster": index_cluster} if index_cluster else {}),
-            **self.__internal_headers,
-        )
-        doc_content = document_assets_response.read().decode("utf-8")
-        return doc_content
+        try:
+            response = await asyncify(self.__document_assets.retrieve_content)(
+                document_id=document_id,
+                asset_type="text_url",
+                tenant=self.__tenant,
+                _preload_content=False,
+                **({"index_cluster": index_cluster} if index_cluster else {}),
+                **self.__internal_headers,
+            )
+        except NotFoundException:
+            return None
+        read = asyncify(response.read)
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        text = ""
+        try:
+            while max_chars is None or len(text) < max_chars:
+                data = await read(TEXT_READ_CHUNK_BYTES)
+                text += decoder.decode(data, final=not data)
+                if not data:
+                    return text[:max_chars]
+            # The unread rest of the body would corrupt the next request reusing
+            # this keep-alive connection.
+            response.close()
+            return text[:max_chars]
+        finally:
+            response.release_conn()
 
     @handle_api_errors
     async def get_image_asset(self, document_id: Optional[str]) -> Optional[bytes]:
