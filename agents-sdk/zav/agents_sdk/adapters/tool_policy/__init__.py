@@ -1,3 +1,8 @@
+from zav.agents_sdk.adapters.tool_policy.sources.my_documents_rule_source import (
+    MyDocumentsRuleSource,
+    MyDocumentsRuleSourceConfiguration,
+    MyDocumentsRuleSourceFactory,
+)
 from zav.agents_sdk.adapters.tool_policy.sources.skill_tools_rule_source import (
     SkillToolsRuleSource,
     SkillToolsRuleSourceFactory,
@@ -26,10 +31,14 @@ from zav.agents_sdk.domain.tools import (
 
 AgentDependencyRegistry.register(ToolPolicyProviderFactory)
 AgentDependencyRegistry.register(SkillToolsRuleSourceFactory)
+AgentDependencyRegistry.register(MyDocumentsRuleSourceFactory)
 
 __all__ = [
     "CallDecision",
     "Confirmation",
+    "MyDocumentsRuleSource",
+    "MyDocumentsRuleSourceConfiguration",
+    "MyDocumentsRuleSourceFactory",
     "ResultDecision",
     "SkillToolsRuleSource",
     "SkillToolsRuleSourceFactory",

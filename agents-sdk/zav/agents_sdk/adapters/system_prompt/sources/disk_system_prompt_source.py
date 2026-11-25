@@ -46,6 +46,8 @@ class DiskSystemPromptSource(SystemPromptSource):
 
 
 class DiskSystemPromptSourceFactory(AgentDependencyFactory):
+    local_only = True
+
     @classmethod
     def create(
         cls,

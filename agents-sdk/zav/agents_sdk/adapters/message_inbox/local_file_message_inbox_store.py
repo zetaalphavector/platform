@@ -1,9 +1,9 @@
-import fcntl
 import hashlib
 import json
 import os
 from typing import List, Optional
 
+from filelock import FileLock
 from zav.pydantic_compat import PYDANTIC_V2
 
 from zav.agents_sdk.domain.message_inbox import InboxItem, MessageInboxStore
@@ -11,7 +11,7 @@ from zav.agents_sdk.domain.message_inbox import InboxItem, MessageInboxStore
 
 class LocalFileMessageInboxStore(MessageInboxStore):
     """File-backed inbox for local/dev: one JSON-lines file per conversation.
-    Appends and takes run under an exclusive ``flock`` on the conversation's
+    Appends and takes run under an exclusive lock on the conversation's
     lock file, so processes sharing the directory never lose or re-read an
     item."""
 
@@ -42,8 +42,7 @@ class LocalFileMessageInboxStore(MessageInboxStore):
     ) -> None:
         file_path = self.__inbox_file_path(tenant, requester_uuid, session_id)
         line = item.model_dump_json() if PYDANTIC_V2 else item.json()
-        with open(f"{file_path}.lock", "w") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with FileLock(f"{file_path}.lock"):
             with open(file_path, "a") as inbox_file:
                 inbox_file.write(f"{line}\n")
 
@@ -56,8 +55,7 @@ class LocalFileMessageInboxStore(MessageInboxStore):
         file_path = self.__inbox_file_path(tenant, requester_uuid, session_id)
         if not os.path.exists(file_path):
             return []
-        with open(f"{file_path}.lock", "w") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with FileLock(f"{file_path}.lock"):
             with open(file_path) as inbox_file:
                 lines = [line for line in inbox_file.read().splitlines() if line]
             os.remove(file_path)
@@ -73,8 +71,7 @@ class LocalFileMessageInboxStore(MessageInboxStore):
         message_id: str,
     ) -> bool:
         file_path = self.__inbox_file_path(tenant, requester_uuid, session_id)
-        with open(f"{file_path}.lock", "w") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with FileLock(f"{file_path}.lock"):
             try:
                 with open(file_path) as inbox_file:
                     lines = [line for line in inbox_file.read().splitlines() if line]
@@ -103,8 +100,7 @@ class LocalFileMessageInboxStore(MessageInboxStore):
         session_id: str,
     ) -> None:
         file_path = self.__inbox_file_path(tenant, requester_uuid, session_id)
-        with open(f"{file_path}.lock", "w") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with FileLock(f"{file_path}.lock"):
             try:
                 os.remove(file_path)
             except FileNotFoundError:

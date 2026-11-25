@@ -129,7 +129,6 @@ _BLOCK_GROUPS = {
     "context_window_configuration": "policies",
     "sub_agent_limits_configuration": "delegation",
     "recent_memory_context_strategy_configuration": "memory",
-    "my_documents_argument_resolver_configuration": "mcp",
 }
 # Providers whose blocks show with the policies rather than as a capability.
 _PROVIDER_GROUPS = {"tool_search": "policies", "tool_policy": "policies"}

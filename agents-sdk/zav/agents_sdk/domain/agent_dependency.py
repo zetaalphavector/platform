@@ -49,6 +49,12 @@ class DependencyGroup(Generic[T]):
 
 
 class AgentDependencyFactory(ABC, Generic[DEPENDENCY_PARAMS, T]):
+    """Creates one dependency of an agent. Set `local_only = True` on a factory
+    whose dependency reads or writes the machine's own files, or otherwise only
+    makes sense on a developer's machine: a hosted service does not serve it."""
+
+    local_only: ClassVar[bool] = False
+
     @classmethod
     @abstractmethod
     def create(

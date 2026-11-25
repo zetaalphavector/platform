@@ -98,6 +98,34 @@ class CallMCPTool(Command):
 
 
 @dataclass
+class ReadAppView(Command):
+    """The view of the agent's tool ``view_tool``, for the chat to render a
+    call of that tool with."""
+
+    tenant: str
+    request_headers: RequestHeaders
+    agent_identifier: str
+    view_tool: str
+    bot_params: Optional[Dict[str, Any]] = None
+    index_id: Optional[str] = None
+
+
+@dataclass
+class CallAppTool(Command):
+    """A call the view of the agent's tool ``view_tool`` makes to
+    ``tool_name``, a tool of the same origin, by its name there."""
+
+    tenant: str
+    request_headers: RequestHeaders
+    agent_identifier: str
+    view_tool: str
+    tool_name: str
+    arguments: Dict[str, Any]
+    bot_params: Optional[Dict[str, Any]] = None
+    index_id: Optional[str] = None
+
+
+@dataclass
 class StreamRealtimeTranscription(Command):
     tenant: str
     browser_frames: AsyncIterator[Union[str, bytes]]

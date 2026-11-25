@@ -69,6 +69,7 @@ class DocumentRequestErrorCode(ModelSimple):
             'DR014': "DR014",
             'DR015': "DR015",
             'DR016': "DR016",
+            'DR017': "DR017",
         },
     }
 
@@ -120,10 +121,10 @@ class DocumentRequestErrorCode(ModelSimple):
         Note that value can be passed either in args or in kwargs, but not in both.
 
         Args:
-            args[0] (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", ]  # noqa: E501
+            args[0] (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", "DR017", ]  # noqa: E501
 
         Keyword Args:
-            value (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", ]  # noqa: E501
+            value (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", "DR017", ]  # noqa: E501
             _check_type (bool): if True, values for parameters in openapi_types
                                 will be type checked and a TypeError will be
                                 raised if the wrong type is input.
@@ -210,10 +211,10 @@ class DocumentRequestErrorCode(ModelSimple):
         Note that value can be passed either in args or in kwargs, but not in both.
 
         Args:
-            args[0] (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", ]  # noqa: E501
+            args[0] (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", "DR017", ]  # noqa: E501
 
         Keyword Args:
-            value (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", ]  # noqa: E501
+            value (str): An enumeration.., must be one of ["DR000", "DR001", "DR002", "DR003", "DR004", "DR005", "DR006", "DR007", "DR008", "DR009", "DR010", "DR011", "DR012", "DR013", "DR014", "DR015", "DR016", "DR017", ]  # noqa: E501
             _check_type (bool): if True, values for parameters in openapi_types
                                 will be type checked and a TypeError will be
                                 raised if the wrong type is input.

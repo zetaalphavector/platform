@@ -2,7 +2,7 @@ import asyncio
 import ipaddress
 import socket
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
@@ -260,6 +260,57 @@ def validate_and_resolve(
         if not addresses_are_safe(addresses):
             raise CrawlBlocked("blocked_resolved_ip")
     return parsed, addresses
+
+
+# An endpoint a hosted service is configured with (an MCP server, a database, a
+# vendor API) may listen on any port: what is guarded is its address.
+ENDPOINT_POLICY = UrlPolicy(allowed_ports=frozenset(range(1, 65536)), oast_suffixes=())
+
+
+def endpoint_reachable(
+    url: str,
+    internal_hosts: Collection[str] = (),
+    resolve_host: ResolveHostSync = resolve_host_sync,
+) -> bool:
+    """Whether a hosted service may connect to the host `url` names, whatever
+    its scheme: one of the `internal_hosts` it names, or a public address."""
+    host = urlparse(url).hostname
+    if not host:
+        return False
+    return host_reachable(host, internal_hosts, resolve_host)
+
+
+def host_reachable(
+    host: str,
+    internal_hosts: Collection[str] = (),
+    resolve_host: ResolveHostSync = resolve_host_sync,
+) -> bool:
+    """Whether a hosted service may connect to `host`: one of the
+    `internal_hosts`, or a public address."""
+    return dial_address(host, internal_hosts, resolve_host) is not None
+
+
+def dial_address(
+    host: str,
+    internal_hosts: Collection[str] = (),
+    resolve_host: ResolveHostSync = resolve_host_sync,
+) -> Optional[str]:
+    """Where a hosted service connects for `host`: the host itself when it is
+    one of the `internal_hosts`, the public address that was checked
+    otherwise, None when it may not connect. Connecting to the returned
+    address leaves no second name look-up to answer differently."""
+    if host.lower() in {internal.lower() for internal in internal_hosts}:
+        return host
+    try:
+        parsed = ENDPOINT_POLICY.validate(
+            f"http://[{host}]/" if ":" in host else f"http://{host}/"
+        )
+        if parsed.is_ip_literal:
+            return str(_parse_ip_literal(parsed.hostname))
+        addresses = resolve_host(parsed.hostname)
+        return str(addresses[0]) if addresses_are_safe(addresses) else None
+    except (CrawlBlocked, OSError):
+        return None
 
 
 def pin_request_to_ip(request: httpx.Request, ip: str, host: str) -> None:

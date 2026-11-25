@@ -1,11 +1,14 @@
 import os
-from typing import Any, Dict, List
+import re
+import shutil
+from typing import Any, Dict, List, Optional
 
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field
 
 from zav.agents_sdk.adapters.repl.repl_sandbox import HostFunctions, ReplSandbox
 from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
+from zav.agents_sdk.domain.request_headers import RequestHeaders
 
 WORKSPACE_VIRTUAL_PATH = "/workspace"
 
@@ -17,7 +20,9 @@ class MontyReplSandboxConfiguration(BaseModel):
     workspace_directory: str = Field(
         ".workspace",
         description=(
-            "Host directory mounted read-write at /workspace. Must contain only "
+            "Host directory holding one subdirectory per tenant, user and "
+            "conversation, mounted read-write at /workspace. A conversation's "
+            "subdirectory is deleted when its agent's turn ends. Must contain only "
             "data: anything written there is untrusted and must never be executed "
             "by the host."
         ),
@@ -43,8 +48,10 @@ class MontyReplSandboxConfiguration(BaseModel):
 # missing modules one failed import at a time.
 _PYTHON_SUBSET = (
     "The interpreter runs a Python subset. Available standard library: asyncio "
-    "(no event loop; `await` at top level, `asyncio.gather` for parallel tool "
-    "calls), base64, binascii, collections, dataclasses, datetime, functools, "
+    "(no event loop; `await` at top level, `asyncio.gather(*calls)` without "
+    "keyword arguments for parallel tool calls; await every call in the "
+    "`run_python` call that creates it, since pending calls do not survive "
+    "between calls), base64, binascii, collections, dataclasses, datetime, functools, "
     "itertools, json, math, os, pathlib, re, sys, typing, unicodedata. Absent: "
     "textwrap, enum, contextlib, random, time, io, copy, string, struct, "
     "operator, inspect, logging, traceback, hashlib, uuid, urllib and anything "
@@ -72,9 +79,11 @@ class MontyReplSandbox(ReplSandbox):
         read_only_mounts: Dict[str, str],
         max_duration_seconds: float,
         max_memory_bytes: int,
+        delete_workspace_on_close: bool = False,
     ) -> None:
         self.enabled = enabled
         self.__workspace_directory = workspace_directory
+        self.__delete_workspace_on_close = delete_workspace_on_close
         self.__read_only_mounts = read_only_mounts
         self.__max_duration_seconds = max_duration_seconds
         self.__max_memory_bytes = max_memory_bytes
@@ -125,7 +134,10 @@ class MontyReplSandbox(ReplSandbox):
         except Exception as e:
             logger.error(f"run_python failed: {e}")
             await self.__reset_session()
-            return f"Error: {type(e).__name__}: {e}"
+            return (
+                f"Error: {type(e).__name__}: {e}\nThe session was reset and all "
+                "variables are gone."
+            )
         return self.__render_output(printed.output, value)
 
     async def aclose(self) -> None:
@@ -136,6 +148,8 @@ class MontyReplSandbox(ReplSandbox):
                 await pool.__aexit__(None, None, None)
             except Exception as e:
                 logger.warning(f"Error closing the Python sandbox pool: {e}")
+        if self.__delete_workspace_on_close:
+            shutil.rmtree(self.__workspace_directory, ignore_errors=True)
 
     def __mounts(self, pydantic_monty: Any) -> List[Any]:
         os.makedirs(self.__workspace_directory, exist_ok=True)
@@ -192,18 +206,34 @@ class MontyReplSandbox(ReplSandbox):
 
 
 class MontyReplSandboxFactory(AgentDependencyFactory):
+    local_only = True
+
     @classmethod
     def create(
         cls,
         monty_repl_sandbox_configuration: MontyReplSandboxConfiguration = (
             MontyReplSandboxConfiguration()
         ),
+        tenant: Optional[str] = None,
+        request_headers: Optional[RequestHeaders] = None,
+        session_id: Optional[str] = None,
+        agent_depth: int = 0,
     ) -> MontyReplSandbox:
         configuration = monty_repl_sandbox_configuration
+        scope = (
+            tenant,
+            request_headers.requester_uuid if request_headers else None,
+            session_id,
+        )
         return MontyReplSandbox(
             enabled=configuration.enabled,
-            workspace_directory=configuration.workspace_directory,
+            workspace_directory=os.path.join(
+                configuration.workspace_directory,
+                *(re.sub(r"[^\w-]", "_", part or "_") for part in scope),
+            ),
             read_only_mounts=configuration.read_only_mounts,
             max_duration_seconds=configuration.max_duration_seconds,
             max_memory_bytes=configuration.max_memory_bytes,
+            # Sub-agents share their parent's directory and close before it.
+            delete_workspace_on_close=session_id is not None and agent_depth == 0,
         )

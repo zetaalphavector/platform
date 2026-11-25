@@ -238,6 +238,7 @@ class Refiner:
 
 class RefinerFactory(AgentDependencyFactory):
     __singleton__ = True
+    local_only = True
 
     @classmethod
     def create(

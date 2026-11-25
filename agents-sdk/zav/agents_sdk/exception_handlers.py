@@ -8,6 +8,7 @@ from zav.agents_sdk.adapters.stream_buffer.resumable_chat_streams import (
     ChatStreamBusyError,
     ChatStreamGoneError,
 )
+from zav.agents_sdk.domain.chat_agent import UnreadableDocumentError
 from zav.agents_sdk.domain.chat_conversation_store import ConversationNotOwnedError
 from zav.agents_sdk.handlers.chats import (
     ChatMessageAlreadyReadError,
@@ -102,4 +103,16 @@ def add_exception_handlers(app: FastAPI):
         return JSONResponse(
             status_code=422,
             content={"detail": str(exc), "code": "content_filter"},
+        )
+
+    @app.exception_handler(UnreadableDocumentError)
+    async def unreadable_document_handler(
+        request: Request, exc: UnreadableDocumentError
+    ):
+        # A processor agent could not open or read the document. Deterministic,
+        # like a content-filter block, so it gets the same shape: 422 and a
+        # machine-readable code the caller can tell from a server fault.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": str(exc), "code": "unreadable_document"},
         )

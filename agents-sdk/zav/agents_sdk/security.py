@@ -17,13 +17,11 @@ _PROTECTED_HANDLER_PARAMS: Set[str] = {
 # Spawn limits, tool rules, the agent's prompt and its tool-step cap belong to
 # the agent setup and the tenant: only the setup sets them.
 # Otherwise a request, or a delegable agent's stored ``bot_params``, could fill
-# them in for every agent of the tree it starts. Which MCP servers receive the
-# user's files is the admin's choice too, and so are the platform services'
+# them in for every agent of the tree it starts. So are the platform services'
 # URLs: their clients send the caller's credentials there.
 _SETUP_ONLY_PARAMS: Set[str] = {
     "sub_agent_limits_configuration",
     "tool_policy_configuration",
-    "my_documents_argument_resolver_configuration",
     "system_prompt",
     "system_prompt_provider_configuration",
     "max_nesting_level",
@@ -38,17 +36,23 @@ _SETUP_ONLY_PARAMS: Set[str] = {
 }
 # Each tool rule source's own block (``<name>_rule_source_configuration``) is
 # tool policy too: a request filling in ``enabled: false`` would switch the rule
-# off for its turn. A system prompt source's block is the agent's prompt.
+# off for its turn, and which MCP servers receive the user's files
+# (``my_documents``) is the admin's choice. A system prompt source's block is
+# the agent's prompt. An audio or video source's block names the service and
+# the tenant's or the pod's credentials it uses: a request filling one in would
+# switch on a source the setup left off.
 _SETUP_ONLY_SUFFIXES = (
     "_rule_source_configuration",
     "_system_prompt_source_configuration",
+    "_audio_transcription_configuration",
+    "_video_captioning_configuration",
 )
 
 # Fields of a configuration block only the agent setup sets. Which MCP servers
 # an agent uses, mounted or defined inline, is the admin's choice; a request may
 # only narrow it (``selected_servers``), and leaves its confirmation default
-# as the setup set it. So are the paths a source reads or writes and the URLs
-# the server fetches.
+# as the setup set it. So are the paths a source reads or writes, the URLs the
+# server fetches and the database the SQL tools query.
 _SETUP_ONLY_FIELDS: Dict[str, Set[str]] = {
     "mcp_tools_provider_configuration": {"mounts", "servers", "confirmation_default"},
     "agent_delegation_provider_configuration": {"sub_agent_approvals"},
@@ -63,6 +67,10 @@ _SETUP_ONLY_FIELDS: Dict[str, Set[str]] = {
     "monty_repl_sandbox_configuration": {"workspace_directory"},
     "platform_docs_tools_source_configuration": {"docs_base_url"},
     "refiner_configuration": {"ledger_path"},
+    "sql_database_tools_source_configuration": {
+        "connection_string",
+        "connection_string_ref",
+    },
 }
 
 __all__ = [

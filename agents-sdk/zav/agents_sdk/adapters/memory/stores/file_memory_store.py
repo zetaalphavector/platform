@@ -99,6 +99,7 @@ class FileMemoryStore(MemoryStore):
 
 
 class FileMemoryStoreFactory(AgentDependencyFactory):
+    local_only = True
 
     @classmethod
     def create(

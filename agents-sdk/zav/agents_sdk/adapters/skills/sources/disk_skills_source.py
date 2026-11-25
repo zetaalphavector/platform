@@ -180,6 +180,7 @@ class DiskSkillsSource(SkillsSource):
 
 
 class DiskSkillsSourceFactory(AgentDependencyFactory):
+    local_only = True
 
     @classmethod
     def create(

@@ -79,11 +79,13 @@ class MessageBus:
 
     async def __handle_event(self, event: Event, queue: List[Message]):
         for handler in self.__event_handlers[type(event)]:
-            logger.debug(f"handling event {event} with handler {handler}")
+            logger.debug(
+                "handling event %s with handler %s", type(event).__name__, handler
+            )
             await handler(event, queue)
 
     async def __handle_command(self, command: Command, queue: List[Message]):
-        logger.debug(f"handling command {command}")
+        logger.debug("handling command %s", type(command).__name__)
         handler = self.__command_handlers[type(command)]
         result = await handler(command, queue)
         return result

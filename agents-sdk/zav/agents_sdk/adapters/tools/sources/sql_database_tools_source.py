@@ -8,6 +8,7 @@ from sqlalchemy import MetaData, Table, and_, create_engine, func, inspect, sele
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import Select
 from sqlalchemy.sql.selectable import Subquery
+from zav.encryption.pydantic import EncryptedStrRef, secret_or_ref
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field, model_validator
 
@@ -136,20 +137,40 @@ class QueryPlan(BaseModel):
 
 class SQLDatabaseToolsSourceConfiguration(ToolsSourceConfiguration):
     enabled: bool = Field(False, description="Enable SQL database tools source.")
-    connection_string: str = ""
+    connection_string: Optional[str] = None
+    connection_string_ref: Optional[EncryptedStrRef] = Field(
+        None, description="Name of the secret holding the SQLAlchemy database URL."
+    )
     allowed_tables: Optional[List[str]] = None
     allowed_schemas: Optional[List[str]] = None
     max_rows_per_query: int = 10000
     query_timeout_seconds: int = 30
 
+    @model_validator(mode="after")
+    def validate_connection_string(self):
+        secret_or_ref(
+            {
+                "connection_string": self.connection_string,
+                "connection_string_ref": self.connection_string_ref,
+            },
+            "connection_string",
+        )
+        return self
+
+    def database_url(self) -> str:
+        if self.connection_string_ref is not None:
+            return self.connection_string_ref.get_unencrypted_secret() or ""
+        return self.connection_string or ""
+
 
 def _create_sql_engine(config: SQLDatabaseToolsSourceConfiguration) -> Engine:
     connect_args: Dict[str, Any] = {}
-    if config.connection_string.startswith("postgresql"):
+    database_url = config.database_url()
+    if database_url.startswith("postgresql"):
         connect_args["connect_timeout"] = config.query_timeout_seconds
 
     return create_engine(
-        config.connection_string,
+        database_url,
         pool_pre_ping=True,
         pool_recycle=3600,
         connect_args=connect_args,
@@ -166,7 +187,7 @@ class SQLDatabaseToolsSource(ToolsSource):
         engine: Optional[Engine] = None,
     ):
         self.defer_tools = config.defer_tools
-        self.enabled = config.enabled and bool(config.connection_string)
+        self.enabled = config.enabled and bool(config.database_url())
         self.__config = config
         self.__engine = engine
         self.__metadata = MetaData()
@@ -1190,6 +1211,6 @@ class SQLDatabaseToolsSourceFactory(AgentDependencyFactory):
     ) -> SQLDatabaseToolsSource:
         config = sql_database_tools_source_configuration
         engine = None
-        if config.enabled and config.connection_string:
+        if config.enabled and config.database_url():
             engine = _create_sql_engine(config)
         return SQLDatabaseToolsSource(config=config, engine=engine)

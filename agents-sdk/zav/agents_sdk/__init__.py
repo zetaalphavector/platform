@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         ChatAgent,
         ProcessorAgent,
         StreamableChatAgent,
+        UnreadableDocumentError,
     )
     from zav.agents_sdk.domain.chat_agent_factory import ChatAgentFactory
     from zav.agents_sdk.domain.chat_agent_registry import (
@@ -164,6 +165,7 @@ __all__ = [
     "ChatConversationStore",
     "ProcessorAgent",
     "StreamableChatAgent",
+    "UnreadableDocumentError",
     "ChatAgentClassRegistry",
     "ChatAgentClassRegistryProtocol",
     "ChatMessage",

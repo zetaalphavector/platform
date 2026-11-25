@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, List, Optional, Set, Union
+from typing import Any, AsyncIterator, List, Optional, Set, Tuple, Union
 
 from zav.llm_tracing import Span
 from zav.prompt_completion import ChatCompletionClient
@@ -25,7 +25,7 @@ from zav.agents_sdk.adapters.llm_models.streaming_response_assembler import (
 )
 from zav.agents_sdk.adapters.llm_models.tool_call_runner import (
     CallCheck,
-    ResultCheck,
+    CallRun,
     ToolCallResult,
     ToolCallRunner,
 )
@@ -41,7 +41,13 @@ from zav.agents_sdk.domain.chat_message import (
     ContentPart,
     ContentPartTool,
 )
-from zav.agents_sdk.domain.tools import CallDecision, ResultDecision, ToolsRegistry
+from zav.agents_sdk.domain.tools import (
+    CallDecision,
+    ResultDecision,
+    Tool,
+    ToolCallFrame,
+    ToolsRegistry,
+)
 
 MAX_NESTING_FINAL_TURN_INSTRUCTION = (
     "You have reached the maximum number of tool-calling steps allowed for this "
@@ -532,7 +538,7 @@ class ChatTurnRunner:
             request,
             state.tool_choice,
             self.__call_check(transcript, reply),
-            self.__result_check(transcript, reply),
+            self.__call_run(transcript, reply),
         )
         if streaming and request.should_stream_tool_progress:
             async for event in runner.execute_streaming(calls):
@@ -565,7 +571,7 @@ class ChatTurnRunner:
         request: ChatTurnRequest,
         tool_choice: Optional[str],
         check_call: Optional[CallCheck] = None,
-        check_result: Optional[ResultCheck] = None,
+        run_call: Optional[CallRun] = None,
     ) -> ToolCallRunner:
         return ToolCallRunner(
             tools_registry=tools_registry,
@@ -576,7 +582,7 @@ class ChatTurnRunner:
             session_approvals=self.__session_approvals,
             approvals=self.__approvals,
             check_call=check_call,
-            check_result=check_result,
+            run_call=run_call,
         )
 
     def __call_check(
@@ -591,19 +597,26 @@ class ChatTurnRunner:
                 if PYDANTIC_V2
                 else reply.copy(update=update)
             )
-            return await self.__tool_policy.check_call(call, [*transcript, so_far])
-
-        return check
-
-    def __result_check(
-        self, transcript: List[ChatCompletion], reply: ChatCompletion
-    ) -> ResultCheck:
-        async def check(call: ToolCallRequest, result: Any) -> Optional[ResultDecision]:
-            return await self.__tool_policy.check_result(
-                call, result, [*transcript, reply]
+            return await self.__tool_policy.for_caller("direct").check_call(
+                call, [*transcript, so_far]
             )
 
         return check
+
+    def __call_run(
+        self, transcript: List[ChatCompletion], reply: ChatCompletion
+    ) -> CallRun:
+        async def run(
+            tools: ToolsRegistry,
+            call: ToolCallRequest,
+            tool: Tool,
+            frame: ToolCallFrame,
+        ) -> Tuple[Any, Optional[ResultDecision]]:
+            return await self.__tool_policy.for_caller("direct").run(
+                tools, call, tool, [*transcript, reply], frame
+            )
+
+        return run
 
 
 class _TurnOutput:

@@ -15,3 +15,9 @@ class ObjectStorageAttributes(BaseModel):
     content_length: int
     content_encoding: Optional[str] = None
     content_language: Optional[str] = None
+
+
+class ObjectStorageRange(BaseModel):
+    content: bytes
+    total_size: int
+    etag: str

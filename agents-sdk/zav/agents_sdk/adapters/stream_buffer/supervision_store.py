@@ -1,9 +1,10 @@
-import fcntl
 import hashlib
 import json
 import os
 import uuid
 from typing import Optional
+
+from filelock import FileLock
 
 from zav.agents_sdk.domain.chat_stream_supervision_store import (
     ChatStreamStatus,
@@ -20,7 +21,7 @@ class LocalFileChatStreamSupervisionStore(ChatStreamSupervisionStore):
     to avoid torn reads by a reconnecting pod sharing the same directory.
 
     ``compare_and_swap`` runs its read-compare-write under an exclusive
-    ``flock`` on a per-conversation lock file, so two processes sharing the
+    lock on a per-conversation lock file, so two processes sharing the
     directory cannot both clear the precondition and clobber each other's
     claim. That gives the file backend the same atomic compare-and-swap the
     production backend gets from a serializable transaction — which is what
@@ -61,8 +62,7 @@ class LocalFileChatStreamSupervisionStore(ChatStreamSupervisionStore):
         # directory cannot both clear the precondition and clobber each other's
         # claim — the file-backed equivalent of the production backend's
         # serializable compare-and-swap.
-        with open(f"{file_path}.lock", "w") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with FileLock(f"{file_path}.lock"):
             current = await self.read(tenant, requester_uuid, session_id)
             current_epoch = current.epoch if current is not None else None
             if current_epoch != expected_epoch:
@@ -114,8 +114,7 @@ class LocalFileChatStreamSupervisionStore(ChatStreamSupervisionStore):
         # Same lock as compare_and_swap: the occupancy check and the removal
         # must be one atomic step, or a claim landing in between would be
         # deleted by a reaper for an already-superseded turn.
-        with open(f"{file_path}.lock", "w") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with FileLock(f"{file_path}.lock"):
             current = await self.read(tenant, requester_uuid, session_id)
             if (
                 current is None

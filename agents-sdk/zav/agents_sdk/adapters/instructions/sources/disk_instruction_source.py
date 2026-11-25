@@ -70,6 +70,7 @@ class DiskInstructionSource(WritableInstructionSource):
 
 
 class DiskInstructionSourceFactory(AgentDependencyFactory):
+    local_only = True
 
     @classmethod
     def create(

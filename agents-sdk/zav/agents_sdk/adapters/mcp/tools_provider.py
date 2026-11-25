@@ -1,16 +1,25 @@
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Protocol, Set
+from typing import Any, Callable, Dict, List, Literal, Optional, Set
 
+from mcp.types import TextResourceContents
 from mcp.types import Tool as MCPTool
 from zav.logging import logger
 from zav.pydantic_compat import BaseModel, Field, ValidationError
 
 from zav.agents_sdk.adapters._filtering import is_source_active, passes_name_filter
+from zav.agents_sdk.adapters.mcp.app_views import (
+    MCP_APP_VIEWS,
+    result_for_model,
+    tool_callers,
+    tool_view,
+)
 from zav.agents_sdk.adapters.mcp.connection_service import (
+    HttpTransportFactory,
     MCPConnectionService,
     MCPServerConnection,
     MCPServerUnavailableError,
+    ServerCheck,
 )
 from zav.agents_sdk.adapters.mcp.oauth_token_storage import MCPOAuthIntegrationStore
 from zav.agents_sdk.adapters.mcp.server_config import (
@@ -27,9 +36,12 @@ from zav.agents_sdk.domain.agent_dependency import AgentDependencyFactory
 from zav.agents_sdk.domain.mcp_configuration_store import (
     MCPConfigurationStore,
 )
+from zav.agents_sdk.domain.mcp_content import without_files
 from zav.agents_sdk.domain.mcp_oauth import MCP_OAUTH_CONNECT_TOOL_NAME_PREFIX
 from zav.agents_sdk.domain.request_headers import RequestHeaders
 from zav.agents_sdk.domain.tools import (
+    ALL_CALLERS,
+    AppView,
     Tool,
     ToolDisplay,
     ToolNamespace,
@@ -140,6 +152,16 @@ class MCPToolsProviderConfiguration(BaseModel):
     exclude_tools: Optional[List[str]] = Field(
         None, description="Denylist of (namespaced) tool names to exclude."
     )
+    app_views: bool = Field(
+        False,
+        description=(
+            "Support MCP Apps: tell servers this client renders the "
+            "interactive views their tools name, offer a tool the server marks "
+            "view-only to the view instead of the model, and keep a tool's "
+            "structured result for its view. No effect yet: MCP server views "
+            "are off."
+        ),
+    )
     confirmation_default: Literal["non_read_only", "all", "none"] = Field(
         "none",
         description=(
@@ -162,15 +184,6 @@ class MCPToolEntry:
     title: Optional[str]
     description: str
     read_only: bool
-
-
-class MCPArgumentResolver(Protocol):
-    """Fills what a model cannot write into an MCP tool call's arguments, such
-    as a file's bytes, right before the call."""
-
-    async def resolve(
-        self, server_name: str, arguments: Dict[str, Any]
-    ) -> Dict[str, Any]: ...
 
 
 def qualified_tool_name(server_name: str, tool_name: str) -> str:
@@ -330,13 +343,13 @@ class MCPToolsProvider:
         connection_service: MCPConnectionService,
         tenant: str,
         mcp_configuration_store: Optional[MCPConfigurationStore] = None,
-        argument_resolver: Optional[MCPArgumentResolver] = None,
+        app_views: bool = False,
     ):
         self.__config = mcp_tools_provider_configuration
         self.__connection_service = connection_service
         self.__tenant = tenant
         self.__mcp_configuration_store = mcp_configuration_store
-        self.__argument_resolver = argument_resolver
+        self.__app_views = app_views
         self.__resolved: Optional[Dict[str, List[Tool]]] = None
         connection_service.on_listing_changed(self.__on_listing_changed)
 
@@ -526,6 +539,10 @@ class MCPToolsProvider:
             or f"Tools of the {server_name} MCP server.",
         )
         granted = granted_mcp_tools(self.__config, server_cfg, mcp_tools)
+        # Only a server with views has callers among them.
+        has_views = self.__app_views and any(
+            tool_view(mcp_tool) for mcp_tool in mcp_tools
+        )
         server_tools: List[Tool] = []
         for mcp_tool in mcp_tools:
             if mcp_tool.name not in granted:
@@ -544,8 +561,15 @@ class MCPToolsProvider:
                 except Exception as e:
                     logger.info(f"Error converting MCP schema to strict mode: {e}")
 
+            view = tool_view(mcp_tool) if has_views else None
+            callers = tool_callers(mcp_tool) if has_views else list(ALL_CALLERS)
+            # A view reads the whole result: it renders a call's structured
+            # result and calls tools as an MCP client would.
+            for_views = view is not None or "app" in callers
             streaming_config: ToolStreamingConfig | None = None
-            if self.__config.tool_streaming is None:
+            if self.__config.tool_streaming is None or (
+                for_views and tool_name not in self.__config.tool_streaming
+            ):
                 fallback = f"Completed {tool_name}"
                 streaming_config = ToolStreamingConfig(
                     running_text=f"Running {tool_name}...",
@@ -554,18 +578,36 @@ class MCPToolsProvider:
                 )
             else:
                 streaming_config = self.__config.tool_streaming.get(tool_name)
+            if for_views and streaming_config is not None:
+                streaming_config = streaming_config.copy(
+                    update={"llm_response_transform": result_for_model}
+                )
+            if streaming_config is not None:
+                streaming_config = streaming_config.copy(
+                    update={
+                        "response_transform": _then_without_files(
+                            streaming_config.response_transform
+                        ),
+                        "llm_response_transform": _then_without_files(
+                            streaming_config.llm_response_transform
+                        ),
+                    }
+                )
 
             server_tools.append(
                 Tool(
                     name=tool_name,
                     description=mcp_tool.description or "",
-                    executable=self.__make_invoke(server_cfg, mcp_tool.name),
+                    executable=self.__make_invoke(
+                        server_cfg, mcp_tool.name, full_result=for_views
+                    ),
                     parameters_spec=schema,
                     streaming_config=streaming_config,
+                    allowed_callers=callers,
                     origin=ToolOrigin(
                         provider="mcp", source=server_name, name=mcp_tool.name
                     ),
-                    display=self.__tool_display(server_cfg, mcp_tool),
+                    display=self.__tool_display(server_cfg, mcp_tool, view),
                     namespace=namespace,
                     read_only=read_only,
                     options=mcp_tool_options(self.__config, read_only, server_name),
@@ -574,7 +616,7 @@ class MCPToolsProvider:
         return server_tools
 
     def __tool_display(
-        self, server_cfg: MCPServerConfig, mcp_tool: MCPTool
+        self, server_cfg: MCPServerConfig, mcp_tool: MCPTool, view: Optional[str]
     ) -> ToolDisplay:
         annotations = mcp_tool.annotations
         configured = server_cfg.display or ToolDisplay()
@@ -582,23 +624,44 @@ class MCPToolsProvider:
             app=configured.app or server_cfg.get_transport_config().name,
             icon_url=configured.icon_url,
             title=mcp_tool.title or (annotations.title if annotations else None),
+            view=view,
         )
 
-    def __make_invoke(self, server_cfg: MCPServerConfig, tool_name: str):
+    async def read_view(self, server_name: str, uri: str) -> AppView:
+        """The HTML of a view one of the server's tools names, read from the
+        server. Raises MCPServerUnavailableError when it cannot be reached."""
+        servers = await resolve_mcp_servers(
+            self.__config, self.__tenant, self.__mcp_configuration_store
+        )
+        server_cfg = next(
+            (s for s in servers if s.get_transport_config().name == server_name),
+            None,
+        )
+        if server_cfg is None:
+            raise ValueError(f"MCP server '{server_name}' is not configured.")
+        result = await self.__connection_service.read_resource(server_cfg, uri)
+        content = next(
+            (c for c in result.contents if isinstance(c, TextResourceContents)), None
+        )
+        if content is None:
+            raise ValueError(f"The view '{uri}' of '{server_name}' has no HTML.")
+        ui = (content.meta or {}).get("ui")
+        return AppView(html=content.text, ui_meta=ui if isinstance(ui, dict) else {})
+
+    def __make_invoke(
+        self, server_cfg: MCPServerConfig, tool_name: str, full_result: bool = False
+    ):
         server_name = server_cfg.get_transport_config().name
 
         async def invoke(**kwargs: Any) -> Any:
-            arguments = (
-                await self.__argument_resolver.resolve(server_name, kwargs)
-                if self.__argument_resolver is not None
-                else kwargs
-            )
             try:
                 result = await self.__connection_service.call(
-                    server_cfg, tool_name, arguments
+                    server_cfg, tool_name, kwargs
                 )
             except MCPServerUnavailableError as e:
                 return self.__authorization_required_response(server_name, str(e))
+            if full_result:
+                return result.model_dump(mode="json", by_alias=True, exclude_none=True)
             items = result.content or []
             if len(items) == 1:
                 return items[0].model_dump_json()
@@ -607,6 +670,38 @@ class MCPToolsProvider:
             )
 
         return invoke
+
+
+def _then_without_files(
+    transform: Optional[Callable[[Optional[Dict]], Optional[Dict]]],
+) -> Callable[[Optional[Dict]], Optional[Dict]]:
+    def transformed(response: Optional[Dict]) -> Optional[Dict]:
+        return without_files(transform(response) if transform else response)
+
+    return transformed
+
+
+def connection_service_from(
+    request_headers: RequestHeaders,
+    mcp_oauth_store: MCPOAuthIntegrationStore,
+    tenant: str,
+    configuration: MCPToolsProviderConfiguration,
+    check_server: Optional[ServerCheck] = None,
+    http_transport_factory: Optional[HttpTransportFactory] = None,
+) -> MCPConnectionService:
+    """The connection service of one request's user, as the agent's MCP
+    configuration sets it up. A service that embeds the SDK with its own rules
+    for dialling servers passes them here from its own factory."""
+    return MCPConnectionService(
+        tenant=tenant,
+        user_uuid=request_headers.requester_uuid,
+        connection_store=mcp_oauth_store,
+        client_session_timeout_seconds=configuration.client_session_timeout_seconds,
+        tool_call_timeout_seconds=configuration.tool_call_timeout_seconds,
+        app_views=configuration.app_views and MCP_APP_VIEWS,
+        check_server=check_server,
+        http_transport_factory=http_transport_factory,
+    )
 
 
 class MCPConnectionServiceFactory(AgentDependencyFactory):
@@ -623,16 +718,8 @@ class MCPConnectionServiceFactory(AgentDependencyFactory):
             MCPToolsProviderConfiguration()
         ),
     ) -> MCPConnectionService:
-        return MCPConnectionService(
-            tenant=tenant,
-            user_uuid=request_headers.requester_uuid,
-            connection_store=mcp_oauth_store,
-            client_session_timeout_seconds=(
-                mcp_tools_provider_configuration.client_session_timeout_seconds
-            ),
-            tool_call_timeout_seconds=(
-                mcp_tools_provider_configuration.tool_call_timeout_seconds
-            ),
+        return connection_service_from(
+            request_headers, mcp_oauth_store, tenant, mcp_tools_provider_configuration
         )
 
 
@@ -643,7 +730,6 @@ class MCPToolsProviderFactory(AgentDependencyFactory):
     def create(
         cls,
         mcp_connection_service: MCPConnectionService,
-        mcp_argument_resolver: MCPArgumentResolver,
         tenant: str = "zetaalpha",
         mcp_tools_provider_configuration: MCPToolsProviderConfiguration = (
             MCPToolsProviderConfiguration()
@@ -655,5 +741,5 @@ class MCPToolsProviderFactory(AgentDependencyFactory):
             connection_service=mcp_connection_service,
             tenant=tenant,
             mcp_configuration_store=mcp_configuration_store,
-            argument_resolver=mcp_argument_resolver,
+            app_views=mcp_tools_provider_configuration.app_views and MCP_APP_VIEWS,
         )
